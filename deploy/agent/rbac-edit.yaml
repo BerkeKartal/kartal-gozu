@@ -1,0 +1,38 @@
+# Optional: lets the agent save objects edited as YAML in the UI. Only include
+# this together with KARTAL_ALLOW_EDIT=true. The agent never edits Secrets.
+# Saving replaces the object (an update), and fails rather than overwrite a
+# newer version of it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kartal-agent-edit
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "services", "persistentvolumeclaims"]
+    verbs: ["update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["update"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["update"]
+  # To edit every kind, custom resources included, use this rule instead
+  # (other kinds also need rbac-browse.yaml, to be read in the first place):
+  # - apiGroups: ["*"]
+  #   resources: ["*"]
+  #   verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kartal-agent-edit
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kartal-agent-edit
+subjects:
+  - kind: ServiceAccount
+    name: kartal-agent

@@ -3,7 +3,7 @@ package kube
 import "testing"
 
 func TestQuantities(t *testing.T) {
-	milli := map[string]int64{"250m": 250, "2": 2000, "1.5": 1500, "123456789n": 123, "0": 0, "": 0, "junk": 0}
+	milli := map[string]int64{"250m": 250, "2": 2000, "1.5": 1500, "123456789n": 123, "0": 0, "": 0, "junk": 0, "NaN": 0, "Inf": 0, "-infinity": 0, "NaNm": 0}
 	for in, want := range milli {
 		if got := MilliValue(in); got != want {
 			t.Errorf("MilliValue(%q) = %d, want %d", in, got, want)

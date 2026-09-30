@@ -24,7 +24,7 @@ func parseQuantity(q string) (float64, bool) {
 		return 0, false
 	}
 	if v, err := strconv.ParseFloat(q, 64); err == nil { // plain or exponent form
-		return v, true
+		return v, finite(v)
 	}
 	for _, s := range quantitySuffixes {
 		if num, ok := strings.CutSuffix(q, s.suffix); ok {
@@ -32,11 +32,14 @@ func parseQuantity(q string) (float64, bool) {
 			if err != nil {
 				return 0, false
 			}
-			return v * s.factor, true
+			return v * s.factor, finite(v * s.factor)
 		}
 	}
 	return 0, false
 }
+
+// finite rejects "NaN" and "Inf", which ParseFloat accepts but no quantity is.
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // MilliValue returns a quantity in thousandths, e.g. CPU "250m" -> 250.
 func MilliValue(q string) int64 {

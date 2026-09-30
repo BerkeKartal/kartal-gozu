@@ -129,6 +129,22 @@ func TestAgentAndServer(t *testing.T) {
 	if code, body := call(t, http.MethodPost, root+"/clusters/demo/namespaces/demo/workloads/deployment/api/restart", adminToken); code != http.StatusBadGateway || !strings.Contains(body, "disabled") {
 		t.Errorf("restart on a read-only agent: %d %s", code, body)
 	}
+	for url, want := range map[string]string{
+		"/clusters/demo/object-events?kind=Pod&namespace=demo&name=api-7c9f-abcde": `"reason":"BackOff"`,
+		"/clusters/demo/namespaces/demo/deployments/api/history":                   `"current":2`,
+		"/clusters/demo/helm": `"chart":"traefik"`,
+		"/clusters/demo/namespaces/demo/pods/api-7c9f-abcde/logs?previous=true": "connection refused",
+		"/clusters/demo/metrics?kind=node&name=cp1":                             `"cpu":250`,
+		"/clusters/demo": `"requests":{"cpuMilli":200`,
+	} {
+		if code, body := call(t, http.MethodGet, root+url, adminToken); code != http.StatusOK || !strings.Contains(body, want) {
+			t.Errorf("%s: %d %s", url, code, body)
+		}
+	}
+	code, body = call(t, http.MethodGet, root+"/audit", adminToken)
+	if code != http.StatusOK || !strings.Contains(body, `"action":"restart"`) || !strings.Contains(body, `"ok":false`) {
+		t.Errorf("the refused restart should be in the audit log: %d %s", code, body)
+	}
 
 	checks := []struct {
 		name, method, url, token string
@@ -138,7 +154,8 @@ func TestAgentAndServer(t *testing.T) {
 		{"agent token is not an admin token", http.MethodGet, sub + "/clusters", agentToken, http.StatusUnauthorized},
 		{"wrong agent token", http.MethodGet, srv.URL + "/x/agent/v1/commands", "nope", http.StatusUnauthorized},
 		{"unknown cluster", http.MethodGet, root + "/clusters/prod", adminToken, http.StatusNotFound},
-		{"unknown route", http.MethodGet, srv.URL + "/something-else", adminToken, http.StatusNotFound},
+		{"unknown API route", http.MethodGet, sub + "/something-else", adminToken, http.StatusNotFound},
+		{"UI under any prefix", http.MethodGet, srv.URL + "/devops/kartal/", "", http.StatusOK},
 		{"probe at root", http.MethodGet, srv.URL + "/healthz", "", http.StatusOK},
 		{"probe under a prefix", http.MethodGet, srv.URL + "/devops/kartal/healthz", "", http.StatusOK},
 	}

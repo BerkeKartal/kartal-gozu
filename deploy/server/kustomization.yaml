@@ -7,6 +7,11 @@ namespace: kartal-gozu
 resources:
   - deployment.yaml
   - service.yaml
+  # Keeps the settings made in the UI (e-mail) across restarts. Without
+  # these two, drop KARTAL_SETTINGS_SECRET from deployment.yaml: settings
+  # then last until the server restarts.
+  - rbac.yaml
+  - settings-secret.yaml
 
 images:
   - name: kartal-gozu

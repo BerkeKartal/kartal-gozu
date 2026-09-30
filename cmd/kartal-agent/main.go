@@ -59,6 +59,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	allowExec, err := config.Bool("KARTAL_ALLOW_EXEC", false)
+	if err != nil {
+		return err
+	}
+	allowEdit, err := config.Bool("KARTAL_ALLOW_EDIT", false)
+	if err != nil {
+		return err
+	}
 	includeSecrets, err := config.Bool("KARTAL_INCLUDE_SECRETS", false)
 	if err != nil {
 		return err
@@ -82,6 +90,8 @@ func run(log *slog.Logger) error {
 		Executor: &agent.Executor{
 			Kube:        kc,
 			AllowWrite:  allowWrite,
+			AllowExec:   allowExec,
+			AllowEdit:   allowEdit,
 			Namespaces:  namespaces,
 			MaxLogBytes: 1 << 20,
 		},
@@ -101,7 +111,7 @@ func run(log *slog.Logger) error {
 	if len(namespaces) > 0 {
 		scope = fmt.Sprint(namespaces)
 	}
-	log.Info("kartal-agent started", "version", version, "server", serverURL, "scope", scope, "interval", interval, "allow_write", allowWrite)
+	log.Info("kartal-agent started", "version", version, "server", serverURL, "scope", scope, "interval", interval, "allow_write", allowWrite, "allow_exec", allowExec, "allow_edit", allowEdit)
 	a.Run(ctx)
 	log.Info("agent stopped")
 	return nil
@@ -162,7 +172,7 @@ func serveHealth(ctx context.Context, addr string, a *agent.Agent, log *slog.Log
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		if !a.Healthy(time.Now()) {
-			http.Error(w, "no successful report recently", http.StatusServiceUnavailable)
+			http.Error(w, "the report loop is stuck", http.StatusServiceUnavailable)
 			return
 		}
 		io.WriteString(w, "ok\n")

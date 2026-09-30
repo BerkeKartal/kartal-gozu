@@ -21,7 +21,7 @@ func TestLogsCommand(t *testing.T) {
 	if !res.OK || res.Output != "line1\nline2\n" || res.CommandID != "1" {
 		t.Fatalf("result = %+v", res)
 	}
-	if q := f.logQuery(); q.Get("tailLines") != "100" || q.Get("container") != "app" || q.Get("timestamps") != "true" {
+	if q := f.LogQuery(); q.Get("tailLines") != "100" || q.Get("container") != "app" || q.Get("timestamps") != "true" {
 		t.Errorf("log query = %v", q)
 	}
 }
@@ -35,7 +35,7 @@ func TestWriteCommandsNeedOptIn(t *testing.T) {
 	if res.OK || !strings.Contains(res.Error, "disabled") {
 		t.Fatalf("restart ran without KARTAL_ALLOW_WRITE: %+v", res)
 	}
-	if len(f.patches()) != 0 {
+	if len(f.Patches()) != 0 {
 		t.Error("a patch reached the API server")
 	}
 }
@@ -50,7 +50,7 @@ func TestRestartPatchesPodTemplate(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("restart failed: %s", res.Error)
 	}
-	p := f.patches()
+	p := f.Patches()
 	if len(p) != 1 {
 		t.Fatalf("patches = %+v", p)
 	}
@@ -67,7 +67,7 @@ func TestScaleCommand(t *testing.T) {
 	if res := e.Run(context.Background(), protocol.Command{Type: protocol.CommandScale, Namespace: "demo", Kind: "deployment", Name: "api", Replicas: int32p(3)}); !res.OK {
 		t.Fatalf("scale failed: %s", res.Error)
 	}
-	if p := f.patches(); len(p) != 1 || p[0].ContentType != "application/merge-patch+json" || p[0].Body != `{"spec":{"replicas":3}}` {
+	if p := f.Patches(); len(p) != 1 || p[0].ContentType != "application/merge-patch+json" || p[0].Body != `{"spec":{"replicas":3}}` {
 		t.Errorf("patch = %+v", p)
 	}
 }

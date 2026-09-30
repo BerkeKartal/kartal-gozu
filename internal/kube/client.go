@@ -26,6 +26,7 @@ const serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 type Client struct {
 	base      string
 	hc        *http.Client
+	tls       *tls.Config // for the WebSocket connections of Exec
 	tokenFile string
 	token     string
 }
@@ -44,18 +45,31 @@ func InCluster() (*Client, error) {
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, errors.New("service account CA contains no certificates")
 	}
+	tc := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	return &Client{
 		base:      "https://" + net.JoinHostPort(host, port),
-		hc:        newHTTPClient(&tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}),
+		hc:        newHTTPClient(tc),
+		tls:       tc,
 		tokenFile: filepath.Join(serviceAccountDir, "token"),
 	}, nil
 }
 
+// InClusterNamespace is the namespace the pod runs in.
+func InClusterNamespace() (string, error) {
+	b, err := os.ReadFile(filepath.Join(serviceAccountDir, "namespace"))
+	if err != nil {
+		return "", fmt.Errorf("read service account namespace: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
 // New builds a client for an explicit API URL, mainly for local development.
 func New(apiURL, token string, insecureSkipVerify bool) *Client {
+	tc := &tls.Config{InsecureSkipVerify: insecureSkipVerify, MinVersion: tls.VersionTLS12}
 	return &Client{
 		base:  strings.TrimRight(apiURL, "/"),
-		hc:    newHTTPClient(&tls.Config{InsecureSkipVerify: insecureSkipVerify, MinVersion: tls.VersionTLS12}),
+		hc:    newHTTPClient(tc),
+		tls:   tc,
 		token: token,
 	}
 }
@@ -202,6 +216,28 @@ func (c *Client) Patch(ctx context.Context, path, patchType string, body any) er
 	return nil
 }
 
+// Send makes a request with a raw body of the given content type and returns
+// the response body, refusing one above limit bytes.
+func (c *Client) Send(ctx context.Context, method, path, contentType string, body []byte, limit int64) ([]byte, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	resp, err := c.do(ctx, method, path, "application/json", contentType, rd)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response is larger than %d bytes", limit)
+	}
+	return b, nil
+}
+
 func (c *Client) ServerVersion(ctx context.Context) (string, error) {
 	var v struct {
 		GitVersion string `json:"gitVersion"`
@@ -224,9 +260,14 @@ const metadataOnly = "application/json;as=PartialObjectMetadataList;g=meta.k8s.i
 // ListMeta lists only the metadata of any resource, stopping after maxItems items
 // (0 means no limit).
 func ListMeta(ctx context.Context, c *Client, path string, maxItems int) ([]Meta, error) {
+	return ListMetaWith(ctx, c, path, nil, maxItems)
+}
+
+// ListMetaWith is ListMeta with extra query parameters, such as a labelSelector.
+func ListMetaWith(ctx context.Context, c *Client, path string, query url.Values, maxItems int) ([]Meta, error) {
 	items, err := listAll[struct {
 		Metadata Meta `json:"metadata"`
-	}](ctx, c, path, nil, metadataOnly, maxItems)
+	}](ctx, c, path, query, metadataOnly, maxItems)
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,5 @@
-# Example: publish the server under a sub-path of an existing host.
+# Example: publish the server under a sub-path of an existing host; the UI is
+# then at https://panel.example.org/devops/kartal/ and agents use that URL too.
 # The server accepts requests with or without the prefix, so stripping it in
 # the proxy is optional. Apply into the server's namespace and make sure
 # Traefik watches that namespace.

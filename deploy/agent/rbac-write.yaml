@@ -1,13 +1,31 @@
-# Optional: lets the agent restart and scale workloads. Only include this
-# together with KARTAL_ALLOW_WRITE=true.
+# Optional: lets the agent change things from the UI: restart, scale and roll
+# back workloads, delete pods, cordon nodes, and run or suspend CronJobs. Only
+# include this together with KARTAL_ALLOW_WRITE=true.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: kartal-agent-write
 rules:
+  # Restart, scale and roll back.
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["patch"]
+  # Delete a pod; its controller starts a new one.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  # Cordon and uncordon. Nodes are cluster-wide, so this only works for an
+  # agent that watches the whole cluster (empty KARTAL_NAMESPACES).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+  # Suspend and resume a CronJob, and run it now (a Job made from it).
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

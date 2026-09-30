@@ -34,8 +34,10 @@ func (r *recorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// Requests logs every request. Routine agent traffic is logged at debug level
-// so a busy fleet does not flood the log; errors are always visible.
+// Requests logs every request. Successful reads (the UI refreshes every few
+// seconds) and routine agent traffic are logged at debug level so they do not
+// flood the log; changes such as restart and scale, and all errors, are
+// always visible.
 func Requests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -47,7 +49,7 @@ func Requests(log *slog.Logger, next http.Handler) http.Handler {
 			level = slog.LevelError
 		case rec.status >= 400:
 			level = slog.LevelWarn
-		case strings.Contains(r.URL.Path, "/agent/v1/") || strings.HasSuffix(r.URL.Path, "/healthz"):
+		case r.Method == http.MethodGet || r.Method == http.MethodHead || strings.Contains(r.URL.Path, "/agent/v1/"):
 			level = slog.LevelDebug
 		}
 		log.Log(r.Context(), level, "request", "method", r.Method, "path", r.URL.Path, "status", rec.status, "took", time.Since(start).Round(time.Millisecond))

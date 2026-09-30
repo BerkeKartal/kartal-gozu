@@ -122,6 +122,10 @@ type Job struct {
 		Active         int32      `json:"active"`
 		StartTime      *time.Time `json:"startTime"`
 		CompletionTime *time.Time `json:"completionTime"`
+		Conditions     []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
 	} `json:"status"`
 }
 
@@ -182,6 +186,7 @@ type Meta struct {
 type OwnerReference struct {
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	UID        string `json:"uid"`
 	Controller *bool  `json:"controller"`
 }
 
@@ -193,8 +198,14 @@ type Namespace struct {
 }
 
 type Container struct {
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+	Resources struct {
+		Requests map[string]string `json:"requests"`
+		Limits   map[string]string `json:"limits"`
+	} `json:"resources"`
+	// RestartPolicy "Always" on an init container makes it a sidecar.
+	RestartPolicy string `json:"restartPolicy"`
 }
 
 type PodTemplate struct {
@@ -248,8 +259,9 @@ type ContainerStatus struct {
 type Pod struct {
 	Metadata Meta `json:"metadata"`
 	Spec     struct {
-		NodeName   string      `json:"nodeName"`
-		Containers []Container `json:"containers"`
+		NodeName       string      `json:"nodeName"`
+		Containers     []Container `json:"containers"`
+		InitContainers []Container `json:"initContainers"`
 	} `json:"spec"`
 	Status struct {
 		Phase                 string            `json:"phase"`
@@ -275,4 +287,25 @@ type Event struct {
 	FirstTimestamp time.Time `json:"firstTimestamp"`
 	LastTimestamp  time.Time `json:"lastTimestamp"`
 	EventTime      time.Time `json:"eventTime"`
+	Source         struct {
+		Component string `json:"component"`
+		Host      string `json:"host"`
+	} `json:"source"`
+	ReportingController string `json:"reportingComponent"`
+}
+
+// ReplicaSet carries what a Deployment's rollout history needs.
+type ReplicaSet struct {
+	Metadata struct {
+		Meta
+		UID         string            `json:"uid"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"metadata"`
+	Spec struct {
+		Replicas *int32      `json:"replicas"`
+		Template PodTemplate `json:"template"`
+	} `json:"spec"`
+	Status struct {
+		ReadyReplicas int32 `json:"readyReplicas"`
+	} `json:"status"`
 }

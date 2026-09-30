@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 )
 
@@ -148,5 +150,44 @@ func TestCollectKeepsGoingWhenAPartIsForbidden(t *testing.T) {
 	}
 	if len(snap.Pods) != 2 || len(snap.Workloads) != 1 || len(snap.Nodes) != 2 {
 		t.Errorf("the rest of the snapshot should survive: pods=%d workloads=%d nodes=%d", len(snap.Pods), len(snap.Workloads), len(snap.Nodes))
+	}
+}
+
+func TestUnreadableWatchedNamespaceStaysListed(t *testing.T) {
+	_, kc := NewFakeKube(t)
+	c := &Collector{Kube: kc, Namespaces: []string{"demo", "missing"}}
+
+	snap := c.Collect(context.Background())
+
+	if len(snap.Namespaces) != 2 || snap.Namespaces[0].Name != "demo" || snap.Namespaces[1].Name != "missing" {
+		t.Errorf("namespaces = %+v", snap.Namespaces)
+	}
+	found := false
+	for _, e := range snap.Errors {
+		found = found || strings.HasPrefix(e, "namespaces: missing:")
+	}
+	if !found {
+		t.Errorf("the unreadable namespace should be reported: %v", snap.Errors)
+	}
+	if len(snap.Pods) != 1 {
+		t.Errorf("the readable namespace should still be collected: %d pods", len(snap.Pods))
+	}
+}
+
+func TestPodResourcesCountSidecars(t *testing.T) {
+	var p kube.Pod
+	err := json.Unmarshal([]byte(`{"spec":{
+		"initContainers":[
+			{"name":"proxy","restartPolicy":"Always","resources":{"requests":{"cpu":"100m","memory":"64Mi"}}},
+			{"name":"migrate","resources":{"requests":{"cpu":"500m","memory":"32Mi"}}}],
+		"containers":[{"name":"app","resources":{"requests":{"cpu":"200m","memory":"128Mi"},"limits":{"cpu":"1"}}}]}}`), &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, lim := podResources(p)
+	// The app and the sidecar need 300m and 192Mi; "migrate" runs next to
+	// the sidecar started before it: 600m and 96Mi. The pod needs the most.
+	if req == nil || req.CPUMilli != 600 || req.MemoryBytes != 192<<20 || lim == nil || lim.CPUMilli != 1000 || lim.MemoryBytes != 0 {
+		t.Errorf("requests %+v, limits %+v", req, lim)
 	}
 }

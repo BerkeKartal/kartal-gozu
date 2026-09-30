@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -89,11 +90,11 @@ func (c *Collector) Collect(ctx context.Context) *protocol.Snapshot {
 			}
 		},
 		func() {
-			if ns, err := c.namespaces(ctx); err != nil {
+			ns, err := c.namespaces(ctx)
+			if err != nil {
 				fail("namespaces", err)
-			} else {
-				snap.Namespaces = ns
 			}
+			snap.Namespaces = ns
 		},
 		func() {
 			if items, err := kube.ListAll[kube.Node](ctx, c.Kube, "/api/v1/nodes", nil); err != nil {
@@ -152,19 +153,36 @@ func (c *Collector) Collect(ctx context.Context) *protocol.Snapshot {
 	snap.Workloads = append(append(deployments, statefulsets...), daemonsets...)
 	snap.MetricsAvailable = nodeUsage != nil || podUsage != nil
 	podsPerNode := map[string]int{}
+	nodeRequests := map[string]*protocol.Resources{}
+	nodeLimits := map[string]*protocol.Resources{}
+	workloadUsage := map[string]*protocol.Resources{}
 	for i := range snap.Pods {
 		p := &snap.Pods[i]
-		podsPerNode[p.Node]++
 		if u, ok := podUsage[p.Namespace+"/"+p.Name]; ok {
 			p.Usage = &u
+			if p.Owner != "" {
+				addTo(workloadUsage, p.Namespace+"/"+p.Owner, &u)
+			}
 		}
+		// Finished pods no longer take a slot or any resources on their node.
+		if p.Phase == "Succeeded" || p.Phase == "Failed" {
+			continue
+		}
+		podsPerNode[p.Node]++
+		addTo(nodeRequests, p.Node, p.Requests)
+		addTo(nodeLimits, p.Node, p.Limits)
 	}
 	for i := range snap.Nodes {
 		n := &snap.Nodes[i]
 		n.PodCount = podsPerNode[n.Name]
+		n.Requests, n.Limits = nodeRequests[n.Name], nodeLimits[n.Name]
 		if u, ok := nodeUsage[n.Name]; ok {
 			n.Usage = &u
 		}
+	}
+	for i := range snap.Workloads {
+		w := &snap.Workloads[i]
+		w.Usage = workloadUsage[w.Namespace+"/"+w.Kind+"/"+w.Name]
 	}
 
 	sort.Slice(snap.Nodes, func(i, j int) bool { return snap.Nodes[i].Name < snap.Nodes[j].Name })
@@ -209,15 +227,22 @@ func (c *Collector) namespaces(ctx context.Context) ([]protocol.Namespace, error
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 		return out, nil
 	}
+	// Watched namespaces are listed even when one cannot be read (it may not
+	// exist yet, or RBAC may not allow it): the rest of the data still is.
 	out := make([]protocol.Namespace, 0, len(c.Namespaces))
+	var firstErr error
 	for _, name := range c.Namespaces {
 		var ns kube.Namespace
 		if err := c.Kube.Get(ctx, "/api/v1/namespaces/"+kube.Seg(name), &ns); err != nil {
-			return out, err
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", name, err)
+			}
+			out = append(out, protocol.Namespace{Name: name})
+			continue
 		}
 		out = append(out, protocol.Namespace{Name: ns.Metadata.Name, Status: ns.Status.Phase})
 	}
-	return out, nil
+	return out, firstErr
 }
 
 // metaRefs lists names only: object contents are never transferred.
@@ -319,6 +344,68 @@ func resources(m map[string]string) protocol.Resources {
 	return protocol.Resources{CPUMilli: kube.MilliValue(m["cpu"]), MemoryBytes: kube.Value(m["memory"]), Pods: kube.Value(m["pods"])}
 }
 
+// addTo adds r (if any) to the running total under key.
+func addTo(totals map[string]*protocol.Resources, key string, r *protocol.Resources) {
+	if r == nil {
+		return
+	}
+	t := totals[key]
+	if t == nil {
+		t = &protocol.Resources{}
+		totals[key] = t
+	}
+	t.CPUMilli += r.CPUMilli
+	t.MemoryBytes += r.MemoryBytes
+}
+
+// podResources gives a pod's effective requests and limits.
+func podResources(p kube.Pod) (requests, limits *protocol.Resources) {
+	req := effective(p, func(c kube.Container) map[string]string { return c.Resources.Requests })
+	lim := effective(p, func(c kube.Container) map[string]string { return c.Resources.Limits })
+	if req != (protocol.Resources{}) {
+		requests = &req
+	}
+	if lim != (protocol.Resources{}) {
+		limits = &lim
+	}
+	return requests, limits
+}
+
+// effective counts resources the way the scheduler does (Kubernetes'
+// PodRequests): app containers and sidecars (init containers that keep
+// running) add up; a plain init container runs next to the sidecars started
+// before it; the pod needs the most any of those moments needs.
+func effective(p kube.Pod, pick func(kube.Container) map[string]string) protocol.Resources {
+	var total, sidecars, initPeak protocol.Resources
+	for _, c := range p.Spec.Containers {
+		total = addResources(total, quantities(pick(c)))
+	}
+	for _, c := range p.Spec.InitContainers {
+		r := quantities(pick(c))
+		if c.RestartPolicy == "Always" {
+			total = addResources(total, r)
+			sidecars = addResources(sidecars, r)
+			r = sidecars
+		} else {
+			r = addResources(r, sidecars)
+		}
+		initPeak = maxResources(initPeak, r)
+	}
+	return maxResources(total, initPeak)
+}
+
+func quantities(m map[string]string) protocol.Resources {
+	return protocol.Resources{CPUMilli: kube.MilliValue(m["cpu"]), MemoryBytes: kube.Value(m["memory"])}
+}
+
+func addResources(a, b protocol.Resources) protocol.Resources {
+	return protocol.Resources{CPUMilli: a.CPUMilli + b.CPUMilli, MemoryBytes: a.MemoryBytes + b.MemoryBytes}
+}
+
+func maxResources(a, b protocol.Resources) protocol.Resources {
+	return protocol.Resources{CPUMilli: max(a.CPUMilli, b.CPUMilli), MemoryBytes: max(a.MemoryBytes, b.MemoryBytes)}
+}
+
 func toNode(n kube.Node) protocol.Node {
 	out := protocol.Node{
 		Name:             n.Metadata.Name,
@@ -381,6 +468,7 @@ func toPod(p kube.Pod) protocol.Pod {
 		Total:     len(p.Spec.Containers),
 		Owner:     ownerOf(p.Metadata),
 	}
+	out.Requests, out.Limits = podResources(p)
 	if p.Status.StartTime != nil {
 		out.StartedAt = *p.Status.StartTime
 	}
@@ -472,7 +560,7 @@ func toJob(j kube.Job) protocol.Job {
 	if j.Spec.Completions != nil {
 		completions = *j.Spec.Completions
 	}
-	return protocol.Job{
+	out := protocol.Job{
 		Namespace:   j.Metadata.Namespace,
 		Name:        j.Metadata.Name,
 		Owner:       ownerOf(j.Metadata),
@@ -483,6 +571,12 @@ func toJob(j kube.Job) protocol.Job {
 		StartedAt:   j.Status.StartTime,
 		CompletedAt: j.Status.CompletionTime,
 	}
+	for _, c := range j.Status.Conditions {
+		if (c.Type == "Complete" || c.Type == "Failed") && c.Status == "True" {
+			out.Condition = c.Type
+		}
+	}
+	return out
 }
 
 func toCronJob(cj kube.CronJob) protocol.CronJob {

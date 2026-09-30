@@ -14,7 +14,8 @@ rules:
     resources: ["namespaces", "nodes", "pods", "pods/log", "services", "configmaps", "persistentvolumeclaims", "events"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets"]
+    # ReplicaSets carry a Deployment's rollout history.
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]

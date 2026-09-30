@@ -1,0 +1,25 @@
+# Optional: lets the agent run commands in containers, for the pod console.
+# Only include this together with KARTAL_ALLOW_EXEC=true. Every Kartal Gözü
+# admin can then run commands in any pod the agent sees, and each command is
+# written to the server's audit log.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kartal-agent-exec
+rules:
+  # Exec over a WebSocket needs "create" since Kubernetes 1.30, "get" before.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kartal-agent-exec
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kartal-agent-exec
+subjects:
+  - kind: ServiceAccount
+    name: kartal-agent

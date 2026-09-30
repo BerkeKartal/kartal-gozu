@@ -17,7 +17,8 @@ spec:
       labels:
         app.kubernetes.io/name: kartal-server
     spec:
-      automountServiceAccountToken: false
+      # Its only permission: the settings Secret (rbac.yaml).
+      serviceAccountName: kartal-server
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -30,6 +31,34 @@ spec:
               value: /etc/kartal/agent-tokens
             - name: KARTAL_ADMIN_TOKEN_FILE
               value: /etc/kartal/admin-token
+            # Where the settings made in the UI are kept (settings-secret.yaml).
+            - name: KARTAL_SETTINGS_SECRET
+              value: kartal-server-settings
+            # Named users with roles, one "name:role:token" per line (roles:
+            # viewer, operator, admin); add a "users" key to the Secret first.
+            # - name: KARTAL_USERS_FILE
+            #   value: /etc/kartal/users
+            # Where people open the UI; notifications link to it.
+            # - name: KARTAL_PUBLIC_URL
+            #   value: https://panel.example.org/devops/kartal
+            # Notifications, all optional: a Teams workflow URL, any JSON
+            # webhook, and e-mail. E-mail is simplest to set up on the Alerts
+            # page; the KARTAL_SMTP_* variables, when set, take its place
+            # there (the password goes in the Secret as well).
+            # - name: KARTAL_ALERT_TEAMS_URL
+            #   value: https://example.webhook.office.com/...
+            # - name: KARTAL_ALERT_WEBHOOK_URL
+            #   value: https://hooks.example.org/kartal
+            # - name: KARTAL_SMTP_ADDR
+            #   value: smtp.example.org:587
+            # - name: KARTAL_SMTP_FROM
+            #   value: kartal@example.org
+            # - name: KARTAL_SMTP_TO
+            #   value: ops@example.org
+            # - name: KARTAL_SMTP_USERNAME
+            #   value: kartal
+            # - name: KARTAL_SMTP_PASSWORD_FILE
+            #   value: /etc/kartal/smtp-password
           ports:
             - name: http
               containerPort: 8080

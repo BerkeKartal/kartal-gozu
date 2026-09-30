@@ -35,8 +35,10 @@ type Agent struct {
 	Concurrency int
 	Log         *slog.Logger
 
-	startedAt  atomic.Int64
-	lastReport atomic.Int64
+	startedAt atomic.Int64
+	// lastRound is when the report loop last finished a round, whether the
+	// report got through or not.
+	lastRound atomic.Int64
 }
 
 // Run blocks until ctx is cancelled.
@@ -49,16 +51,19 @@ func (a *Agent) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// Healthy is false when no report has succeeded for several intervals.
+// Healthy is false when the report loop has not finished a round for a long
+// time, i.e. the agent is stuck. An unreachable server does not count: every
+// request has a timeout, so rounds keep finishing, and restarting the agent
+// would not bring the server back.
 func (a *Agent) Healthy(now time.Time) bool {
-	last := a.lastReport.Load()
+	last := a.lastRound.Load()
 	if last == 0 {
 		last = a.startedAt.Load()
 	}
 	if last == 0 {
 		return true // not started yet
 	}
-	return now.Sub(time.Unix(0, last)) < 5*a.Interval
+	return now.Sub(time.Unix(0, last)) < max(5*a.Interval, 5*time.Minute)
 }
 
 func (a *Agent) endpoint(path string) string {
@@ -84,9 +89,9 @@ func (a *Agent) reportLoop(ctx context.Context) {
 			}
 			a.Log.Warn("report failed", "err", err)
 		} else {
-			a.lastReport.Store(time.Now().UnixNano())
 			a.Log.Debug("report sent", "took", time.Since(start))
 		}
+		a.lastRound.Store(time.Now().UnixNano())
 		if !sleep(ctx, a.Interval) {
 			return
 		}
@@ -95,6 +100,7 @@ func (a *Agent) reportLoop(ctx context.Context) {
 
 func (a *Agent) reportOnce(ctx context.Context) error {
 	snap := a.Collector.Collect(ctx)
+	snap.Capabilities = a.Executor.Capabilities()
 	for _, e := range snap.Errors {
 		a.Log.Warn("partial collection", "err", e)
 	}
@@ -127,6 +133,7 @@ func (a *Agent) commandLoop(ctx context.Context) {
 	sem := make(chan struct{}, max(a.Concurrency, 1))
 	failures := 0
 	for ctx.Err() == nil {
+		start := time.Now()
 		cmds, err := a.poll(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -141,6 +148,14 @@ func (a *Agent) commandLoop(ctx context.Context) {
 			continue
 		}
 		failures = 0
+		if len(cmds) == 0 {
+			// A server or proxy that answers at once instead of holding the
+			// poll open must not turn this loop into a busy loop.
+			if rest := time.Second - time.Since(start); rest > 0 && !sleep(ctx, rest) {
+				return
+			}
+			continue
+		}
 		for _, cmd := range cmds {
 			select {
 			case sem <- struct{}{}:
@@ -149,7 +164,13 @@ func (a *Agent) commandLoop(ctx context.Context) {
 			}
 			go func(cmd protocol.Command) {
 				defer func() { <-sem }()
-				a.Log.Info("running command", "id", cmd.ID, "type", cmd.Type, "namespace", cmd.Namespace, "name", cmd.Name)
+				// Changes are worth a line each; reads (logs, lists, a "follow"
+				// every few seconds) would drown them.
+				level := slog.LevelDebug
+				if changes[cmd.Type] && !cmd.DryRun {
+					level = slog.LevelInfo
+				}
+				a.Log.Log(ctx, level, "running command", "id", cmd.ID, "type", cmd.Type, "namespace", cmd.Namespace, "kind", cmd.Kind, "name", cmd.Name)
 				res := a.Executor.Run(ctx, cmd)
 				if err := a.sendResult(ctx, res); err != nil {
 					a.Log.Warn("sending result failed", "id", cmd.ID, "err", err)
@@ -157,6 +178,13 @@ func (a *Agent) commandLoop(ctx context.Context) {
 			}(cmd)
 		}
 	}
+}
+
+// changes are the commands that alter the cluster or run something in it.
+var changes = map[string]bool{
+	protocol.CommandRestart: true, protocol.CommandScale: true, protocol.CommandDelete: true,
+	protocol.CommandCordon: true, protocol.CommandSuspend: true, protocol.CommandTrigger: true,
+	protocol.CommandRollback: true, protocol.CommandExec: true, protocol.CommandApply: true,
 }
 
 func (a *Agent) poll(ctx context.Context) ([]protocol.Command, error) {

@@ -32,7 +32,14 @@ spec:
             # Comma separated namespaces to watch; empty means the whole cluster.
             - name: KARTAL_NAMESPACES
               value: ""
+            # Actions beyond reading, each off unless set to "true" and given its
+            # RBAC file: changes (rbac-write.yaml), the pod console
+            # (rbac-exec.yaml) and YAML editing (rbac-edit.yaml).
             - name: KARTAL_ALLOW_WRITE
+              value: "false"
+            - name: KARTAL_ALLOW_EXEC
+              value: "false"
+            - name: KARTAL_ALLOW_EDIT
               value: "false"
             # List Secret names in the snapshot (needs rbac-browse.yaml); values are never sent.
             - name: KARTAL_INCLUDE_SECRETS

@@ -7,10 +7,16 @@ namespace: kartal-gozu
 resources:
   - rbac.yaml
   - deployment.yaml
-  # Browse every resource type (CRDs, Secrets with values redacted):
+  # Browse every resource type (CRDs, Secrets with values redacted) and list
+  # Helm releases, which Helm keeps in Secrets:
   # - rbac-browse.yaml
-  # Allow restart/scale (also set KARTAL_ALLOW_WRITE to "true"):
+  # Restart, scale, roll back, delete pods, cordon nodes, run and suspend
+  # CronJobs (also set KARTAL_ALLOW_WRITE to "true"):
   # - rbac-write.yaml
+  # Run commands in containers, the pod console (also KARTAL_ALLOW_EXEC):
+  # - rbac-exec.yaml
+  # Save objects edited as YAML (also KARTAL_ALLOW_EDIT):
+  # - rbac-edit.yaml
 
 images:
   - name: kartal-gozu

@@ -31,17 +31,65 @@ const (
 
 var (
 	errWriteDisabled = errors.New("write commands are disabled on this agent (KARTAL_ALLOW_WRITE=false)")
+	errExecDisabled  = errors.New("running commands in containers is disabled on this agent (KARTAL_ALLOW_EXEC=false)")
+	errEditDisabled  = errors.New("editing objects is disabled on this agent (KARTAL_ALLOW_EDIT=false)")
 	namePattern      = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 	versionPattern   = regexp.MustCompile(`^v[0-9]+((alpha|beta)[0-9]+)?$`)
+	labelPattern     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 )
+
+// checkNamespace refuses anything that is not a namespace name (a DNS label).
+func checkNamespace(ns string) error {
+	if len(ns) > 63 || !labelPattern.MatchString(ns) {
+		return fmt.Errorf("invalid namespace %q", ns)
+	}
+	return nil
+}
+
+// checkName applies the API server's own rule for object names, which become
+// URL path segments: a crafted "..", "/" or "%" must not reach another path.
+func checkName(name string) error {
+	if name == "" || name == "." || name == ".." || len(name) > 253 || strings.ContainsAny(name, "/%") {
+		return fmt.Errorf("invalid name %q", name)
+	}
+	return nil
+}
 
 // Executor runs commands received from the server against the cluster.
 type Executor struct {
-	Kube        *kube.Client
+	Kube *kube.Client
+	// AllowWrite enables restart, scale, pod delete, cordon, CronJob
+	// suspend/trigger and rollback; AllowExec running commands in containers;
+	// AllowEdit changing objects from YAML.
 	AllowWrite  bool
+	AllowExec   bool
+	AllowEdit   bool
 	Namespaces  []string
 	MaxLogBytes int64
 	Now         func() time.Time
+}
+
+// Capabilities lists what the executor may do beyond reading, for the
+// snapshot: the UI offers only actions the agent will accept.
+func (e *Executor) Capabilities() []string {
+	var out []string
+	if e.AllowWrite {
+		out = append(out, protocol.CapabilityWrite)
+	}
+	if e.AllowExec {
+		out = append(out, protocol.CapabilityExec)
+	}
+	if e.AllowEdit {
+		out = append(out, protocol.CapabilityEdit)
+	}
+	return out
+}
+
+func (e *Executor) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
 }
 
 func (e *Executor) Run(ctx context.Context, cmd protocol.Command) protocol.Result {
@@ -82,14 +130,68 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 		}
 		return e.list(ctx, path)
 	case protocol.CommandGet:
-		if cmd.Name == "" {
-			return "", errors.New("name is required")
+		if err := checkName(cmd.Name); err != nil {
+			return "", err
 		}
 		path, err := e.collectionPath(cmd)
 		if err != nil {
 			return "", err
 		}
 		return e.get(ctx, path+"/"+kube.Seg(cmd.Name))
+	case protocol.CommandEvents:
+		return e.objectEvents(ctx, cmd)
+	case protocol.CommandHistory:
+		if err := e.checkObject(cmd.Namespace, cmd.Name); err != nil {
+			return "", err
+		}
+		h, err := e.history(ctx, cmd.Namespace, cmd.Name)
+		if err != nil {
+			return "", err
+		}
+		return marshal(h.History)
+	case protocol.CommandHelm:
+		return e.helmReleases(ctx)
+	case protocol.CommandDelete, protocol.CommandSuspend, protocol.CommandTrigger, protocol.CommandRollback:
+		if err := e.checkObject(cmd.Namespace, cmd.Name); err != nil {
+			return "", err
+		}
+		if !e.AllowWrite {
+			return "", errWriteDisabled
+		}
+		switch cmd.Type {
+		case protocol.CommandDelete:
+			return e.deletePod(ctx, cmd)
+		case protocol.CommandSuspend:
+			return e.suspend(ctx, cmd)
+		case protocol.CommandTrigger:
+			return e.trigger(ctx, cmd)
+		default:
+			return e.rollback(ctx, cmd)
+		}
+	case protocol.CommandCordon:
+		if !namePattern.MatchString(cmd.Name) {
+			return "", fmt.Errorf("invalid node name %q", cmd.Name)
+		}
+		if len(e.Namespaces) > 0 {
+			return "", errors.New("this agent is limited to specific namespaces; nodes are outside its scope")
+		}
+		if !e.AllowWrite {
+			return "", errWriteDisabled
+		}
+		return e.cordon(ctx, cmd)
+	case protocol.CommandExec:
+		if err := e.checkObject(cmd.Namespace, cmd.Name); err != nil {
+			return "", err
+		}
+		if !e.AllowExec {
+			return "", errExecDisabled
+		}
+		return e.exec(ctx, cmd)
+	case protocol.CommandApply:
+		if !e.AllowEdit {
+			return "", errEditDisabled
+		}
+		return e.apply(ctx, cmd)
 	default:
 		return "", fmt.Errorf("unsupported command %q", cmd.Type)
 	}
@@ -98,6 +200,12 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 func (e *Executor) checkObject(ns, name string) error {
 	if ns == "" || name == "" {
 		return errors.New("namespace and name are required")
+	}
+	if err := checkNamespace(ns); err != nil {
+		return err
+	}
+	if err := checkName(name); err != nil {
+		return err
 	}
 	if !e.namespaceAllowed(ns) {
 		return fmt.Errorf("namespace %q is outside this agent's scope", ns)
@@ -130,6 +238,9 @@ func (e *Executor) collectionPath(cmd protocol.Command) (string, error) {
 			return "", errors.New("this agent is limited to specific namespaces; a namespace is required")
 		}
 		return prefix + "/" + cmd.Resource, nil
+	}
+	if err := checkNamespace(cmd.Namespace); err != nil {
+		return "", err
 	}
 	if !e.namespaceAllowed(cmd.Namespace) {
 		return "", fmt.Errorf("namespace %q is outside this agent's scope", cmd.Namespace)
@@ -278,6 +389,9 @@ func (e *Executor) logs(ctx context.Context, cmd protocol.Command) (string, erro
 		"timestamps": {"true"},
 		"limitBytes": {strconv.FormatInt(limit, 10)},
 	}
+	if cmd.Previous {
+		q.Set("previous", "true")
+	}
 	if cmd.Container != "" {
 		q.Set("container", cmd.Container)
 	}
@@ -299,12 +413,8 @@ func (e *Executor) restart(ctx context.Context, cmd protocol.Command) (string, e
 	if err != nil {
 		return "", err
 	}
-	now := time.Now
-	if e.Now != nil {
-		now = e.Now
-	}
 	patch := map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
-		"annotations": map[string]string{RestartAnnotation: now().UTC().Format(time.RFC3339)},
+		"annotations": map[string]string{RestartAnnotation: e.now().UTC().Format(time.RFC3339)},
 	}}}}
 	if err := e.Kube.Patch(ctx, path, "application/strategic-merge-patch+json", patch); err != nil {
 		return "", err
