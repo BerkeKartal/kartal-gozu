@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kartal-agent
+  labels:
+    app.kubernetes.io/name: kartal-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kartal-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kartal-agent
+    spec:
+      serviceAccountName: kartal-agent
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: kartal-gozu
+          command: ["/usr/local/bin/kartal-agent"]
+          env:
+            # Public address of the server; it may be the host root or any sub-path.
+            - name: KARTAL_SERVER_URL
+              value: https://panel.example.org/devops/kartal
+            - name: KARTAL_TOKEN_FILE
+              value: /etc/kartal/token
+            # Comma separated namespaces to watch; empty means the whole cluster.
+            - name: KARTAL_NAMESPACES
+              value: ""
+            - name: KARTAL_ALLOW_WRITE
+              value: "false"
+            # List Secret names in the snapshot (needs rbac-browse.yaml); values are never sent.
+            - name: KARTAL_INCLUDE_SECRETS
+              value: "false"
+          ports:
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 300m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: token
+              mountPath: /etc/kartal
+              readOnly: true
+      volumes:
+        - name: token
+          secret:
+            secretName: kartal-agent

@@ -1,0 +1,25 @@
+# Optional: lets the agent list and show every resource type, CRDs and
+# Secrets included. Secret values never leave the cluster: the agent replaces
+# them (and the kubectl last-applied annotation) before sending anything.
+# Note that this role can still read Secrets inside the cluster; include it
+# only if you accept that for the agent's service account.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kartal-agent-browse
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kartal-agent-browse
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kartal-agent-browse
+subjects:
+  - kind: ServiceAccount
+    name: kartal-agent

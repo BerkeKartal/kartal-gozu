@@ -1,0 +1,17 @@
+# Example: publish the server under a sub-path of an existing host.
+# The server accepts requests with or without the prefix, so stripping it in
+# the proxy is optional. Apply into the server's namespace and make sure
+# Traefik watches that namespace.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kartal-gozu
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`panel.example.org`) && PathPrefix(`/devops/kartal`)
+      kind: Rule
+      services:
+        - name: kartal-server
+          port: 8080
