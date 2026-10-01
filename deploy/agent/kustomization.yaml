@@ -17,6 +17,10 @@ resources:
   # - rbac-exec.yaml
   # Save objects edited as YAML (also KARTAL_ALLOW_EDIT):
   # - rbac-edit.yaml
+  # How full volumes are, from the kubelets (also KARTAL_VOLUME_STATS):
+  # - rbac-volumes.yaml
+  # When the certificates of TLS Secrets expire (also KARTAL_TLS_SECRETS):
+  # - rbac-certificates.yaml
 
 images:
   - name: kartal-gozu

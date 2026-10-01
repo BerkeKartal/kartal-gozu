@@ -23,12 +23,14 @@ import (
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
+	"github.com/BerkeKartal/kartal-gozu/internal/changes"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/httpx"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/ui"
+	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
 )
 
 const (
@@ -57,6 +59,12 @@ type Config struct {
 	History *history.Store
 	// Mail, when set, lets admins set up the e-mail channel in the UI.
 	Mail *settings.Mail
+	// Checks runs the URL checks admins set up in the UI.
+	Checks *uptime.Monitor
+	// Login, when set, lets people sign in with a name and password, for a
+	// session of SessionTTL (12 hours when zero).
+	Login      Login
+	SessionTTL time.Duration
 }
 
 type Server struct {
@@ -66,8 +74,12 @@ type Server struct {
 	now     func() time.Time
 	users   *auth.Directory
 	history *history.Store
+	changes *changes.Log
 	audit   *auditLog
-	handler http.Handler
+	// sessions are the sign-ins made with a password (Config.Login).
+	sessions *auth.Sessions
+	throttle throttle
+	handler  http.Handler
 }
 
 // New returns the server. It answers under any path prefix (see
@@ -85,7 +97,14 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	if hist == nil {
 		hist = history.New()
 	}
-	s := &Server{cfg: cfg, st: st, log: log, now: time.Now, users: auth.NewDirectory(users), history: hist, audit: newAuditLog()}
+	s := &Server{cfg: cfg, st: st, log: log, now: time.Now, users: auth.NewDirectory(users), history: hist, changes: changes.New(), audit: newAuditLog()}
+	if cfg.Login != nil {
+		ttl := cfg.SessionTTL
+		if ttl <= 0 {
+			ttl = 12 * time.Hour
+		}
+		s.sessions = auth.NewSessions(ttl)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
@@ -96,12 +115,13 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 
 	// Lists come from the latest snapshot. Namespaced kinds take ?namespace=;
 	// those with a problem test also take ?problems=true.
+	// Each user sees only the clusters and namespaces granted (see visible).
 	const c = "GET /api/v1/clusters/{cluster}"
 	mux.HandleFunc("GET /api/v1/clusters", s.require(auth.Viewer, s.listClusters))
-	mux.HandleFunc(c, s.require(auth.Viewer, s.getCluster))
+	mux.HandleFunc(c, s.inCluster(auth.Viewer, anywhere, s.getCluster))
 	mux.HandleFunc(c+"/nodes", snapshotList(s, func(x *protocol.Snapshot) []protocol.Node { return x.Nodes }, nil,
 		func(n protocol.Node) bool { return !n.Ready || len(n.Pressure) > 0 }))
-	mux.HandleFunc(c+"/namespaces", s.require(auth.Viewer, s.namespaces))
+	mux.HandleFunc(c+"/namespaces", s.inCluster(auth.Viewer, anywhere, s.namespaces))
 	mux.HandleFunc(c+"/workloads", snapshotList(s, func(x *protocol.Snapshot) []protocol.Workload { return x.Workloads },
 		func(x protocol.Workload) string { return x.Namespace }, protocol.Workload.Degraded))
 	mux.HandleFunc(c+"/pods", snapshotList(s, func(x *protocol.Snapshot) []protocol.Pod { return x.Pods },
@@ -113,7 +133,10 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	mux.HandleFunc(c+"/configmaps", snapshotList(s, func(x *protocol.Snapshot) []protocol.ObjectRef { return x.ConfigMaps }, refNamespace, nil))
 	mux.HandleFunc(c+"/secrets", snapshotList(s, func(x *protocol.Snapshot) []protocol.ObjectRef { return x.Secrets }, refNamespace, nil))
 	mux.HandleFunc(c+"/volumeclaims", snapshotList(s, func(x *protocol.Snapshot) []protocol.VolumeClaim { return x.VolumeClaims },
-		func(x protocol.VolumeClaim) string { return x.Namespace }, func(v protocol.VolumeClaim) bool { return v.Phase != "Bound" }))
+		func(x protocol.VolumeClaim) string { return x.Namespace },
+		func(v protocol.VolumeClaim) bool { return v.Phase != "Bound" || s.levels().filling(v) }))
+	mux.HandleFunc(c+"/certificates", snapshotList(s, func(x *protocol.Snapshot) []protocol.Certificate { return x.Certificates },
+		func(x protocol.Certificate) string { return x.Namespace }, func(x protocol.Certificate) bool { return s.levels().expiring(x) }))
 	mux.HandleFunc(c+"/jobs", snapshotList(s, func(x *protocol.Snapshot) []protocol.Job { return x.Jobs },
 		func(x protocol.Job) string { return x.Namespace }, protocol.Job.HasFailed))
 	mux.HandleFunc(c+"/cronjobs", snapshotList(s, func(x *protocol.Snapshot) []protocol.CronJob { return x.CronJobs },
@@ -121,17 +144,21 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	mux.HandleFunc(c+"/events", snapshotList(s, func(x *protocol.Snapshot) []protocol.Event { return x.Events },
 		func(x protocol.Event) string { return x.Namespace }, nil))
 
-	mux.HandleFunc(c+"/namespaces/{ns}/pods/{pod}/logs", s.require(auth.Viewer, s.podLogs))
-	mux.HandleFunc("POST /api/v1/clusters/{cluster}/namespaces/{ns}/workloads/{kind}/{name}/restart", s.require(auth.Operator, s.restart))
-	mux.HandleFunc("POST /api/v1/clusters/{cluster}/namespaces/{ns}/workloads/{kind}/{name}/scale", s.require(auth.Operator, s.scale))
+	mux.HandleFunc(c+"/namespaces/{ns}/pods/{pod}/logs", s.inCluster(auth.Viewer, pathNamespace, s.podLogs))
+	mux.HandleFunc("POST /api/v1/clusters/{cluster}/namespaces/{ns}/workloads/{kind}/{name}/restart", s.inCluster(auth.Operator, pathNamespace, s.restart))
+	mux.HandleFunc("POST /api/v1/clusters/{cluster}/namespaces/{ns}/workloads/{kind}/{name}/scale", s.inCluster(auth.Operator, pathNamespace, s.scale))
 
-	// Any resource type, CRDs included, fetched live from the agent.
-	mux.HandleFunc(c+"/resources", s.require(auth.Viewer, s.discover))
-	mux.HandleFunc(c+"/resources/{group}/{version}/{resource}", s.require(auth.Viewer, s.listResource))
-	mux.HandleFunc(c+"/resources/{group}/{version}/{resource}/{name}", s.require(auth.Viewer, s.getResource))
+	// Any resource type, CRDs included, fetched live from the agent. Without
+	// ?namespace=, a list or object spans the whole cluster.
+	mux.HandleFunc(c+"/resources", s.inCluster(auth.Viewer, anywhere, s.discover))
+	mux.HandleFunc(c+"/resources/{group}/{version}/{resource}", s.inCluster(auth.Viewer, queryNamespace, s.listResource))
+	mux.HandleFunc(c+"/resources/{group}/{version}/{resource}/{name}", s.inCluster(auth.Viewer, queryNamespace, s.getResource))
 
 	s.routeActions(mux)
 	s.routeSettings(mux)
+	s.routeLogin(mux)
+	s.routeTimeline(mux)
+	s.routeChecks(mux)
 
 	// The web UI: its files below /_ui/, the page itself everywhere else.
 	mux.Handle("GET /_ui/", ui.Assets())
@@ -275,11 +302,13 @@ func (s *Server) agent(next func(http.ResponseWriter, *http.Request, string)) ht
 
 type userKey struct{}
 
-// require lets through users whose role is at least role, and puts the user
-// in the request context for the audit log.
+// require lets through users whose role somewhere reaches role, and puts
+// the user in the request context. Handlers of cluster objects check the
+// user's role where the object is (inCluster); pages spanning clusters,
+// such as alerts and the audit log, show each user their part.
 func (s *Server) require(role auth.Role, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := s.users.Lookup(bearerToken(r))
+		u, ok := s.lookup(bearerToken(r))
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "invalid or missing token")
 			return
@@ -292,9 +321,109 @@ func (s *Server) require(role auth.Role, next http.HandlerFunc) http.HandlerFunc
 	}
 }
 
+// requireEverywhere is for the server's own settings: they need the role
+// over every cluster and namespace.
+func (s *Server) requireEverywhere(role auth.Role, next http.HandlerFunc) http.HandlerFunc {
+	return s.require(auth.Viewer, func(w http.ResponseWriter, r *http.Request) {
+		if userOf(r).Everywhere() < role {
+			writeError(w, http.StatusForbidden, "this needs the "+role.String()+" role over every cluster and namespace")
+			return
+		}
+		next(w, r)
+	})
+}
+
+// target says what part of a cluster a request is about.
+type target int
+
+const (
+	// anywhere in the cluster: the handler shows only the user's part.
+	anywhere target = iota
+	// the namespace in the path.
+	pathNamespace
+	// the ?namespace= of the query, or the whole cluster without one.
+	queryNamespace
+	// the whole cluster, such as its nodes.
+	wholeCluster
+)
+
+// inCluster lets through users whose role where a request points reaches
+// role.
+func (s *Server) inCluster(role auth.Role, where target, next http.HandlerFunc) http.HandlerFunc {
+	return s.require(auth.Viewer, func(w http.ResponseWriter, r *http.Request) {
+		u, cluster := userOf(r), r.PathValue("cluster")
+		var has auth.Role
+		ns := ""
+		switch where {
+		case anywhere:
+			has = u.RoleSomewhere(cluster)
+		case pathNamespace:
+			ns = r.PathValue("ns")
+			has = u.RoleIn(cluster, ns)
+		case queryNamespace:
+			ns = r.URL.Query().Get("namespace")
+			has = u.RoleIn(cluster, ns)
+		case wholeCluster:
+			has = u.RoleIn(cluster, "")
+		}
+		if has >= role {
+			next(w, r)
+			return
+		}
+		place := "cluster " + cluster
+		if ns != "" {
+			place = "namespace " + ns + " of " + place
+		} else if where != anywhere {
+			place = "all of " + place
+		}
+		if has == 0 {
+			writeError(w, http.StatusForbidden, "you have no access to "+place)
+		} else {
+			writeError(w, http.StatusForbidden, "the "+has.String()+" role in "+place+" may not do this; it needs "+role.String())
+		}
+	})
+}
+
 func userOf(r *http.Request) auth.User {
 	u, _ := r.Context().Value(userKey{}).(auth.User)
 	return u
+}
+
+// visible is the part of a snapshot a user may see: all of it, or the
+// objects of the namespaces the user has a role in. Nodes and other
+// cluster-wide objects need a role over the whole cluster.
+func visible(u auth.User, cluster string, snap *protocol.Snapshot) *protocol.Snapshot {
+	if snap == nil || u.RoleIn(cluster, "") >= auth.Viewer {
+		return snap
+	}
+	sees := func(ns string) bool { return ns != "" && u.RoleIn(cluster, ns) >= auth.Viewer }
+	out := *snap
+	out.Nodes = nil
+	out.Namespaces = keep(snap.Namespaces, func(n protocol.Namespace) bool { return sees(n.Name) })
+	out.Workloads = keep(snap.Workloads, func(x protocol.Workload) bool { return sees(x.Namespace) })
+	out.Pods = keep(snap.Pods, func(x protocol.Pod) bool { return sees(x.Namespace) })
+	out.Services = keep(snap.Services, func(x protocol.Service) bool { return sees(x.Namespace) })
+	out.Ingresses = keep(snap.Ingresses, func(x protocol.Ingress) bool { return sees(x.Namespace) })
+	out.ConfigMaps = keep(snap.ConfigMaps, func(x protocol.ObjectRef) bool { return sees(x.Namespace) })
+	out.Secrets = keep(snap.Secrets, func(x protocol.ObjectRef) bool { return sees(x.Namespace) })
+	out.VolumeClaims = keep(snap.VolumeClaims, func(x protocol.VolumeClaim) bool { return sees(x.Namespace) })
+	out.Certificates = keep(snap.Certificates, func(x protocol.Certificate) bool { return sees(x.Namespace) })
+	out.Jobs = keep(snap.Jobs, func(x protocol.Job) bool { return sees(x.Namespace) })
+	out.CronJobs = keep(snap.CronJobs, func(x protocol.CronJob) bool { return sees(x.Namespace) })
+	out.Events = keep(snap.Events, func(x protocol.Event) bool { return sees(x.Namespace) })
+	// Collection errors can name anything in the cluster.
+	out.Errors = nil
+	return &out
+}
+
+func keep[T any](items []T, ok func(T) bool) []T {
+	out := make([]T, 0, len(items))
+	for _, it := range items {
+		if ok(it) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------- agent side
@@ -329,6 +458,7 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request, cluster string) 
 		return
 	}
 	s.history.Record(cluster, &snap, now)
+	s.changes.Observe(cluster, &snap, now)
 	if s.cfg.Alerts != nil {
 		s.cfg.Alerts.Observe(cluster, &snap, now)
 	}
@@ -421,16 +551,17 @@ func (s *Server) status(ci store.ClusterInfo) string {
 	}
 }
 
-func (s *Server) summarize(ci store.ClusterInfo) clusterSummary {
+// summarize describes a cluster as a user may see it.
+func (s *Server) summarize(u auth.User, ci store.ClusterInfo) clusterSummary {
 	sum := clusterSummary{Name: ci.Name, Status: s.status(ci), Capabilities: []string{}}
 	if s.cfg.Alerts != nil {
-		sum.Alerts = s.cfg.Alerts.ActiveCount(ci.Name)
+		sum.Alerts = s.cfg.Alerts.ActiveCount(ci.Name, func(a alert.Alert) bool { return alertVisible(u, a) })
 	}
 	if !ci.LastSeen.IsZero() {
 		t := ci.LastSeen.UTC()
 		sum.LastSeen = &t
 	}
-	snap := ci.Snapshot
+	snap := visible(u, ci.Name, ci.Snapshot)
 	if snap == nil {
 		return sum
 	}
@@ -441,7 +572,7 @@ func (s *Server) summarize(ci store.ClusterInfo) clusterSummary {
 	if snap.Capabilities != nil {
 		sum.Capabilities = snap.Capabilities
 	}
-	total, _ := tally(snap)
+	total, _ := tally(snap, s.levels())
 	sum.Counts = counts{Nodes: len(snap.Nodes), Namespaces: len(snap.Namespaces), objectCounts: total}
 	if len(snap.Nodes) > 0 {
 		var capacity, requests, usage protocol.Resources
@@ -469,11 +600,15 @@ func (s *Server) summarize(ci store.ClusterInfo) clusterSummary {
 	return sum
 }
 
-func (s *Server) listClusters(w http.ResponseWriter, _ *http.Request) {
+// listClusters lists the clusters the user has any role in.
+func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
 	all := s.st.Clusters()
 	out := make([]clusterSummary, 0, len(all))
 	for _, ci := range all {
-		out = append(out, s.summarize(ci))
+		if u.RoleSomewhere(ci.Name) >= auth.Viewer {
+			out = append(out, s.summarize(u, ci))
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -484,7 +619,20 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown cluster")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.summarize(ci))
+	writeJSON(w, http.StatusOK, s.summarize(userOf(r), ci))
+}
+
+// alertVisible tells whether a user may see an alert: one about a namespace
+// needs a role there, one about a cluster (a node, a silent agent) a role
+// anywhere in it. Alerts about no cluster, such as URL checks, are for all.
+func alertVisible(u auth.User, a alert.Alert) bool {
+	switch {
+	case a.Cluster == "":
+		return true
+	case a.Namespace != "":
+		return u.RoleIn(a.Cluster, a.Namespace) >= auth.Viewer
+	}
+	return u.RoleSomewhere(a.Cluster) >= auth.Viewer
 }
 
 // fromSnapshot answers from the cluster's latest snapshot. The ETag is a hash
@@ -501,7 +649,7 @@ func (s *Server) fromSnapshot(w http.ResponseWriter, r *http.Request, build func
 		writeError(w, http.StatusServiceUnavailable, "no data received from this cluster's agent yet")
 		return
 	}
-	body, err := json.Marshal(build(ci.Snapshot))
+	body, err := json.Marshal(build(visible(userOf(r), ci.Name, ci.Snapshot)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode response: "+err.Error())
 		return
@@ -536,14 +684,14 @@ func refNamespace(x protocol.ObjectRef) string { return x.Namespace }
 // ?namespace= filter and is nil for cluster-scoped kinds; problem enables
 // ?problems=true, which keeps only the items that need attention.
 func snapshotList[T any](s *Server, pick func(*protocol.Snapshot) []T, nsOf func(T) string, problem func(T) bool) http.HandlerFunc {
-	return s.require(auth.Viewer, func(w http.ResponseWriter, r *http.Request) {
+	return s.inCluster(auth.Viewer, anywhere, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		ns := q.Get("namespace")
 		onlyProblems := false
 		if v := q.Get("problems"); v != "" {
 			b, err := strconv.ParseBool(v)
 			if err != nil || (b && problem == nil) {
-				writeError(w, http.StatusBadRequest, "problems must be true or false, and is only supported for nodes, workloads, pods, volumeclaims and jobs")
+				writeError(w, http.StatusBadRequest, "problems must be true or false, and is only supported for nodes, workloads, pods, volumeclaims, certificates and jobs")
 				return
 			}
 			onlyProblems = b
@@ -570,7 +718,7 @@ type namespaceSummary struct {
 
 func (s *Server) namespaces(w http.ResponseWriter, r *http.Request) {
 	s.fromSnapshot(w, r, func(snap *protocol.Snapshot) any {
-		_, byNS := tally(snap)
+		_, byNS := tally(snap, s.levels())
 		out := make([]namespaceSummary, len(snap.Namespaces))
 		for i, n := range snap.Namespaces {
 			out[i].Namespace = n

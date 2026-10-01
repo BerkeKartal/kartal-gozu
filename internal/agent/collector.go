@@ -21,9 +21,18 @@ type Collector struct {
 	Namespaces []string
 	// IncludeSecrets adds Secret names (never their values) to the snapshot.
 	IncludeSecrets bool
-	MaxEvents      int
-	Version        string
-	Now            func() time.Time
+	// VolumeStats asks the kubelets how full the volumes are, through the
+	// API server's node proxy (rbac-volumes.yaml).
+	VolumeStats bool
+	// TLSSecrets reads when the certificates of TLS Secrets expire
+	// (rbac-certificates.yaml); their keys are never read.
+	TLSSecrets bool
+	MaxEvents  int
+	Version    string
+	Now        func() time.Time
+
+	volumes slowPart[map[string]volumeStat]
+	certs   slowPart[[]protocol.Certificate]
 }
 
 // collectConcurrency bounds parallel API calls; they share one HTTP/2
@@ -135,6 +144,16 @@ func (c *Collector) Collect(ctx context.Context) *protocol.Snapshot {
 		func() { snap.Events = each(ctx, c, fail, "events", "/api/v1", "events", warnings, toEvent) },
 		func() { nodeUsage = c.nodeMetrics(ctx, fail) },
 		func() { podUsage = c.podMetrics(ctx, fail) },
+		func() {
+			if !c.TLSSecrets {
+				return
+			}
+			certs, err := c.certs.get(c.now(), certificateEvery, func() ([]protocol.Certificate, bool, error) { return c.certificates(ctx) })
+			if err != nil {
+				fail("certificates", err)
+			}
+			snap.Certificates = certs
+		},
 	}
 
 	sem := make(chan struct{}, collectConcurrency)
@@ -152,6 +171,9 @@ func (c *Collector) Collect(ctx context.Context) *protocol.Snapshot {
 
 	snap.Workloads = append(append(deployments, statefulsets...), daemonsets...)
 	snap.MetricsAvailable = nodeUsage != nil || podUsage != nil
+	if c.VolumeStats {
+		c.addVolumeStats(ctx, snap)
+	}
 	podsPerNode := map[string]int{}
 	nodeRequests := map[string]*protocol.Resources{}
 	nodeLimits := map[string]*protocol.Resources{}
@@ -316,27 +338,29 @@ func replicatedWorkload(kind string, r kube.Replicated) protocol.Workload {
 		desired = *r.Spec.Replicas
 	}
 	return protocol.Workload{
-		Kind:      kind,
-		Namespace: r.Metadata.Namespace,
-		Name:      r.Metadata.Name,
-		Desired:   desired,
-		Ready:     r.Status.ReadyReplicas,
-		Updated:   r.Status.UpdatedReplicas,
-		Images:    images(r.Spec.Template),
-		CreatedAt: r.Metadata.CreationTimestamp,
+		Kind:       kind,
+		Namespace:  r.Metadata.Namespace,
+		Name:       r.Metadata.Name,
+		Desired:    desired,
+		Ready:      r.Status.ReadyReplicas,
+		Updated:    r.Status.UpdatedReplicas,
+		Images:     images(r.Spec.Template),
+		Generation: r.Metadata.Generation,
+		CreatedAt:  r.Metadata.CreationTimestamp,
 	}
 }
 
 func daemonSetWorkload(d kube.DaemonSet) protocol.Workload {
 	return protocol.Workload{
-		Kind:      "DaemonSet",
-		Namespace: d.Metadata.Namespace,
-		Name:      d.Metadata.Name,
-		Desired:   d.Status.DesiredNumberScheduled,
-		Ready:     d.Status.NumberReady,
-		Updated:   d.Status.UpdatedNumberScheduled,
-		Images:    images(d.Spec.Template),
-		CreatedAt: d.Metadata.CreationTimestamp,
+		Kind:       "DaemonSet",
+		Namespace:  d.Metadata.Namespace,
+		Name:       d.Metadata.Name,
+		Desired:    d.Status.DesiredNumberScheduled,
+		Ready:      d.Status.NumberReady,
+		Updated:    d.Status.UpdatedNumberScheduled,
+		Images:     images(d.Spec.Template),
+		Generation: d.Metadata.Generation,
+		CreatedAt:  d.Metadata.CreationTimestamp,
 	}
 }
 

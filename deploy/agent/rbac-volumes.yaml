@@ -1,0 +1,26 @@
+# Optional: lets the agent ask each node's kubelet, through the API server,
+# how full the volumes are (also set KARTAL_VOLUME_STATS to "true").
+# Note that get on nodes/proxy reaches every read-only kubelet endpoint
+# (pod lists, logs, metrics), not only the volume statistics; Kubernetes
+# treats it as a powerful permission. Include it only if you accept that for
+# the agent's service account.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kartal-agent-volumes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kartal-agent-volumes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kartal-agent-volumes
+subjects:
+  - kind: ServiceAccount
+    name: kartal-agent

@@ -12,10 +12,14 @@ const ROW_LIMIT = 500;
 const TOKEN_KEY = 'kartal.token';
 
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
-  'services', 'ingresses', 'configmaps', 'secrets', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
-  'alerts', 'audit', 'resources'];
+  'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
+  'alerts', 'uptime', 'changes', 'releases', 'audit', 'resources'];
 // Views that are not about one namespace.
-const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'audit']);
+const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit']);
+// Views that show every cluster at once.
+const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit']);
+// Views of the server itself, which checks addresses on its own.
+const SERVER_VIEWS = new Set(['uptime']);
 // Views whose data the agent fetches live; they reload on demand only.
 const LIVE_VIEWS = new Set(['resources', 'helm']);
 const WORKLOAD_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet']);
@@ -36,16 +40,17 @@ const API_KIND = Object.fromEntries(Object.entries(KIND_API).map(([k, v]) => [v,
 const VIEW_KIND = { deployments: 'Deployment', statefulsets: 'StatefulSet', daemonsets: 'DaemonSet' };
 
 // NAV is the sidebar: groups of views, each with its count from the
-// cluster's (or the selected namespace's) counts: [total, needs attention].
+// cluster's (or the selected namespace's) counts: [total, needs attention],
+// where what needs attention may add up several counts.
 const NAV = [
   { items: ['overview'] },
   { group: 'workloads', items: ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'] },
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
-  { group: 'grpConfig', items: ['configmaps', 'secrets'] },
+  { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
   { group: 'grpStorage', items: ['volumeclaims'] },
-  { group: 'grpApps', items: ['helm'] },
+  { group: 'grpApps', items: ['helm', 'releases'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events'] },
-  { group: 'grpOps', items: ['alerts', 'audit'] },
+  { group: 'grpOps', items: ['alerts', 'uptime', 'changes', 'audit'] },
   { items: ['resources'] },
 ];
 const NAV_COUNT = {
@@ -53,7 +58,8 @@ const NAV_COUNT = {
   statefulsets: ['statefulSets', 'statefulSetsDegraded'], daemonsets: ['daemonSets', 'daemonSetsDegraded'],
   jobs: ['jobs', 'jobsFailed'], cronjobs: ['cronJobs'], workloads: ['workloads', 'workloadsDegraded'],
   services: ['services'], ingresses: ['ingresses'], configmaps: ['configMaps'], secrets: ['secrets'],
-  volumeclaims: ['volumeClaims', 'volumeClaimsUnbound'], nodes: ['nodes', 'nodesNotReady'],
+  volumeclaims: ['volumeClaims', ['volumeClaimsUnbound', 'volumeClaimsFilling']], nodes: ['nodes', 'nodesNotReady'],
+  certificates: ['certificates', 'certificatesExpiring'],
   namespaces: ['namespaces'], events: [null, 'warnings'], alerts: [null, 'alerts'],
 };
 const RANK = { viewer: 1, operator: 2, admin: 3 };
@@ -67,6 +73,18 @@ const STRINGS = {
     cronjobs: 'CronJobs', events: 'Events', nodes: 'Nodes', resources: 'All resources',
     deployments: 'Deployments', statefulsets: 'StatefulSets', daemonsets: 'DaemonSets',
     helm: 'Helm releases', alerts: 'Alerts', audit: 'Audit log',
+    releases: 'Versions', changes: 'Changes', onlyDifferences: 'Only differences', 'col.app': 'App', 'col.what': 'What',
+    'col.change': 'Change', 'col.by': 'By', versionsHint: 'Each app’s images in every cluster; rows whose versions differ are marked.',
+    changesHint: 'What the agents saw change, and (for operators) what people changed through Kartal Gözü. Kept in memory: the last 5000.',
+    noChanges2: 'No changes seen yet: the first snapshot after the server starts is only a baseline.',
+    'what.created': 'created', 'what.deleted': 'deleted', 'what.image': 'new image', 'what.replicas': 'scaled',
+    'what.template': 'pod template changed (a restart or a new setting)', 'what.schedule': 'new schedule', 'what.cordoned': 'cordoned',
+    'what.uncordoned': 'uncordoned', 'what.ready': 'ready again', 'what.not-ready': 'not ready', 'what.suspended': 'suspended',
+    'what.resumed': 'resumed', 'what.restart': 'restarted', 'what.scale': 'scaled', 'what.rollback': 'rolled back', 'what.delete': 'deleted',
+    'what.cordon': 'cordoned', 'what.uncordon': 'uncordoned', 'what.suspend': 'suspended', 'what.resume': 'resumed', 'what.trigger': 'run now',
+    'what.exec': 'command run', 'what.apply': 'YAML saved', 'tab.changes': 'Changes', allClusters: 'All clusters',
+    drift: 'Changed since the last kubectl apply', driftNone: 'Same as the last kubectl apply.', 'col.field': 'Field',
+    'col.applied': 'Applied', 'col.now': 'Now', driftHint: 'Someone changed these after the last kubectl apply (kubectl edit, scale, another tool); the next apply will set them back.',
     grpNetwork: 'Networking', grpConfig: 'Configuration', grpStorage: 'Storage', grpCluster: 'Cluster',
     grpApps: 'Applications', grpOps: 'Operations',
     chooseNamespace: 'Choose the namespace every view shows',
@@ -122,6 +140,9 @@ const STRINGS = {
     view: 'View', cluster: 'Cluster', action: 'Action', toggleTheme: 'Switch light / dark theme',
     token: 'Access token', tokenHelp: 'Your token for this server (KARTAL_USERS or KARTAL_ADMIN_TOKEN). It stays in this browser.',
     remember: 'Remember on this device', signIn: 'Sign in', badToken: 'That token was not accepted.',
+    userName: 'User name', password: 'Password', passwordHelp: 'The account you sign in to your computer with.',
+    useToken: 'Sign in with an access token instead', usePassword: 'Sign in with your user name and password',
+    sessionEnded: 'Your session has ended; please sign in again.',
     details: 'Details', copy: 'Copy', copied: 'Copied.', edit: 'Edit', preview: 'Preview changes', save: 'Save',
     editHint: 'Edit the YAML, preview what the API server would store, then save. A newer version of the object is never overwritten.',
     secretNoEdit: 'Secrets cannot be edited here: their values are never shown.', noChanges: 'No changes.',
@@ -184,6 +205,22 @@ const STRINGS = {
     deliveries: 'Last deliveries', resolvedAt: 'resolved', startedAt: 'started',
     'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.PodFailing': 'Pod failing',
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
+    'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
+    certificates: 'Certificates', uptime: 'URL checks', fromServer: 'Checked from the Kartal Gözü server',
+    'col.subject': 'Subject', 'col.issuer': 'Issuer', 'col.expires': 'Expires', 'col.used': 'Used', 'col.check': 'Check',
+    'col.last24h': 'Last 24 hours', 'col.uptime': 'Uptime', 'col.response': 'Response', 'col.certificate': 'Certificate',
+    expiresIn: 'in {0}', expiredAgo: 'expired {0} ago', inodesUsed: 'inodes: {0}% used',
+    volumeUseHint: 'Not known. The agent asks the kubelets when KARTAL_VOLUME_STATS is on (rbac-volumes.yaml), for volumes that a running pod mounts.',
+    certificatesHint: 'From the tls.crt of kubernetes.io/tls Secrets, when KARTAL_TLS_SECRETS is on for the agent (rbac-certificates.yaml); keys are never read. Marked when they expire within {0} days.',
+    checksHint: 'The server requests each address on its own and keeps 24 hours of results in memory. A failing check, or a certificate that expires soon, raises an alert.',
+    noChecks: 'No URL checks yet.', addCheck: 'Add a check', removeCheck: 'Remove', removeCheckTitle: 'Remove the check',
+    removeCheckConfirm: 'Remove the check {0}? Its results go with it.', checkSaved: 'Check saved.', checkRemoved: 'Check removed.',
+    'check.up': 'Up', 'check.down': 'Down', 'check.waiting': 'Waiting', upFor: 'for {0}', checkName: 'Name',
+    checkURL: 'Address', checkURLHelp: 'http or https; without either, https is used. The server itself asks the address, so it must be reachable from there.',
+    checkInterval: 'Every', checkTimeout: 'Timeout (seconds)', checkStatus: 'Expected status', checkStatusHelp: 'Empty: any status below 400.',
+    checkContains: 'The answer must contain', checkInsecure: 'Do not verify the certificate (its expiry is still watched)',
+    tryCheck: 'Try now', trying: 'Asking…', tryOK: '✓ answered {0} in {1} ms', certUntil: 'certificate until {0}',
+    hourFailed: '{0}: {1} of {2} failed', hourNone: '{0}: no results', newCheck: 'New URL check', editCheck: 'URL check',
     critical: 'critical', warning: 'warning',
     auditEmpty: 'Nothing has been changed through Kartal Gözü yet.',
     auditHint: 'The last 1000 changes, kept in memory; the server log keeps all of them.', ok: 'ok',
@@ -194,6 +231,18 @@ const STRINGS = {
     jobs: 'Job’lar', cronjobs: 'CronJob’lar', events: 'Olaylar', nodes: 'Node’lar', resources: 'Tüm kaynaklar',
     deployments: 'Deployment’lar', statefulsets: 'StatefulSet’ler', daemonsets: 'DaemonSet’ler',
     helm: 'Helm release’leri', alerts: 'Uyarılar', audit: 'Denetim kaydı',
+    releases: 'Sürümler', changes: 'Değişiklikler', onlyDifferences: 'Sadece farklar', 'col.app': 'Uygulama', 'col.what': 'Ne',
+    'col.change': 'Değişiklik', 'col.by': 'Yapan', versionsHint: 'Her uygulamanın imajları, her cluster’da; sürümleri farklı olan satırlar işaretlenir.',
+    changesHint: 'Agent’ların gördüğü değişiklikler ve (operatörler için) Kartal Gözü’nden yapılanlar. Bellekte tutulur: son 5000.',
+    noChanges2: 'Henüz değişiklik görülmedi: sunucu açıldıktan sonraki ilk snapshot yalnızca başlangıç noktasıdır.',
+    'what.created': 'oluşturuldu', 'what.deleted': 'silindi', 'what.image': 'yeni imaj', 'what.replicas': 'ölçeklendi',
+    'what.template': 'pod şablonu değişti (yeniden başlatma ya da yeni ayar)', 'what.schedule': 'yeni zamanlama', 'what.cordoned': 'cordon edildi',
+    'what.uncordoned': 'uncordon edildi', 'what.ready': 'yeniden hazır', 'what.not-ready': 'hazır değil', 'what.suspended': 'askıya alındı',
+    'what.resumed': 'devam ettirildi', 'what.restart': 'yeniden başlatıldı', 'what.scale': 'ölçeklendi', 'what.rollback': 'geri alındı', 'what.delete': 'silindi',
+    'what.cordon': 'cordon edildi', 'what.uncordon': 'uncordon edildi', 'what.suspend': 'askıya alındı', 'what.resume': 'devam ettirildi',
+    'what.trigger': 'hemen çalıştırıldı', 'what.exec': 'komut çalıştırıldı', 'what.apply': 'YAML kaydedildi', 'tab.changes': 'Değişiklikler', allClusters: 'Tüm cluster’lar',
+    drift: 'Son kubectl apply’dan beri değişenler', driftNone: 'Son kubectl apply ile aynı.', 'col.field': 'Alan',
+    'col.applied': 'Uygulanan', 'col.now': 'Şu an', driftHint: 'Bunlar son kubectl apply’dan sonra değişti (kubectl edit, scale, başka bir araç); bir sonraki apply onları geri alır.',
     grpNetwork: 'Ağ', grpConfig: 'Yapılandırma', grpStorage: 'Depolama', grpCluster: 'Cluster',
     grpApps: 'Uygulamalar', grpOps: 'Operasyon',
     chooseNamespace: 'Tüm görünümlerin gösterdiği namespace’i seç',
@@ -251,6 +300,9 @@ const STRINGS = {
     view: 'Görünüm', cluster: 'Cluster', action: 'İşlem', toggleTheme: 'Açık / koyu temaya geç',
     token: 'Erişim anahtarı', tokenHelp: 'Bu sunucu için anahtarın (KARTAL_USERS ya da KARTAL_ADMIN_TOKEN). Yalnızca bu tarayıcıda kalır.',
     remember: 'Bu cihazda hatırla', signIn: 'Giriş yap', badToken: 'Bu anahtar kabul edilmedi.',
+    userName: 'Kullanıcı adı', password: 'Şifre', passwordHelp: 'Bilgisayarınıza girdiğiniz kurum hesabı.',
+    useToken: 'Bunun yerine erişim anahtarıyla gir', usePassword: 'Kullanıcı adı ve şifreyle gir',
+    sessionEnded: 'Oturumunuz sona erdi; lütfen yeniden giriş yapın.',
     details: 'Detay', copy: 'Kopyala', copied: 'Kopyalandı.', edit: 'Düzenle', preview: 'Değişiklikleri önizle', save: 'Kaydet',
     editHint: 'YAML’ı düzenle, API sunucusunun ne kaydedeceğini önizle, sonra kaydet. Nesnenin daha yeni bir sürümünün üstüne asla yazılmaz.',
     secretNoEdit: 'Secret’lar burada düzenlenemez: değerleri hiç gösterilmez.', noChanges: 'Değişiklik yok.',
@@ -315,6 +367,22 @@ const STRINGS = {
     deliveries: 'Son gönderimler', resolvedAt: 'çözüldü', startedAt: 'başladı',
     'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.PodFailing': 'Pod hata veriyor',
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
+    'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
+    certificates: 'Sertifikalar', uptime: 'URL kontrolleri', fromServer: 'Kartal Gözü sunucusundan denetlenir',
+    'col.subject': 'Sertifika adı', 'col.issuer': 'Veren', 'col.expires': 'Bitiş', 'col.used': 'Doluluk', 'col.check': 'Kontrol',
+    'col.last24h': 'Son 24 saat', 'col.uptime': 'Erişilebilirlik', 'col.response': 'Yanıt', 'col.certificate': 'Sertifika',
+    expiresIn: '{0} sonra', expiredAgo: '{0} önce doldu', inodesUsed: 'inode: %{0} dolu',
+    volumeUseHint: 'Bilinmiyor. Agent, KARTAL_VOLUME_STATS açıkken (rbac-volumes.yaml) çalışan bir pod’un bağladığı disklerin doluluğunu kubelet’lerden okur.',
+    certificatesHint: 'kubernetes.io/tls Secret’larının tls.crt’sinden; agent’ta KARTAL_TLS_SECRETS açıkken (rbac-certificates.yaml). Anahtarlar hiç okunmaz. {0} gün içinde dolanlar işaretlenir.',
+    checksHint: 'Sunucu her adresi kendisi sorar ve son 24 saatin sonuçlarını bellekte tutar. Cevap vermeyen bir adres ya da süresi yaklaşan bir sertifika uyarı oluşturur.',
+    noChecks: 'Henüz URL kontrolü yok.', addCheck: 'Kontrol ekle', removeCheck: 'Kaldır', removeCheckTitle: 'Kontrolü kaldır',
+    removeCheckConfirm: '{0} kontrolü kaldırılsın mı? Sonuçları da silinir.', checkSaved: 'Kontrol kaydedildi.', checkRemoved: 'Kontrol kaldırıldı.',
+    'check.up': 'Çalışıyor', 'check.down': 'Cevap yok', 'check.waiting': 'Bekleniyor', upFor: '{0} süredir', checkName: 'Ad',
+    checkURL: 'Adres', checkURLHelp: 'http ya da https; belirtilmezse https kullanılır. Adresi sunucunun kendisi sorar, oradan erişilebilir olmalı.',
+    checkInterval: 'Sıklık', checkTimeout: 'Zaman aşımı (saniye)', checkStatus: 'Beklenen durum kodu', checkStatusHelp: 'Boş: 400’ün altındaki her kod.',
+    checkContains: 'Cevapta geçmesi gereken metin', checkInsecure: 'Sertifikayı doğrulama (bitiş tarihi yine izlenir)',
+    tryCheck: 'Şimdi dene', trying: 'Soruluyor…', tryOK: '✓ {1} ms içinde {0} döndü', certUntil: 'sertifika {0} tarihine kadar geçerli',
+    hourFailed: '{0}: {2} istekten {1} tanesi başarısız', hourNone: '{0}: sonuç yok', newCheck: 'Yeni URL kontrolü', editCheck: 'URL kontrolü',
     critical: 'kritik', warning: 'uyarı',
     auditEmpty: 'Kartal Gözü üzerinden henüz bir değişiklik yapılmadı.',
     auditHint: 'Son 1000 değişiklik bellekte tutulur; sunucu logu hepsini saklar.', ok: 'tamam',
@@ -573,8 +641,8 @@ function starButton(on, toggle) {
   }, on ? '★' : '☆');
 }
 
-// roleAtLeast tells whether the signed-in user's role reaches role, and
-// agentAllows whether this cluster's agent accepts a kind of action.
+// roleAtLeast tells whether the signed-in user's role reaches role anywhere,
+// and agentAllows whether this cluster's agent accepts a kind of action.
 function roleAtLeast(role) {
   return !!state.me && (RANK[state.me.role] || 0) >= RANK[role];
 }
@@ -582,10 +650,36 @@ function agentAllows(cap) {
   const c = currentCluster();
   return !!(c && (c.capabilities || []).includes(cap));
 }
-// actionButton is hidden from users whose role is too low, and disabled,
-// with the reason, when the agent does not allow the action.
-function actionButton(label, onclick, { role = 'operator', cap = 'write', cls } = {}) {
-  if (!roleAtLeast(role)) return null;
+
+// A role may be granted only in some clusters and namespaces; these follow
+// the server's rules, so the UI offers what the server will allow.
+function nameMatches(pattern, name) {
+  return pattern === '*' || (pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : pattern === name);
+}
+// roleIn is the user's role in a namespace of the current cluster; the
+// namespace '' stands for the whole cluster (nodes, cluster-wide objects).
+function roleIn(ns) {
+  let best = 0;
+  for (const g of (state.me && state.me.grants) || []) {
+    const r = RANK[g.role] || 0;
+    if (r > best && (!g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, state.cluster) &&
+      (ns ? nameMatches(s.namespace, ns) : s.namespace === '*')))) best = r;
+  }
+  return best;
+}
+function canIn(role, ns) {
+  return roleIn(ns || '') >= RANK[role];
+}
+// canEverywhere is for the server's own settings.
+function canEverywhere(role) {
+  return !!state.me && (RANK[state.me.everywhere] || 0) >= RANK[role];
+}
+
+// actionButton is hidden from users whose role where the action applies is
+// too low, and disabled, with the reason, when the agent does not allow it.
+// where is a namespace, '' for the whole cluster, or null for the server.
+function actionButton(label, onclick, { role = 'operator', cap = 'write', cls, where } = {}) {
+  if (!(where === null ? canEverywhere(role) : canIn(role, where))) return null;
   const b = button(label, onclick, cls);
   if (cap && !agentAllows(cap)) {
     b.disabled = true;
@@ -726,7 +820,7 @@ async function api(path, { method = 'GET', body, raw, text = false, signal } = {
     } catch { /* not JSON */ }
     if (res.status === 401) {
       setToken('', false);
-      showLogin(token ? t('badToken') : '');
+      showLogin(!token ? '' : token.startsWith('kgs_') ? t('sessionEnded') : t('badToken'));
     }
     throw new ApiError(res.status, message);
   }
@@ -791,7 +885,7 @@ async function refresh({ auto = false } = {}) {
     }
     if (topSignature() !== topSig) renderTop();
     renderBanner();
-    if (!currentCluster().collectedAt && !['alerts', 'audit'].includes(state.view)) {
+    if (!currentCluster().collectedAt && !ALL_CLUSTERS.has(state.view) && !SERVER_VIEWS.has(state.view)) {
       // Nothing to ask for until the agent's first report arrives.
       state.namespaces = null;
       state.nsError = t('waitingAgent');
@@ -853,8 +947,9 @@ function sameData(a, b) {
   return Object.keys(b).every(k => {
     if (a[k] === b[k]) return true;
     if (k === 'summary') return shown(a.summary) === shown(b.summary);
-    // Alerts and the audit log have no ETag; they are small.
-    if (k === 'alerts' || state.view === 'audit') return JSON.stringify(a[k]) === JSON.stringify(b[k]);
+    // Alerts, the audit log, changes, versions and checks have no ETag; they
+    // are small.
+    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime'].includes(state.view)) return JSON.stringify(a[k]) === JSON.stringify(b[k]);
     return false;
   });
 }
@@ -889,6 +984,15 @@ async function loadView(signal) {
     case 'audit':
       // A viewer gets the server's refusal, which says which role it takes.
       return { items: await api('audit', { signal }) };
+    case 'changes': {
+      const q = new URLSearchParams({ cluster: state.cluster });
+      if (state.ns) q.set('namespace', state.ns);
+      return { items: await api('changes?' + q, { signal }) };
+    }
+    case 'uptime':
+      return { checks: await api('checks', { signal }) };
+    case 'releases':
+      return { items: await api('releases', { signal }) };
     default: {
       const kind = VIEW_KIND[state.view];
       if (kind) return { items: ofKind(await api(c + '/workloads' + nsq, { signal }), kind) };
@@ -904,7 +1008,8 @@ async function clusterUsage(signal) {
   if (cached && cached.cluster === state.cluster && Date.now() - cached.at < METRICS_MS) return cached.value;
   const c = currentCluster();
   let value = null;
-  if (c && c.metricsAvailable) {
+  // The cluster's usage belongs to the whole cluster, not a namespace.
+  if (c && c.metricsAvailable && roleIn('') > 0) {
     try {
       value = await api(clusterPath() + '/metrics?kind=cluster&hours=1', { signal });
     } catch (e) {
@@ -1121,7 +1226,8 @@ function renderNav() {
   if (sig === navSig) return;
   navSig = sig;
   fill(els.nav, NAV.map(section => {
-    const items = section.items.filter(id => id !== 'audit' || roleAtLeast('operator'));
+    // The audit log is for operators; nodes are the whole cluster's.
+    const items = section.items.filter(id => (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0));
     return [
       section.group && items.length ? h('div', { class: 'nav-group' }, t(section.group)) : null,
       items.map(id => navItem(id, counts)),
@@ -1132,7 +1238,7 @@ function renderNav() {
 function navItem(id, counts) {
   const [totalKey, problemKey] = NAV_COUNT[id] || [];
   const total = totalKey ? counts[totalKey] : null;
-  const problems = problemKey ? counts[problemKey] || 0 : 0;
+  const problems = [].concat(problemKey || []).reduce((n, k) => n + (counts[k] || 0), 0);
   const active = id === state.view;
   return h('a', { class: active ? 'nav-item active' : 'nav-item', href: routeHash({ view: id }), 'aria-current': active ? 'page' : null },
     h('span', { class: 'nav-label' }, t(id)),
@@ -1189,7 +1295,7 @@ function renderHead() {
   });
   els.updated = h('span', { class: 'muted' });
   const scope = CLUSTER_SCOPED.has(v)
-    ? h('span', { class: 'muted' }, t('clusterWide'))
+    ? h('span', { class: 'muted' }, t(SERVER_VIEWS.has(v) ? 'fromServer' : ALL_CLUSTERS.has(v) ? 'allClusters' : 'clusterWide'))
     : state.ns
       ? h('span', { class: 'chip active' }, t('namespace') + ': ' + state.ns,
         h('button', { type: 'button', class: 'star', title: t('allNamespaces'), onclick: () => selectNamespace('') }, '✕'))
@@ -1197,7 +1303,7 @@ function renderHead() {
   fill(els.head,
     h('div', { class: 'toolbar' },
       h('h1', null, t(v)), scope,
-      table && table.problem ? h('button', {
+      (table && table.problem) || v === 'releases' ? h('button', {
         type: 'button', class: state.problems ? 'chip active' : 'chip',
         onclick: () => {
           state.problems = !state.problems;
@@ -1205,7 +1311,7 @@ function renderHead() {
           renderHead();
           renderContent();
         },
-      }, '⚠ ' + t('problemsOnly')) : null,
+      }, v === 'releases' ? '≠ ' + t('onlyDifferences') : '⚠ ' + t('problemsOnly')) : null,
       els.filter, els.updated,
       h('button', { type: 'button', class: 'icon-btn', title: t('refresh'), onclick: () => refresh() }, '↻')));
   updateStamp();
@@ -1241,6 +1347,12 @@ function renderContent() {
     case 'resources': body = renderResources(state.data); break;
     case 'alerts': body = renderAlerts(state.data.alerts); break;
     case 'audit': body = renderAudit(state.data.items); break;
+    case 'changes': body = renderChanges(state.data.items); break;
+    case 'releases': body = renderReleases(state.data.items); break;
+    case 'uptime': body = renderUptime(state.data.checks); break;
+    case 'certificates':
+      body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays))];
+      break;
     default: body = renderTable(state.view, state.data.items || []);
   }
   fill(els.content, state.error ? errorPanel(state.error) : null, body);
@@ -1326,6 +1438,50 @@ function detailButton(kind, ns, name) {
   return gvr ? button(t('details'), () => openDetail({ gvr, ns, name })) : null;
 }
 
+// levels are where the server's alerts begin, for volumes and certificates.
+function levels() {
+  return Object.assign({ volumeWarning: 85, volumeCritical: 95, certificateWarningDays: 14, certificateCriticalDays: 3 },
+    state.me && state.me.levels);
+}
+
+// fillOf is how full a volume is, in percent, by space or by inodes,
+// whichever is fuller; null when the agent does not say.
+function fillOf(v) {
+  const parts = [];
+  if (v.capacityBytes) parts.push((100 * v.usedBytes) / v.capacityBytes);
+  if (v.inodes) parts.push((100 * v.inodesUsed) / v.inodes);
+  return parts.length ? Math.max(...parts) : null;
+}
+
+function volumeUse(v) {
+  const p = fillOf(v);
+  if (p == null) return h('span', { class: 'muted', title: t('volumeUseHint') }, '—');
+  const lv = levels();
+  const inodes = v.inodes ? Math.round((100 * v.inodesUsed) / v.inodes) : null;
+  const level = p >= lv.volumeCritical ? 'bad' : p >= lv.volumeWarning ? 'warn' : '';
+  return h('div', { class: 'bar-cell', title: inodes != null ? t('inodesUsed', inodes) : null },
+    h('span', { class: level ? 'status-' + level : null }, Math.round(p) + '%'),
+    v.capacityBytes ? h('span', { class: 'muted' }, ' · ' + bytes(v.usedBytes) + ' / ' + bytes(v.capacityBytes)) : null,
+    h('div', { class: 'bar' + (level === 'bad' ? ' full' : level ? ' hot' : '') }, h('span', { style: { width: Math.min(100, p) + '%' } })));
+}
+
+// certLevel is ok, warn or bad, by how soon a certificate expires.
+function certLevel(c) {
+  const at = when(c.notAfter);
+  if (c.error || !Number.isFinite(at)) return 'bad';
+  const days = (at - Date.now()) / 86400000;
+  const lv = levels();
+  return days <= lv.certificateCriticalDays ? 'bad' : days <= lv.certificateWarningDays ? 'warn' : 'ok';
+}
+
+function expiresCell(notAfter) {
+  const at = when(notAfter);
+  if (!Number.isFinite(at)) return '—';
+  const left = at - Date.now();
+  return h('span', { class: 'status-' + certLevel({ notAfter }), title: new Date(at).toLocaleString() },
+    left > 0 ? t('expiresIn', span(left)) : t('expiredAgo', span(-left)));
+}
+
 function refTable(kind) {
   return {
     key: x => kind + '/' + x.namespace + '/' + x.name,
@@ -1343,8 +1499,8 @@ function workloadActions(w) {
   return [
     linkButton(t('pods'), routeHash({ view: 'pods', ns: w.namespace, q: w.name })),
     detailButton(w.kind, w.namespace, w.name),
-    w.kind === 'DaemonSet' ? null : actionButton(t('scale'), () => scaleWorkload(w)),
-    actionButton(t('restart'), () => restartWorkload(w), { cls: 'danger' }),
+    w.kind === 'DaemonSet' ? null : actionButton(t('scale'), () => scaleWorkload(w), { where: w.namespace }),
+    actionButton(t('restart'), () => restartWorkload(w), { cls: 'danger', where: w.namespace }),
   ];
 }
 
@@ -1389,7 +1545,7 @@ const TABLES = {
     actions: p => [
       button(t('logs'), () => openDetail({ gvr: KIND_API.Pod, ns: p.namespace, name: p.name }, 'logs')),
       detailButton('Pod', p.namespace, p.name),
-      actionButton(t('deletePod'), () => deletePod(p), { cls: 'danger' }),
+      actionButton(t('deletePod'), () => deletePod(p), { cls: 'danger', where: p.namespace }),
     ],
   },
   services: {
@@ -1420,14 +1576,30 @@ const TABLES = {
   },
   configmaps: refTable('ConfigMap'),
   secrets: refTable('Secret'),
+  certificates: {
+    key: c => 'Secret/' + c.namespace + '/' + c.secret,
+    problem: c => certLevel(c) !== 'ok',
+    text: c => [c.namespace, c.secret, c.subject, c.issuer, c.error].concat(c.dnsNames || []),
+    columns: [
+      ['name', c => nameLink('Secret', c.namespace, c.secret), c => c.secret],
+      ['namespace', c => nsLink(c.namespace), c => c.namespace],
+      ['subject', c => (c.error ? h('span', { class: 'status-bad' }, c.error)
+        : h('span', { title: (c.dnsNames || []).join('\n') || null }, c.subject || '—',
+          (c.dnsNames || []).length > 1 ? h('span', { class: 'muted' }, ' +' + (c.dnsNames.length - 1)) : null)), c => c.subject],
+      ['issuer', c => c.issuer || '—', c => c.issuer],
+      ['expires', c => (c.error ? '—' : expiresCell(c.notAfter)), c => when(c.notAfter)],
+    ],
+    actions: c => [detailButton('Secret', c.namespace, c.secret)],
+  },
   volumeclaims: {
     key: v => 'PersistentVolumeClaim/' + v.namespace + '/' + v.name,
-    problem: v => v.phase !== 'Bound',
+    problem: v => v.phase !== 'Bound' || fillOf(v) >= levels().volumeWarning,
     text: v => [v.namespace, v.name, v.phase, v.storageClass, v.volumeName],
     columns: [
       ['name', v => nameLink('PersistentVolumeClaim', v.namespace, v.name), v => v.name],
       ['namespace', v => nsLink(v.namespace), v => v.namespace],
       ['status', v => pill(v.phase || '—', v.phase === 'Bound' ? 'ok' : v.phase === 'Lost' ? 'bad' : 'warn'), v => v.phase],
+      ['used', volumeUse, v => fillOf(v)],
       ['capacity', v => v.capacity || '—', v => quantity(v.capacity)],
       ['storageClass', v => v.storageClass || '—', v => v.storageClass],
       ['access', v => (v.accessModes || []).map(m => ACCESS[m] || m).join(', ')],
@@ -1467,8 +1639,8 @@ const TABLES = {
       ['lastSuccess', c => age(c.lastSuccess), c => ageOf(c.lastSuccess)],
     ],
     actions: c => [
-      actionButton(t('runNow'), () => triggerCronJob(c)),
-      actionButton(c.suspended ? t('resume') : t('suspend'), () => suspendCronJob(c, !c.suspended)),
+      actionButton(t('runNow'), () => triggerCronJob(c), { where: c.namespace }),
+      actionButton(c.suspended ? t('resume') : t('suspend'), () => suspendCronJob(c, !c.suspended), { where: c.namespace }),
       linkButton(t('jobs'), routeHash({ view: 'jobs', ns: c.namespace, q: c.name })),
       detailButton('CronJob', c.namespace, c.name),
     ],
@@ -1505,7 +1677,7 @@ const TABLES = {
     ],
     actions: n => [
       linkButton(t('pods'), routeHash({ view: 'pods', ns: '', q: n.name })),
-      actionButton(n.unschedulable ? t('uncordon') : t('cordon'), () => cordonNode(n, !n.unschedulable)),
+      actionButton(n.unschedulable ? t('uncordon') : t('cordon'), () => cordonNode(n, !n.unschedulable), { where: '' }),
       detailButton('Node', '', n.name),
     ],
   },
@@ -1687,16 +1859,19 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
   const cap = summary.capacity || {};
   const req = summary.requests || {};
   const use = summary.usage;
+  // Nodes and capacity belong to the whole cluster; a user limited to some
+  // namespaces sees neither.
+  const whole = roleIn('') > 0;
   return [
     h('div', { class: 'cards' },
-      card(t('nodes'), (nodes.length - notReady.length) + ' / ' + nodes.length, t('ready'), notReady.length > 0, routeHash({ view: 'nodes' })),
+      whole ? card(t('nodes'), (nodes.length - notReady.length) + ' / ' + nodes.length, t('ready'), notReady.length > 0, routeHash({ view: 'nodes' })) : null,
       card(t('pods'), total.pods == null ? '—' : total.pods, unhealthy.length ? t('nUnhealthy', unhealthy.length) : t('allHealthy'),
         unhealthy.length > 0, routeHash({ view: 'pods', problems: unhealthy.length > 0 })),
       card(t('workloads'), total.workloads == null ? '—' : total.workloads, degraded.length ? t('nDegraded', degraded.length) : t('allReady'),
         degraded.length > 0, routeHash({ view: 'workloads', problems: degraded.length > 0 })),
       card(t('warnings'), events.length, t('warningEvents'), false, routeHash({ view: 'events' })),
-      capacityCard(t('cpu'), use && use.cpuMilli, req.cpuMilli, cap.cpuMilli, cores, ' ' + t('cores')),
-      capacityCard(t('memory'), use && use.memoryBytes, req.memoryBytes, cap.memoryBytes, bytes)),
+      whole ? capacityCard(t('cpu'), use && use.cpuMilli, req.cpuMilli, cap.cpuMilli, cores, ' ' + t('cores')) : null,
+      whole ? capacityCard(t('memory'), use && use.memoryBytes, req.memoryBytes, cap.memoryBytes, bytes) : null),
     attentionPanel(notReady, degraded, unhealthy),
     usage && usage.points && usage.points.length > 1 ? panel(t('clusterUsage'), h('div', { class: 'charts' },
       lineChart({ title: t('cpu'), points: usage.points, value: p => p.cpu, format: cpuUnit, guides: [
@@ -1707,7 +1882,7 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
     summary.errors && summary.errors.length
       ? panel('⚠ ' + t('collectionErrors'), h('ul', null, summary.errors.map(e => h('li', { class: 'mono' }, e))), 'errors')
       : null,
-    panel(t('nodes'), renderTable('nodes', nodes, { filtered: false, sortable: false })),
+    whole ? panel(t('nodes'), renderTable('nodes', nodes, { filtered: false, sortable: false })) : null,
   ];
 }
 
@@ -1815,7 +1990,7 @@ function renderAlerts(st) {
   const alertRow = a => h('tr', { class: a.severity === 'critical' ? 'problem' : null },
     h('td', null, pill(t(a.severity), a.severity === 'critical' ? 'bad' : 'warn')),
     h('td', null, t('alert.' + a.kind)),
-    h('td', null, a.cluster),
+    h('td', null, a.cluster || h('a', { href: routeHash({ view: 'uptime' }) }, t('uptime'))),
     h('td', null, a.namespace ? a.namespace + '/' : '', alertObject(a)),
     h('td', null, a.detail),
     h('td', null, age(a.since)),
@@ -1827,8 +2002,8 @@ function renderAlerts(st) {
         st.channels.length ? h('div', { class: 'chips' }, st.channels.map(c => h('span', { class: 'chip' }, c))) : h('div', { class: 'status-warn' }, t('noChannels')),
         h('div', { class: 'detail' }, t('alertsAfter', goDuration(st.after)))),
       h('div', { class: 'actions' },
-        st.channels.length ? actionButton(t('testNotify'), testNotification, { role: 'admin', cap: null }) : null,
-        actionButton(t('mailSettings'), mailDialog, { role: 'admin', cap: null })))),
+        st.channels.length ? actionButton(t('testNotify'), testNotification, { role: 'admin', cap: null, where: null }) : null,
+        actionButton(t('mailSettings'), mailDialog, { role: 'admin', cap: null, where: null })))),
     panel(t('alertsActive') + ' (' + st.active.length + ')', active.length ? h('table', null,
       h('thead', null, h('tr', null, ['severity', 'problem', 'cluster', 'object', 'detail', 'since'].concat(notify ? ['notified'] : []).map(k => h('th', null, t('col.' + k))))),
       h('tbody', null, active.map(alertRow))) : h('div', { class: 'ok-note' }, '✓ ' + t('noAlerts'))),
@@ -1837,7 +2012,7 @@ function renderAlerts(st) {
       h('tbody', null, recent.slice(0, 100).map(a => h('tr', null,
         h('td', null, age(a.resolved || a.since), ' ', h('span', { class: a.resolved ? 'status-ok' : 'status-bad' }, a.resolved ? t('resolvedAt') : t('startedAt'))),
         h('td', null, t('alert.' + a.kind)),
-        h('td', null, a.cluster),
+        h('td', null, a.cluster || t('uptime')),
         h('td', null, a.namespace ? a.namespace + '/' : '', a.object),
         h('td', null, a.detail)))))) : null,
     st.deliveries.length ? panel(t('deliveries'), h('table', null,
@@ -1851,7 +2026,10 @@ function renderAlerts(st) {
 // alertObject links an alert to the object when it is in this cluster.
 function alertObject(a) {
   if (a.cluster !== state.cluster) return a.object;
-  const kinds = { NodeNotReady: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim' };
+  const kinds = {
+    NodeNotReady: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim',
+    VolumeFilling: 'PersistentVolumeClaim', CertificateExpiring: 'Secret',
+  };
   let kind = kinds[a.kind];
   let name = a.object;
   if (a.kind === 'WorkloadDegraded') [kind, name] = a.object.split('/');
@@ -1989,6 +2167,270 @@ function renderAudit(items) {
         h('td', null, e.ok ? pill(t('ok'), 'ok') : h('span', { class: 'status-bad' }, e.error)))))),
     h('div', { class: 'more-note' }, t('auditHint')),
   ];
+}
+
+// ---------------------------------------------------------------- changes and versions
+
+// shortImage drops an image's registry and path and shortens its digest.
+function shortImage(image) {
+  return String(image).split('/').pop().replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, '@$1');
+}
+
+// imageChange shows the images that changed: "web:1 → web:2".
+function imageChange(from, to) {
+  const a = from ? from.split(', ') : [];
+  const b = to ? to.split(', ') : [];
+  const gone = a.filter(x => !b.includes(x));
+  const came = b.filter(x => !a.includes(x));
+  const moved = gone.length || came.length;
+  const list = xs => mono(xs.map(shortImage).join(', ') || '—');
+  return h('span', { title: (from || '—') + ' → ' + (to || '—') }, list(moved ? gone : a), ' → ', list(moved ? came : b));
+}
+
+// changeText says what changed and, where that helps, from what to what.
+function changeText(c) {
+  const word = t('what.' + c.what);
+  const label = h('span', { class: 'change-what' }, word === 'what.' + c.what ? c.what : word);
+  switch (c.what) {
+    case 'image': return [label, ' ', imageChange(c.from, c.to)];
+    case 'replicas': return [label, ' ', mono(c.from + ' → ' + c.to)];
+    case 'schedule': return [label, ' ', mono(c.from), ' → ', mono(c.to)];
+    case 'scale': return c.to ? [label, ' ', mono('→ ' + c.to)] : label;
+    case 'rollback': return c.to ? [label, ' ', mono('→ #' + c.to)] : label;
+    case 'exec': return [label, ' ', mono(c.to || '')];
+    case 'not-ready': return c.to ? [label, ' ', h('span', { class: 'muted' }, c.to)] : label;
+    case 'created': case 'deleted': {
+      const v = c.to || c.from;
+      if (!v) return label;
+      return [label, ' ', h('span', { class: 'muted', title: v }, c.kind === 'CronJob' ? v : v.split(', ').map(shortImage).join(', '))];
+    }
+    default: return label;
+  }
+}
+
+// changeObject names what changed, as a link while it is still there.
+function changeObject(c) {
+  const gvr = KIND_API[c.kind];
+  const gone = c.what === 'deleted' || c.what === 'delete';
+  return [
+    gvr && !gone
+      ? h('button', { type: 'button', class: 'link-button', onclick: () => openDetail({ gvr, ns: c.namespace || '', name: c.name }) }, h('strong', null, c.name))
+      : h('strong', null, c.name),
+    h('span', { class: 'muted' }, ' · ' + c.kind + (c.namespace && !state.ns ? ' · ' + c.namespace : '')),
+  ];
+}
+
+function changesTable(items, { object = true } = {}) {
+  // Who made a change is shown to operators only, so the column may be empty.
+  const by = items.some(c => c.by);
+  const cols = ['time'].concat(object ? ['object'] : [], ['change'], by ? ['by'] : []);
+  return h('table', object ? null : { class: 'compact' },
+    h('thead', null, h('tr', null, cols.map(k => h('th', null, t('col.' + k))))),
+    h('tbody', null, items.map(c => h('tr', { class: c.what === 'not-ready' ? 'problem' : null },
+      h('td', null, age(c.time)),
+      object ? h('td', null, changeObject(c)) : null,
+      h('td', null, changeText(c)),
+      by ? h('td', null, c.by ? h('strong', null, c.by) : h('span', { class: 'muted' }, '—')) : null))));
+}
+
+function renderChanges(items) {
+  if (!items.length) return [emptyState(t('noChanges2')), h('div', { class: 'more-note' }, t('changesHint'))];
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = items.filter(c => matches(words, [c.kind, c.name, c.namespace, c.what, t('what.' + c.what), c.from, c.to, c.by]));
+  if (!rows.length) return emptyState(t('noMatch'));
+  const shown = rows.slice(0, state.limit);
+  return [
+    changesTable(shown),
+    rows.length > shown.length ? h('div', { class: 'more-note' }, t('showing', shown.length, rows.length), ' ',
+      button(t('showMore'), () => { state.limit += 1000; renderContent(); })) : null,
+    h('div', { class: 'more-note' }, t('changesHint')),
+  ];
+}
+
+// renderReleases puts every app's images side by side, a column per cluster.
+// An app whose versions differ between clusters is marked; one missing from
+// a cluster shows a dash there.
+function renderReleases(items) {
+  if (!items.length) return [emptyState(t('noItems')), h('div', { class: 'more-note' }, t('versionsHint'))];
+  const known = (state.clusters || []).map(c => c.name);
+  const clusters = [...new Set(known.concat(items.map(r => r.cluster)))].filter(n => items.some(r => r.cluster === n));
+  const version = r => (r.images || []).slice().sort().join(', ');
+  const apps = new Map();
+  for (const r of items) {
+    const key = r.namespace + '/' + r.kind + '/' + r.name;
+    if (!apps.has(key)) apps.set(key, { namespace: r.namespace, kind: r.kind, name: r.name, in: {} });
+    apps.get(key).in[r.cluster] = r;
+  }
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  let rows = [...apps.values()];
+  for (const app of rows) {
+    const found = Object.values(app.in);
+    app.differs = new Set(found.map(version)).size > 1;
+    app.missing = clusters.length > 1 && found.length < clusters.length;
+    app.text = [app.namespace, app.kind, app.name].concat(found.flatMap(r => [r.cluster].concat(r.images || [])));
+  }
+  rows = rows.filter(app => matches(words, app.text) && (!state.problems || app.differs || app.missing));
+  if (!rows.length) return emptyState(t('noMatch'));
+  rows.sort((a, b) => a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind));
+  const shown = rows.slice(0, state.limit);
+  // A cell opens the app in its cluster; the versions stay in view.
+  const cell = (app, cluster) => {
+    const r = app.in[cluster];
+    if (!r) return h('td', { class: 'release-cell' }, h('span', { class: 'muted' }, '—'));
+    const obj = objParam({ gvr: KIND_API[r.kind], ns: r.namespace, name: r.name });
+    return h('td', { class: 'release-cell' },
+      h('a', { href: routeHash({ cluster, view: 'releases', ns: '', q: state.q, problems: state.problems, obj }), title: (r.images || []).join('\n') },
+        (r.images || []).map(i => h('div', { class: 'mono' }, shortImage(i)))),
+      h('div', { class: r.ready < r.desired ? 'status-warn' : 'muted' }, r.ready + '/' + r.desired + ' ' + t('ready')));
+  };
+  return [
+    h('table', null,
+      h('thead', null, h('tr', null, h('th', null, t('col.app')), h('th', null, t('col.namespace')), clusters.map(c => h('th', null, c)))),
+      h('tbody', null, shown.map(app => h('tr', { class: app.differs ? 'differs' : null },
+        h('td', null, h('strong', null, app.name), h('span', { class: 'muted' }, ' · ' + app.kind),
+          app.differs ? h('span', { class: 'badge warn', title: t('onlyDifferences') }, '≠') : null),
+        h('td', null, app.namespace),
+        clusters.map(c => cell(app, c)))))),
+    rows.length > shown.length ? h('div', { class: 'more-note' }, t('showing', shown.length, rows.length), ' ',
+      button(t('showMore'), () => { state.limit += 1000; renderContent(); })) : null,
+    h('div', { class: 'more-note' }, t('versionsHint')),
+  ];
+}
+
+// ---------------------------------------------------------------- URL checks
+
+// hourBars draws a check's last 24 hours, a bar an hour.
+function hourBars(hours) {
+  return h('div', { class: 'hour-bars' }, hours.map(x => {
+    const from = new Date(when(x.start)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const level = !x.checks ? 'none' : !x.failed ? 'ok' : x.failed * 10 <= x.checks ? 'warn' : 'bad';
+    return h('span', { class: 'hour ' + level, title: x.checks ? t('hourFailed', from, x.failed, x.checks) : t('hourNone', from) });
+  }));
+}
+
+function renderUptime({ checks, where, loadError }) {
+  const head = panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' },
+      h('div', { class: 'detail' }, t('checksHint')),
+      canEverywhere('admin') ? h('div', { class: where ? 'detail' : 'detail status-warn' }, where ? t('mailWhere', where) : t('mailNotKept')) : null,
+      loadError ? h('div', { class: 'detail status-bad' }, t('mailLoadError', loadError)) : null),
+    h('div', { class: 'actions' }, actionButton(t('addCheck'), () => checkDialog(), { role: 'admin', cap: null, where: null }))));
+  if (!checks.length) return [head, emptyState(t('noChecks'))];
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = checks.filter(c => matches(words, [c.name, c.url, c.last && c.last.error]));
+  if (!rows.length) return [head, emptyState(t('noMatch'))];
+  const admin = canEverywhere('admin');
+  const status = c => {
+    if (!c.last) return pill(t('check.waiting'), 'warn');
+    return [pill(t(c.last.ok ? 'check.up' : 'check.down'), c.last.ok ? 'ok' : 'bad'),
+      c.since ? h('div', { class: 'muted small-text' }, t('upFor', ago(c.since))) : null];
+  };
+  const uptime = c => {
+    if (c.uptime == null) return '—';
+    const v = Math.floor(c.uptime * 10) / 10;
+    return h('span', { class: v >= 99.5 ? null : v >= 95 ? 'status-warn' : 'status-bad' }, v + '%');
+  };
+  return [
+    head,
+    h('table', null,
+      h('thead', null, h('tr', null, ['status', 'check', 'last24h', 'uptime', 'response', 'certificate'].map(k => h('th', null, t('col.' + k))),
+        admin ? h('th') : null)),
+      h('tbody', null, rows.map(c => h('tr', { class: c.last && !c.last.ok ? 'problem' : null },
+        h('td', null, status(c)),
+        h('td', { class: 'check-cell' },
+          h('strong', null, c.name),
+          h('div', null, h('a', { class: 'check-url mono', href: c.url, target: '_blank', rel: 'noopener noreferrer' }, c.url)),
+          c.last && !c.last.ok ? h('div', { class: 'status-bad small-text' }, c.last.error) : null),
+        h('td', null, hourBars(c.hours)),
+        h('td', null, uptime(c)),
+        h('td', { title: c.avgMs ? 'Ø ' + c.avgMs + ' ms' : null }, c.last ? c.last.ms + ' ms' : '—'),
+        h('td', { title: c.last && c.last.cert ? c.last.cert.subject + (c.last.cert.issuer ? ' · ' + c.last.cert.issuer : '') : null },
+          c.last && c.last.cert ? expiresCell(c.last.cert.notAfter) : '—'),
+        admin ? h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
+          button(t('edit'), () => checkDialog(c)),
+          button(t('removeCheck'), () => removeCheck(c), 'danger'))) : null)))),
+  ];
+}
+
+async function removeCheck(c) {
+  const ok = await ask({ title: t('removeCheckTitle'), message: t('removeCheckConfirm', c.name), confirm: t('removeCheck'), danger: true });
+  if (!ok) return;
+  try {
+    await api('checks/' + enc(c.id), { method: 'DELETE' });
+    toast(t('checkRemoved'));
+    refresh();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+  }
+}
+
+// checkDialog adds a check, or changes c; it can try the address first.
+function checkDialog(c) {
+  const field = (label, input, help) => h('label', { class: 'field' }, h('span', null, label), input,
+    help ? h('span', { class: 'muted small-text' }, help) : null);
+  const name = h('input', { type: 'text', value: c ? c.name : '', maxlength: '100', autocomplete: 'off', spellcheck: 'false' });
+  const url = h('input', { type: 'text', inputmode: 'url', value: c ? c.url : '', placeholder: 'portal.example.org/healthz', autocomplete: 'off', spellcheck: 'false' });
+  const every = c ? c.interval : 60;
+  // A check set through the API may ask at another interval; it stays.
+  const intervals = [...new Set([30, 60, 120, 300, 600, 1800, 3600, every])].sort((a, b) => a - b);
+  const interval = h('select', null, intervals.map(s => h('option', { value: String(s), selected: s === every }, span(s * 1000))));
+  const timeout = h('input', { type: 'number', min: '1', max: '60', value: String(c ? c.timeout : 10) });
+  const status = h('input', { type: 'number', min: '100', max: '599', value: c && c.status ? String(c.status) : '', placeholder: '200' });
+  const contains = h('input', { type: 'text', value: (c && c.contains) || '', maxlength: '200', spellcheck: 'false' });
+  const insecure = h('input', { type: 'checkbox', checked: !!(c && c.insecure) });
+  const note = h('div', { class: 'form-status', role: 'status' });
+  const say = (text, kind) => {
+    note.className = kind ? 'form-status ' + kind : 'form-status';
+    note.textContent = text;
+  };
+  const body = () => ({
+    name: name.value, url: url.value, interval: Number(interval.value), timeout: Number(timeout.value) || 0,
+    status: Number(status.value) || 0, contains: contains.value, insecure: insecure.checked,
+  });
+  const buttons = [];
+  const busy = on => buttons.forEach(b => { b.disabled = on; });
+  const tryIt = async () => {
+    busy(true);
+    say(t('trying'));
+    try {
+      const r = await api('checks/try', { method: 'POST', body: body() });
+      const cert = r.cert ? ' · ' + t('certUntil', new Date(when(r.cert.notAfter)).toLocaleDateString()) : '';
+      say((r.ok ? t('tryOK', r.status, r.ms) : '✗ ' + r.error) + cert, r.ok ? 'ok' : 'bad');
+    } catch (e) {
+      if (e.status !== 401) say(e.message, 'bad');
+    }
+    busy(false);
+  };
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      busy(true);
+      try {
+        await api(c ? 'checks/' + enc(c.id) : 'checks', { method: c ? 'PUT' : 'POST', body: body() });
+        close();
+        toast(t('checkSaved'));
+        refresh();
+      } catch (err) {
+        if (err.status !== 401) say(err.message, 'bad');
+        busy(false);
+      }
+    },
+  },
+  h('h2', null, c ? t('editCheck') : t('newCheck')),
+  field(t('checkURL'), url, t('checkURLHelp')),
+  field(t('checkName'), name),
+  h('div', { class: 'field-row' }, field(t('checkInterval'), interval), field(t('checkTimeout'), timeout)),
+  h('div', { class: 'field-row' }, field(t('checkStatus'), status, t('checkStatusHelp')), field(t('checkContains'), contains)),
+  h('label', { class: 'check-line' }, insecure, t('checkInsecure')),
+  note,
+  h('div', { class: 'dialog-actions' },
+    buttons[0] = button(t('tryCheck'), tryIt),
+    h('span', { class: 'grow' }),
+    buttons[1] = button(t('cancel'), () => close()),
+    buttons[2] = h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  url.focus();
 }
 
 // ---------------------------------------------------------------- actions
@@ -2141,10 +2583,11 @@ function tabsFor(kind) {
   if (['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'Node'].includes(kind)) tabs.push('pods');
   if (kind === 'CronJob') tabs.push('jobs');
   tabs.push('yaml', 'events');
+  if (['Deployment', 'StatefulSet', 'DaemonSet', 'CronJob', 'Node'].includes(kind)) tabs.push('changes');
   if (kind === 'Deployment') tabs.push('history');
   const c = currentCluster();
   if ((kind === 'Pod' || kind === 'Node') && c && c.metricsAvailable) tabs.push('metrics');
-  if (kind === 'Pod' && roleAtLeast('admin')) tabs.push('console');
+  if (kind === 'Pod' && canIn('admin', detail.ref ? detail.ref.ns : '')) tabs.push('console');
   return tabs;
 }
 function currentTab() {
@@ -2302,7 +2745,7 @@ function renderDetail() {
 
 const DETAIL_TABS = {
   summary: renderSummary, yaml: renderYAMLTab, events: renderEventsTab, pods: renderPodsTab, jobs: renderJobsTab,
-  history: renderHistoryTab, metrics: renderMetricsTab, logs: renderLogsTab, console: renderConsoleTab,
+  changes: renderChangesTab, history: renderHistoryTab, metrics: renderMetricsTab, logs: renderLogsTab, console: renderConsoleTab,
 };
 
 function objectStatus(kind, o) {
@@ -2350,17 +2793,17 @@ function renderDetailHead() {
   const actions = [];
   if (obj && !(obj.metadata && obj.metadata.deletionTimestamp)) {
     const w = { kind, namespace: ref.ns, name: ref.name, desired: obj.spec && obj.spec.replicas != null ? obj.spec.replicas : 1 };
-    if (kind === 'Pod') actions.push(actionButton(t('deletePod'), () => deletePod({ namespace: ref.ns, name: ref.name }), { cls: 'danger' }));
-    if (kind === 'Deployment' || kind === 'StatefulSet') actions.push(actionButton(t('scale'), () => scaleWorkload(w)));
-    if (WORKLOAD_KINDS.has(kind)) actions.push(actionButton(t('restart'), () => restartWorkload(w), { cls: 'danger' }));
+    if (kind === 'Pod') actions.push(actionButton(t('deletePod'), () => deletePod({ namespace: ref.ns, name: ref.name }), { cls: 'danger', where: ref.ns }));
+    if (kind === 'Deployment' || kind === 'StatefulSet') actions.push(actionButton(t('scale'), () => scaleWorkload(w), { where: ref.ns }));
+    if (WORKLOAD_KINDS.has(kind)) actions.push(actionButton(t('restart'), () => restartWorkload(w), { cls: 'danger', where: ref.ns }));
     if (kind === 'CronJob') {
       const c = { namespace: ref.ns, name: ref.name, suspended: !!(obj.spec && obj.spec.suspend) };
-      actions.push(actionButton(t('runNow'), () => triggerCronJob(c)),
-        actionButton(c.suspended ? t('resume') : t('suspend'), () => suspendCronJob(c, !c.suspended)));
+      actions.push(actionButton(t('runNow'), () => triggerCronJob(c), { where: ref.ns }),
+        actionButton(c.suspended ? t('resume') : t('suspend'), () => suspendCronJob(c, !c.suspended), { where: ref.ns }));
     }
     if (kind === 'Node') {
       const cordoned = !!(obj.spec && obj.spec.unschedulable);
-      actions.push(actionButton(cordoned ? t('uncordon') : t('cordon'), () => cordonNode({ name: ref.name }, !cordoned)));
+      actions.push(actionButton(cordoned ? t('uncordon') : t('cordon'), () => cordonNode({ name: ref.name }, !cordoned), { where: '' }));
     }
   }
   fill(els.detailHead,
@@ -2570,6 +3013,7 @@ function renderSummary() {
     case 'PersistentVolumeClaim':
       specific = [
         [t('f.phase'), st.phase], [t('f.storage'), st.capacity && st.capacity.storage],
+        [t('col.used'), claimUse(detail.ref.ns, detail.ref.name)],
         [t('f.requestedStorage'), spec.resources && spec.resources.requests && spec.resources.requests.storage],
         [t('col.storageClass'), spec.storageClassName], [t('f.accessModes'), (spec.accessModes || []).join(', ')],
         [t('f.volume'), mono(spec.volumeName || '—')], [t('f.volumeMode'), spec.volumeMode],
@@ -2602,7 +3046,100 @@ function renderSummary() {
     facts(specific.concat(common)),
     section(t('f.labels'), chips(md.labels)),
     extra,
+    driftSection(o),
     section(t('f.annotations'), kvList(md.annotations)));
+}
+
+// ---------------------------------------------------------------- detail: drift
+
+const LAST_APPLIED = 'kubectl.kubernetes.io/last-applied-configuration';
+
+// blank is a value the API server leaves out, so a missing one equals it.
+function blank(v) {
+  if (v == null || v === false || v === 0 || v === '') return true;
+  if (Array.isArray(v)) return !v.length;
+  return typeof v === 'object' && !Object.keys(v).length;
+}
+
+// itemKey is the field that names the items of two lists, if one does in
+// both: containers and env by name, mounts by path, ports by number.
+function itemKey(a, b) {
+  return ['name', 'mountPath', 'containerPort', 'port', 'key'].find(k => [a, b].every(list => {
+    const seen = new Set();
+    return list.every(x => {
+      if (!x || typeof x !== 'object' || x[k] == null || seen.has(x[k])) return false;
+      seen.add(x[k]);
+      return true;
+    });
+  }));
+}
+
+// sameScalar compares two values, quantities by their amount: kubectl may
+// say 0.5 where the API server keeps 500m.
+function sameScalar(path, a, b) {
+  if (String(a) === String(b)) return true;
+  if (!/\.(requests|limits|capacity|hard)\.|\.storage$/.test(path)) return false;
+  const x = quantity(a, true);
+  return x != null && x === quantity(b, true);
+}
+
+// driftOf lists [path, applied, now] for the fields the last kubectl apply
+// set and that differ now. Only those fields are compared: the rest belongs
+// to the API server and the controllers. An env var added since is listed
+// too, as the next apply removes it.
+function driftOf(applied, live, path = '', out = []) {
+  if (applied === null || (blank(applied) && blank(live))) return out;
+  if (Array.isArray(applied)) {
+    const key = Array.isArray(live) && itemKey(applied, live);
+    if (key) {
+      const now = new Map(live.map(x => [x[key], x]));
+      for (const a of applied) driftOf(a, now.get(a[key]), path + '[' + a[key] + ']', out);
+      if (/\.env$/.test(path)) {
+        for (const l of live) if (!applied.some(a => a[key] === l[key])) out.push([path + '[' + l[key] + ']', undefined, l]);
+      }
+    } else if (Array.isArray(live) && live.length === applied.length) {
+      applied.forEach((a, i) => driftOf(a, live[i], path + '[' + i + ']', out));
+    } else {
+      out.push([path, applied, live]);
+    }
+  } else if (typeof applied === 'object') {
+    if (live && typeof live === 'object' && !Array.isArray(live)) {
+      for (const [k, v] of Object.entries(applied)) driftOf(v, live[k], path ? path + '.' + k : k, out);
+    } else {
+      out.push([path, applied, live]);
+    }
+  } else if (!sameScalar(path, applied, live)) {
+    out.push([path, applied, live]);
+  }
+  return out;
+}
+
+// driftSection shows what changed in an object since it was last applied
+// with kubectl (kubectl edit, scale, another tool): the next apply sets it
+// back.
+function driftSection(o) {
+  const text = o.metadata && o.metadata.annotations && o.metadata.annotations[LAST_APPLIED];
+  if (!text) return null;
+  let applied;
+  try {
+    applied = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const found = driftOf(applied, o);
+  if (!found.length) return section(t('drift'), h('div', { class: 'ok-note flush' }, '✓ ' + t('driftNone')));
+  const show = v => {
+    if (v === undefined) return h('span', { class: 'muted' }, '—');
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return h('span', { class: 'mono', title: s.length > 200 ? s : null }, s.length > 200 ? s.slice(0, 200) + '…' : s);
+  };
+  return section(t('drift') + ' (' + found.length + ')', [
+    h('p', { class: 'muted' }, t('driftHint')),
+    h('table', { class: 'compact' },
+      h('thead', null, h('tr', null, ['field', 'applied', 'now'].map(k => h('th', null, t('col.' + k))))),
+      h('tbody', null, found.slice(0, 50).map(([path, a, l]) => h('tr', { class: 'problem' },
+        h('td', null, mono(path)), h('td', null, show(a)), h('td', null, show(l)))))),
+  ]);
 }
 
 // ---------------------------------------------------------------- detail: YAML
@@ -2653,7 +3190,7 @@ function renderYAMLTab() {
         const text = editableYAML(o);
         detail.editing = { text, original: text, previewed: false, preview: null, busy: false, error: null };
         renderDetail();
-      }, { role: 'admin', cap: 'edit' })),
+      }, { role: 'admin', cap: 'edit', where: detail.ref.ns })),
     yamlView(text));
 }
 
@@ -2785,6 +3322,15 @@ function renderJobsTab() {
   });
 }
 
+function renderChangesTab() {
+  const { ref, kind } = detail;
+  const q = new URLSearchParams({ cluster: state.cluster, kind, name: ref.name });
+  if (ref.ns) q.set('namespace', ref.ns);
+  fromCache('changes', () => api('changes?' + q), items => {
+    fill(els.detailBody, items.length ? changesTable(items, { object: false }) : emptyState(t('noChanges2')));
+  }, 30000);
+}
+
 // The history asks the agent each time; it is reloaded on demand only.
 function renderHistoryTab() {
   const { ref } = detail;
@@ -2804,7 +3350,7 @@ function renderHistoryTab() {
             confirm: t('rollbackTo'), danger: true,
           });
           if (ok) runAction(base + '/rollback', { body: { revision: r.revision } });
-        })))))));
+        }, { where: ref.ns })))))));
   }, Infinity);
 }
 
@@ -2812,6 +3358,14 @@ function renderHistoryTab() {
 
 // snapshotNode is the node as the agent reports it, with requests, limits
 // and usage summed over its pods.
+// claimUse shows how full a claim is, as the agent last reported.
+function claimUse(ns, name) {
+  if (!detail.cache.claims) fetchInto('claims', () => api(clusterPath() + '/volumeclaims?namespace=' + enc(ns)));
+  const list = detail.cache.claims.value;
+  const v = list && list.find(x => x.name === name);
+  return v ? volumeUse(v) : null;
+}
+
 function snapshotNode(name) {
   if (!detail.cache.nodes) fetchInto('nodes', () => api(clusterPath() + '/nodes'));
   const list = detail.cache.nodes.value;
@@ -3200,7 +3754,7 @@ function paletteItems() {
     add('★ ' + kind, (ns ? ns + '/' : '') + name, () => (gvr ? openDetail({ gvr, ns, name }) : go({ view: KIND_VIEW[kind] || 'resources', ns, q: name })));
   }
   for (const id of VIEWS) {
-    if (id === 'audit' && !roleAtLeast('operator')) continue;
+    if ((id === 'audit' && !roleAtLeast('operator')) || (id === 'nodes' && !roleIn(''))) continue;
     add(t('view'), t(id), () => go({ view: id }));
   }
   for (const n of state.namespaces || []) {
@@ -3213,15 +3767,16 @@ function paletteItems() {
   const items = state.data && state.data.items;
   if (TABLES[state.view] && items) {
     for (const it of items.slice(0, 3000)) {
-      if (!it.name) continue;
-      const label = (it.namespace ? it.namespace + '/' : '') + it.name;
+      const name = it.name || it.secret;
+      if (!name) continue;
+      const label = (it.namespace ? it.namespace + '/' : '') + name;
       if (state.view === 'pods') {
         add(t('logs'), label, () => openDetail({ gvr: KIND_API.Pod, ns: it.namespace, name: it.name }, 'logs'));
         add(t('details'), label, () => openDetail({ gvr: KIND_API.Pod, ns: it.namespace, name: it.name }));
       } else {
-        const kind = it.kind || { services: 'Service', ingresses: 'Ingress', configmaps: 'ConfigMap', secrets: 'Secret', volumeclaims: 'PersistentVolumeClaim', jobs: 'Job', cronjobs: 'CronJob', nodes: 'Node' }[state.view];
+        const kind = it.kind || { services: 'Service', ingresses: 'Ingress', configmaps: 'ConfigMap', secrets: 'Secret', certificates: 'Secret', volumeclaims: 'PersistentVolumeClaim', jobs: 'Job', cronjobs: 'CronJob', nodes: 'Node' }[state.view];
         const gvr = KIND_API[kind];
-        add(t(state.view), label, () => (gvr ? openDetail({ gvr, ns: it.namespace || '', name: it.name }) : go({ q: it.name })));
+        add(t(state.view), label, () => (gvr ? openDetail({ gvr, ns: it.namespace || '', name }) : go({ q: name })));
       }
     }
   }
@@ -3279,7 +3834,11 @@ function openPalette() {
 
 // ---------------------------------------------------------------- sign-in, theme, language
 
-function showLogin(message) {
+// loginMethods is what the server offers besides tokens: a user name and
+// password (its directory), asked for once.
+let loginMethods = null;
+
+async function showLogin(message) {
   // Several requests can fail at once; keep the form (and its message) that
   // is already up.
   if (!els.shell && !message && root.querySelector('.login')) return;
@@ -3290,41 +3849,78 @@ function showLogin(message) {
   els.nsPicker = els.nsMenuList = els.pinned = els.nav = null;
   state.nsMenuOpen = false;
   state.me = null;
-  const input = h('input', { type: 'password', required: true, autocomplete: 'current-password', 'aria-label': t('token') });
+  if (!loginMethods) {
+    try {
+      const res = await fetch('api/v1/login', { headers: { Accept: 'application/json' }, cache: 'no-cache' });
+      loginMethods = res.ok ? await res.json() : { password: false };
+    } catch {
+      loginMethods = { password: false };
+    }
+  }
+  renderLogin(message, loginMethods.password ? 'password' : 'token');
+}
+
+// renderLogin asks for a user name and password, or for a token.
+function renderLogin(message, mode) {
+  const withPassword = mode === 'password';
+  const user = h('input', { type: 'text', required: true, autocomplete: 'username', spellcheck: 'false', 'aria-label': t('userName') });
+  const secret = h('input', { type: 'password', required: true, autocomplete: 'current-password', 'aria-label': withPassword ? t('password') : t('token') });
   const remember = h('input', { type: 'checkbox' });
   const error = h('div', { class: 'error', role: 'alert' }, message || '');
   const submit = h('button', { type: 'submit', class: 'btn primary' }, t('signIn'));
   const form = h('form', {
     onsubmit: async e => {
       e.preventDefault();
-      setToken(input.value.trim(), remember.checked);
       submit.disabled = true;
       error.textContent = '';
       try {
-        await api('clusters');
+        if (withPassword) {
+          const res = await fetch('api/v1/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ username: user.value, password: secret.value }),
+          });
+          const answer = await res.json().catch(() => ({}));
+          if (!res.ok) throw new ApiError(res.status, answer.error || res.status + ' ' + res.statusText);
+          setToken(answer.token, remember.checked);
+        } else {
+          setToken(secret.value.trim(), remember.checked);
+          await api('clusters');
+        }
         startApp();
       } catch (err) {
         // A rejected token already brought back a fresh sign-in form.
-        if (err.status !== 401) {
+        if (withPassword || err.status !== 401) {
           error.textContent = err.message;
           submit.disabled = false;
+          secret.value = '';
+          secret.focus();
         }
       }
     },
   },
   h('h1', null, h('img', { src: '_ui/eagle.svg', alt: '' }), 'Kartal Gözü'),
-  // A password manager keeps the token under this name.
-  h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'Kartal Gözü', hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
-  h('label', { class: 'field' }, t('token'), input),
-  h('div', { class: 'muted' }, t('tokenHelp')),
+  withPassword
+    ? h('label', { class: 'field' }, t('userName'), user)
+    // A password manager keeps the token under this name.
+    : h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'Kartal Gözü', hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
+  h('label', { class: 'field' }, withPassword ? t('password') : t('token'), secret),
+  h('div', { class: 'muted' }, withPassword ? t('passwordHelp') : t('tokenHelp')),
   h('label', null, remember, t('remember')),
-  error, submit);
+  error, submit,
+  loginMethods && loginMethods.password ? h('button', {
+    type: 'button', class: 'link-button small-text', onclick: () => renderLogin('', withPassword ? 'token' : 'password'),
+  }, withPassword ? t('useToken') : t('usePassword')) : null);
   fill(root, h('div', { class: 'login' }, form));
-  input.focus();
+  (withPassword ? user : secret).focus();
 }
 
 async function logout() {
   if (!(await leaveEditor())) return;
+  // A password sign-in has a session on the server; end it there too.
+  const token = getToken();
+  if (token.startsWith('kgs_')) {
+    fetch('api/v1/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+  }
   setToken('', false);
   showLogin('');
 }

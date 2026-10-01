@@ -23,6 +23,9 @@ type Snapshot struct {
 	Jobs             []Job         `json:"jobs"`
 	CronJobs         []CronJob     `json:"cronJobs"`
 	Events           []Event       `json:"events"`
+	// Certificates are those of TLS Secrets, when the agent may read them
+	// (KARTAL_TLS_SECRETS).
+	Certificates []Certificate `json:"certificates,omitempty"`
 	// Errors lists parts that could not be collected (e.g. missing RBAC);
 	// the rest of the snapshot is still valid.
 	Errors []string `json:"errors,omitempty"`
@@ -86,6 +89,9 @@ type Workload struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// Usage is the sum over the workload's pods; it needs metrics-server.
 	Usage *Resources `json:"usage,omitempty"`
+	// Generation counts spec changes; one without a change of images or
+	// replicas is a change of the pod template, such as a restart.
+	Generation int64 `json:"generation,omitempty"`
 }
 
 // Degraded reports whether fewer replicas are ready than desired.
@@ -169,6 +175,40 @@ type VolumeClaim struct {
 	VolumeName   string    `json:"volumeName,omitempty"`
 	AccessModes  []string  `json:"accessModes"`
 	CreatedAt    time.Time `json:"createdAt"`
+	// UsedBytes and CapacityBytes describe the volume's file system as the
+	// kubelet sees it, when the agent may ask (KARTAL_VOLUME_STATS). Used
+	// is what is no longer available, reserved blocks included.
+	UsedBytes     int64 `json:"usedBytes,omitempty"`
+	CapacityBytes int64 `json:"capacityBytes,omitempty"`
+	InodesUsed    int64 `json:"inodesUsed,omitempty"`
+	Inodes        int64 `json:"inodes,omitempty"`
+}
+
+// Fill is how full the volume is, in percent, by space or by inodes,
+// whichever is fuller; -1 when the agent does not know.
+func (v VolumeClaim) Fill() float64 {
+	p := -1.0
+	if v.CapacityBytes > 0 {
+		p = 100 * float64(v.UsedBytes) / float64(v.CapacityBytes)
+	}
+	if v.Inodes > 0 {
+		p = max(p, 100*float64(v.InodesUsed)/float64(v.Inodes))
+	}
+	return p
+}
+
+// Certificate is what the tls.crt of a kubernetes.io/tls Secret says about
+// itself: names and dates, which are public. The key is never read.
+type Certificate struct {
+	Namespace string    `json:"namespace"`
+	Secret    string    `json:"secret"`
+	Subject   string    `json:"subject,omitempty"`
+	DNSNames  []string  `json:"dnsNames,omitempty"`
+	Issuer    string    `json:"issuer,omitempty"`
+	NotBefore time.Time `json:"notBefore"`
+	NotAfter  time.Time `json:"notAfter"`
+	// Error says why tls.crt could not be read; the dates are then zero.
+	Error string `json:"error,omitempty"`
 }
 
 type Job struct {

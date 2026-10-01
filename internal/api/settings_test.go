@@ -28,7 +28,7 @@ func newSettingsServer(t *testing.T) (*Server, *alert.Manager) {
 		AdminToken: adminTok,
 		StaleAfter: time.Minute, MaxPollWait: time.Second, CommandTimeout: time.Second,
 		Alerts: alerts,
-		Mail:   settings.NewMail(context.Background(), settings.Memory{}, email, nil, nil),
+		Mail:   settings.NewMail(settings.NewKeeper(context.Background(), settings.Memory{}, nil), email, nil),
 	}, store.New("demo"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return s, alerts
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
@@ -146,7 +147,7 @@ func (failingStore) Save(context.Context, Settings) error { return errors.New("d
 func TestMailFromTheEnvironmentIsFixed(t *testing.T) {
 	ch := alert.NewSwitchable("email")
 	env := valid()
-	m := NewMail(context.Background(), Memory{}, ch, &env, nil)
+	m := NewMail(NewKeeper(context.Background(), Memory{}, nil), ch, &env)
 	if !ch.Enabled() || !m.View().Fixed {
 		t.Fatalf("channel on=%v view=%+v", ch.Enabled(), m.View())
 	}
@@ -157,7 +158,7 @@ func TestMailFromTheEnvironmentIsFixed(t *testing.T) {
 
 func TestMailUpdate(t *testing.T) {
 	ch := alert.NewSwitchable("email")
-	m := NewMail(context.Background(), Memory{}, ch, nil, nil)
+	m := NewMail(NewKeeper(context.Background(), Memory{}, nil), ch, nil)
 	if ch.Enabled() {
 		t.Fatal("nothing set, yet the channel is on")
 	}
@@ -174,7 +175,7 @@ func TestMailUpdate(t *testing.T) {
 	}
 	// Without a password in the change, the saved one stays; "" removes it.
 	c.Password = nil
-	if v, _ := m.Update(context.Background(), c); !v.PasswordSet || m.all.Email.Password != secret {
+	if v, _ := m.Update(context.Background(), c); !v.PasswordSet || m.keeper.Get().Email.Password != secret {
 		t.Error("the saved password was lost")
 	}
 	empty := ""
@@ -192,9 +193,127 @@ func TestMailUpdate(t *testing.T) {
 	if _, err := m.Update(context.Background(), Change{Enabled: true, Addr: "x"}); !errors.As(err, &invalid) {
 		t.Errorf("bad change: %v", err)
 	}
-	m.store = failingStore{}
+	m.keeper.store = failingStore{}
 	c.Enabled = true
 	if _, err := m.Update(context.Background(), c); err == nil || ch.Enabled() {
 		t.Errorf("an unsaved change was applied: %v (on=%v)", err, ch.Enabled())
+	}
+}
+
+func TestKeeperKeepsEveryPart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	k := NewKeeper(context.Background(), File{Path: path}, nil)
+	m := NewMail(k, alert.NewSwitchable("email"), nil)
+	if _, err := m.Update(context.Background(), Change{Enabled: true, Addr: "smtp.example.org:25", From: "k@example.org", To: []string{"o@example.org"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Update(context.Background(), func(s *Settings) error {
+		s.Checks = append(s.Checks, Check{ID: "1", Name: "web", URL: "https://example.org", Interval: 60, Timeout: 10})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A failed change leaves everything as it was.
+	if _, err := k.Update(context.Background(), func(s *Settings) error {
+		s.Checks[0].Name = "changed"
+		return errors.New("no")
+	}); err == nil || k.Get().Checks[0].Name != "web" {
+		t.Errorf("a failed change stuck: %v %+v", err, k.Get().Checks)
+	}
+	again := NewKeeper(context.Background(), File{Path: path}, nil).Get()
+	if again.Email.Addr != "smtp.example.org:25" || len(again.Checks) != 1 {
+		t.Errorf("after a restart: %+v", again)
+	}
+}
+
+func TestCheckNormalize(t *testing.T) {
+	c := Check{URL: " https://example.org/health "}
+	if err := c.Normalize(); err != nil || c.Name != "https://example.org/health" || c.Interval != 60 || c.Timeout != 10 {
+		t.Fatalf("defaults: %+v %v", c, err)
+	}
+	for _, bad := range []Check{
+		{URL: "ftp://example.org"},
+		{URL: "  "},
+		{URL: "https://"},
+		{URL: "https://user:pass@example.org"},
+		{URL: "https://example.org", Interval: 10},
+		{URL: "https://example.org", Interval: 30, Timeout: 30},
+		{URL: "https://example.org", Status: 42},
+		{URL: "https://example.org", Name: "two\nlines"},
+		{URL: "https://example.org", Contains: strings.Repeat("x", 201)},
+	} {
+		if err := bad.Normalize(); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+}
+
+func TestCheckWithoutScheme(t *testing.T) {
+	c := Check{URL: "portal.example.org:8443/healthz"}
+	if err := c.Normalize(); err != nil || c.URL != "https://portal.example.org:8443/healthz" {
+		t.Errorf("%+v %v", c, err)
+	}
+}
+
+// flakyStore cannot be read until it is fixed, and keeps what is saved.
+type flakyStore struct {
+	mu     sync.Mutex
+	broken bool
+	saved  Settings
+}
+
+func (f *flakyStore) Load(context.Context) (Settings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.broken {
+		return Settings{}, errors.New("the API server is away")
+	}
+	return f.saved, nil
+}
+
+func (f *flakyStore) Save(_ context.Context, s Settings) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saved = s
+	return nil
+}
+
+func (f *flakyStore) Where() string { return "flaky" }
+
+func (f *flakyStore) fix() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.broken = false
+}
+
+func TestSettingsReadLate(t *testing.T) {
+	store := &flakyStore{broken: true, saved: Settings{Email: valid()}}
+	k := NewKeeper(context.Background(), store, nil)
+	ch := alert.NewSwitchable("email")
+	m := NewMail(k, ch, nil)
+	if ch.Enabled() || k.LoadError() == "" {
+		t.Fatal("nothing could be read, yet e-mail is on")
+	}
+	// Saving now would replace the e-mail settings that could not be read.
+	if _, err := k.Update(context.Background(), func(s *Settings) error {
+		s.Checks = append(s.Checks, Check{ID: "1"})
+		return nil
+	}); err == nil || store.saved.Email.Addr == "" {
+		t.Fatalf("saved over unread settings: %v %+v", err, store.saved)
+	}
+	loaded := make(chan bool, 1)
+	k.OnLoad(m.Reload)
+	k.OnLoad(func() { loaded <- true })
+	store.fix()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go k.Retry(ctx, 10*time.Millisecond)
+	select {
+	case <-loaded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the settings were not read again")
+	}
+	if !ch.Enabled() || k.LoadError() != "" || k.Get().Email.Addr != valid().Addr {
+		t.Errorf("after reading late: on=%v error=%q", ch.Enabled(), k.LoadError())
 	}
 }

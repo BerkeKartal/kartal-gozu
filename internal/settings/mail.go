@@ -3,24 +3,22 @@ package settings
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 )
 
-// Mail is the e-mail channel's settings. They are kept in a Store and put
+// Mail is the e-mail channel's settings. They are kept by a Keeper and put
 // behind the alert manager's e-mail channel whenever they change. Settings
 // from the server's environment (KARTAL_SMTP_*) win and are read-only here.
 type Mail struct {
-	store   Store
+	keeper  *Keeper
 	channel *alert.Switchable
-	fixed   bool
+	env     *Email // set: the environment's, fixed
 
-	mu        sync.Mutex
-	all       Settings
-	loadError string
+	// mu keeps changes in order, so the channel gets the settings saved last.
+	mu sync.Mutex
 }
 
 // ErrFixed refuses changes to settings that come from the environment.
@@ -33,26 +31,19 @@ type InvalidError struct{ Err error }
 func (e *InvalidError) Error() string { return e.Err.Error() }
 func (e *InvalidError) Unwrap() error { return e.Err }
 
-// NewMail loads the saved settings and turns the channel on if they say so.
-// env, when not nil, comes from the environment and wins.
-func NewMail(ctx context.Context, store Store, channel *alert.Switchable, env *Email, log *slog.Logger) *Mail {
-	m := &Mail{store: store, channel: channel}
-	if env != nil {
-		m.fixed = true
-		m.all.Email = *env
-		m.apply()
-		return m
-	}
-	all, err := store.Load(ctx)
-	if err != nil {
-		m.loadError = err.Error()
-		if log != nil {
-			log.Error("the saved settings could not be read", "store", store.Where(), "err", err)
-		}
-	}
-	m.all = all
-	m.apply()
+// NewMail turns the channel on if the settings say so. env, when not nil,
+// comes from the environment and wins.
+func NewMail(keeper *Keeper, channel *alert.Switchable, env *Email) *Mail {
+	m := &Mail{keeper: keeper, channel: channel, env: env}
+	m.apply(m.current())
 	return m
+}
+
+func (m *Mail) current() Email {
+	if m.env != nil {
+		return *m.env
+	}
+	return m.keeper.Get().Email
 }
 
 func notifier(e Email) alert.Notifier {
@@ -60,8 +51,8 @@ func notifier(e Email) alert.Notifier {
 }
 
 // apply puts the settings behind the channel, or turns it off.
-func (m *Mail) apply() {
-	if e := m.all.Email; e.Enabled && e.Check() == nil {
+func (m *Mail) apply(e Email) {
+	if e.Enabled && e.Check() == nil {
 		m.channel.Set(notifier(e))
 	} else {
 		m.channel.Set(nil)
@@ -84,21 +75,15 @@ type View struct {
 }
 
 func (m *Mail) View() View {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.view()
-}
-
-func (m *Mail) view() View {
-	e := m.all.Email
+	e := m.current()
 	to := e.To
 	if to == nil {
 		to = []string{}
 	}
 	v := View{Enabled: e.Enabled, Addr: e.Addr, From: e.From, To: to, Username: e.Username, PasswordSet: e.Password != "",
-		Fixed: m.fixed, LoadError: m.loadError}
-	if !m.fixed {
-		v.Where = m.store.Where()
+		Fixed: m.env != nil}
+	if m.env == nil {
+		v.Where, v.LoadError = m.keeper.Where(), m.keeper.LoadError()
 	}
 	return v
 }
@@ -114,10 +99,10 @@ type Change struct {
 	Password *string  `json:"password"`
 }
 
-// merged is what a change would make of the current settings.
-func (m *Mail) merged(c Change) Email {
+// merged is what a change makes of saved settings.
+func merged(c Change, saved Email) Email {
 	e := Email{Enabled: c.Enabled, Addr: strings.TrimSpace(c.Addr), From: strings.TrimSpace(c.From),
-		Username: strings.TrimSpace(c.Username), Password: m.all.Email.Password}
+		Username: strings.TrimSpace(c.Username), Password: saved.Password}
 	for _, to := range c.To {
 		e.To = append(e.To, Recipients(to)...)
 	}
@@ -130,34 +115,33 @@ func (m *Mail) merged(c Change) Email {
 // Update checks, saves and applies a change; nothing changes if the change
 // cannot be saved.
 func (m *Mail) Update(ctx context.Context, c Change) (View, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fixed {
+	if m.env != nil {
 		return View{}, ErrFixed
 	}
-	e := m.merged(c)
-	if err := e.Check(); err != nil {
-		return View{}, &InvalidError{err}
-	}
-	next := m.all
-	next.Email = e
-	if err := m.store.Save(ctx, next); err != nil {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	all, err := m.keeper.Update(ctx, func(s *Settings) error {
+		e := merged(c, s.Email)
+		if err := e.Check(); err != nil {
+			return &InvalidError{err}
+		}
+		s.Email = e
+		return nil
+	})
+	if err != nil {
 		return View{}, err
 	}
-	m.all, m.loadError = next, ""
-	m.apply()
-	return m.view(), nil
+	m.apply(all.Email)
+	return m.View(), nil
 }
 
 // Test sends a sample notification with the settings a change would give,
 // without saving them, so they can be tried before they are kept.
 func (m *Mail) Test(ctx context.Context, c Change, publicURL string) error {
-	m.mu.Lock()
-	e := m.all.Email
-	if !m.fixed {
-		e = m.merged(c)
+	e := m.current()
+	if m.env == nil {
+		e = merged(c, e)
 	}
-	m.mu.Unlock()
 	e.Enabled = true // a test needs everything, whether or not it is on
 	if err := e.Check(); err != nil {
 		return &InvalidError{err}
@@ -172,3 +156,7 @@ func (v View) Summary() string {
 	}
 	return "e-mail on: " + v.Addr + " → " + strings.Join(v.To, ", ")
 }
+
+// Reload puts the kept settings behind the channel again, for when they
+// could be read only after the server started.
+func (m *Mail) Reload() { m.apply(m.current()) }

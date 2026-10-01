@@ -204,3 +204,73 @@ func TestSwitchableChannel(t *testing.T) {
 		t.Error("an off channel sent something")
 	}
 }
+
+func TestVolumesAndCertificates(t *testing.T) {
+	m := NewManager(0, nil)
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	gib := int64(1 << 30)
+	snap := &protocol.Snapshot{
+		VolumeClaims: []protocol.VolumeClaim{
+			{Namespace: "a", Name: "ok", Phase: "Bound", UsedBytes: 5 * gib, CapacityBytes: 10 * gib},
+			{Namespace: "a", Name: "filling", Phase: "Bound", UsedBytes: 9 * gib, CapacityBytes: 10 * gib},
+			{Namespace: "a", Name: "full", Phase: "Bound", UsedBytes: 98 * gib / 10, CapacityBytes: 10 * gib},
+			{Namespace: "a", Name: "files", Phase: "Bound", UsedBytes: gib, CapacityBytes: 10 * gib, InodesUsed: 96, Inodes: 100},
+			{Namespace: "a", Name: "unknown", Phase: "Bound"},
+		},
+		Certificates: []protocol.Certificate{
+			{Namespace: "a", Secret: "fine", NotAfter: now.Add(60 * 24 * time.Hour)},
+			{Namespace: "a", Secret: "soon", Subject: "example.org", NotAfter: now.Add(10*24*time.Hour + time.Hour)},
+			{Namespace: "a", Secret: "very-soon", NotAfter: now.Add(5 * time.Hour)},
+			{Namespace: "a", Secret: "gone", NotAfter: now.Add(-49 * time.Hour)},
+			{Namespace: "a", Secret: "unreadable", Error: "no tls.crt"},
+		},
+	}
+	m.Observe("prod", snap, now)
+	var got []string
+	for _, a := range m.State().Active {
+		got = append(got, a.Severity+" "+a.Object+": "+a.Detail)
+	}
+	sort.Strings(got)
+	want := []string{
+		"critical files: 96% of inodes used (96 of 100 files)",
+		"critical full: 98% full (9.8 GiB of 10 GiB)",
+		"critical gone: expired 2 days ago (2026-09-28 09:00 UTC)",
+		"critical very-soon: expires in 5 hours (2026-09-30 15:00 UTC)",
+		"warning filling: 90% full (9.0 GiB of 10 GiB)",
+		"warning soon: example.org: expires in 10 days (2026-10-10 11:00 UTC)",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("alerts:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestChecksBelongToNoCluster(t *testing.T) {
+	rec := &recorder{}
+	m := NewManager(0, nil, rec)
+	now := time.Now()
+	m.Observe("prod", broken(), now)
+	m.ObserveChecks([]Alert{{Kind: "URLDown", Severity: critical, Object: "web", Detail: "503 Service Unavailable"}}, now)
+	sent := rec.wait(t, 2)
+	if len(sent) != 2 {
+		t.Fatalf("sent %d notifications", len(sent))
+	}
+	var checks Notification
+	for _, n := range sent {
+		if n.Cluster == "" {
+			checks = n
+		}
+	}
+	if checks.Title() != "Kartal Gözü: 1 new problem(s)" || len(checks.Firing) != 1 {
+		t.Errorf("the checks' notification: %q %+v", checks.Title(), checks)
+	}
+	// The checks' alerts are replaced by the next round only; a cluster's
+	// snapshot leaves them alone.
+	m.Observe("prod", &protocol.Snapshot{}, now)
+	if n := m.ActiveCount("", nil); n != 1 {
+		t.Errorf("the check's alert went with prod's: %d", n)
+	}
+	m.ObserveChecks(nil, now)
+	if n := m.ActiveCount("", nil); n != 0 {
+		t.Errorf("still active: %d", n)
+	}
+}

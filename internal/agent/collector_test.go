@@ -191,3 +191,48 @@ func TestPodResourcesCountSidecars(t *testing.T) {
 		t.Errorf("requests %+v, limits %+v", req, lim)
 	}
 }
+
+func TestVolumeStatsAndCertificates(t *testing.T) {
+	f, kc := NewFakeKube(t)
+	now := time.Now()
+	c := &Collector{Kube: kc, Version: "test", VolumeStats: true, TLSSecrets: true, Now: func() time.Time { return now }}
+	snap := c.Collect(context.Background())
+	if len(snap.Errors) != 0 {
+		t.Fatalf("errors: %v", snap.Errors)
+	}
+	// Used is what is no longer available, reserved blocks included.
+	if v := snap.VolumeClaims[0]; v.UsedBytes != 62<<30/10 || v.CapacityBytes != 10<<30 || v.InodesUsed != 41_000 || v.Inodes != 655_360 {
+		t.Errorf("volume: %+v", v)
+	}
+	if len(snap.Certificates) != 2 {
+		t.Fatalf("certificates: %+v", snap.Certificates)
+	}
+	api := snap.Certificates[0]
+	left := api.NotAfter.Sub(now)
+	if api.Secret != "api-tls" || api.Subject != "demo.example.org" || api.Issuer != "Kartal Demo CA" ||
+		len(api.DNSNames) != 2 || left < 11*24*time.Hour || left > 12*24*time.Hour {
+		t.Errorf("certificate: %+v", api)
+	}
+	b, _ := json.Marshal(snap)
+	if strings.Contains(string(b), "private-key") || strings.Contains(string(b), "BEGIN") {
+		t.Error("the snapshot carries key or certificate material")
+	}
+
+	// Within the minute, the kubelets are not asked again; when they cannot
+	// be asked, the last figures stay and the error is shown.
+	f.Forbid = []string{"/proxy/stats/summary", "/secrets"}
+	if snap := c.Collect(context.Background()); len(snap.Errors) != 0 || snap.VolumeClaims[0].UsedBytes == 0 {
+		t.Errorf("asked again too soon: %v", snap.Errors)
+	}
+	now = now.Add(6 * time.Minute)
+	snap = c.Collect(context.Background())
+	if len(snap.Errors) != 2 || !strings.HasPrefix(snap.Errors[0], "certificates: ") || !strings.HasPrefix(snap.Errors[1], "volume stats: cp1: ") ||
+		snap.VolumeClaims[0].UsedBytes == 0 || len(snap.Certificates) != 2 {
+		t.Errorf("after a failure: %v %+v", snap.Errors, snap.VolumeClaims[0])
+	}
+	// After an hour without an answer, the old figures are dropped.
+	now = now.Add(2 * time.Hour)
+	if snap := c.Collect(context.Background()); snap.VolumeClaims[0].UsedBytes != 0 || len(snap.Certificates) != 0 {
+		t.Errorf("stale figures kept: %+v", snap.VolumeClaims[0])
+	}
+}

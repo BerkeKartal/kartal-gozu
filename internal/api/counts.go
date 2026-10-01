@@ -1,10 +1,15 @@
 package api
 
-import "github.com/BerkeKartal/kartal-gozu/internal/protocol"
+import (
+	"time"
+
+	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
+)
 
 // objectCounts are the per-kind numbers the UI shows in its navigation, for
 // the whole cluster and for each namespace. The "Degraded", "Unhealthy",
-// "Failed" and "Unbound" numbers are the ones that need attention.
+// "Failed", "Unbound", "Filling" and "Expiring" numbers are the ones that
+// need attention.
 type objectCounts struct {
 	Workloads            int `json:"workloads"`
 	WorkloadsDegraded    int `json:"workloadsDegraded"`
@@ -22,6 +27,9 @@ type objectCounts struct {
 	Secrets              int `json:"secrets"`
 	VolumeClaims         int `json:"volumeClaims"`
 	VolumeClaimsUnbound  int `json:"volumeClaimsUnbound"`
+	VolumeClaimsFilling  int `json:"volumeClaimsFilling"`
+	Certificates         int `json:"certificates"`
+	CertificatesExpiring int `json:"certificatesExpiring"`
 	Jobs                 int `json:"jobs"`
 	JobsFailed           int `json:"jobsFailed"`
 	CronJobs             int `json:"cronJobs"`
@@ -30,7 +38,7 @@ type objectCounts struct {
 
 // tally counts a snapshot's objects for the whole cluster and for each
 // namespace, in one pass.
-func tally(snap *protocol.Snapshot) (objectCounts, map[string]*objectCounts) {
+func tally(snap *protocol.Snapshot, lv levels) (objectCounts, map[string]*objectCounts) {
 	var total objectCounts
 	byNS := map[string]*objectCounts{}
 	count := func(ns string, add func(*objectCounts)) {
@@ -88,11 +96,23 @@ func tally(snap *protocol.Snapshot) (objectCounts, map[string]*objectCounts) {
 		count(s.Namespace, func(c *objectCounts) { c.Secrets++ })
 	}
 	for _, v := range snap.VolumeClaims {
-		unbound := v.Phase != "Bound"
+		unbound, filling := v.Phase != "Bound", lv.filling(v)
 		count(v.Namespace, func(c *objectCounts) {
 			c.VolumeClaims++
 			if unbound {
 				c.VolumeClaimsUnbound++
+			}
+			if filling {
+				c.VolumeClaimsFilling++
+			}
+		})
+	}
+	for _, crt := range snap.Certificates {
+		expiring := lv.expiring(crt)
+		count(crt.Namespace, func(c *objectCounts) {
+			c.Certificates++
+			if expiring {
+				c.CertificatesExpiring++
 			}
 		})
 	}
@@ -112,4 +132,26 @@ func tally(snap *protocol.Snapshot) (objectCounts, map[string]*objectCounts) {
 		count(e.Namespace, func(c *objectCounts) { c.Warnings++ })
 	}
 	return total, byNS
+}
+
+// levels say when a volume or a certificate needs attention; they follow
+// the alerts' warning levels.
+type levels struct {
+	volume      float64
+	certificate time.Duration
+	now         time.Time
+}
+
+func (s *Server) levels() levels {
+	volume, _ := s.cfg.Alerts.VolumeLevels()
+	certificate, _ := s.cfg.Alerts.CertificateLevels()
+	return levels{volume: volume, certificate: certificate, now: s.now()}
+}
+
+func (lv levels) filling(v protocol.VolumeClaim) bool { return v.Fill() >= lv.volume }
+
+// expiring includes a certificate that cannot be read: nobody knows when
+// it expires.
+func (lv levels) expiring(c protocol.Certificate) bool {
+	return c.Error != "" || c.NotAfter.Sub(lv.now) <= lv.certificate
 }

@@ -41,6 +41,13 @@ spec:
               value: "false"
             - name: KARTAL_ALLOW_EDIT
               value: "false"
+            # How full volumes are, asked from the kubelets (needs rbac-volumes.yaml).
+            - name: KARTAL_VOLUME_STATS
+              value: "false"
+            # When the certificates of TLS Secrets expire (needs rbac-certificates.yaml);
+            # only tls.crt is read, never the key.
+            - name: KARTAL_TLS_SECRETS
+              value: "false"
             # List Secret names in the snapshot (needs rbac-browse.yaml); values are never sent.
             - name: KARTAL_INCLUDE_SECRETS
               value: "false"

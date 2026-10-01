@@ -34,10 +34,29 @@ spec:
             # Where the settings made in the UI are kept (settings-secret.yaml).
             - name: KARTAL_SETTINGS_SECRET
               value: kartal-server-settings
-            # Named users with roles, one "name:role:token" per line (roles:
-            # viewer, operator, admin); add a "users" key to the Secret first.
+            # Named users with roles, one "name:grant:token" per line, where a
+            # grant is a role (viewer, operator, admin), everywhere, or only in
+            # some places: operator@production/payments+staging. Add a "users"
+            # key to the Secret first.
             # - name: KARTAL_USERS_FILE
             #   value: /etc/kartal/users
+            # Sign-in with Active Directory or another LDAP directory: people
+            # use their own password, and their groups give them grants. The
+            # service account's password goes in the Secret as well.
+            # - name: KARTAL_LDAP_URL
+            #   value: ldaps://dc1.example.org:636
+            # - name: KARTAL_LDAP_USER_BASE
+            #   value: OU=People,DC=example,DC=org
+            # - name: KARTAL_LDAP_BIND_DN
+            #   value: CN=svc-kartal,OU=Service Accounts,DC=example,DC=org
+            # - name: KARTAL_LDAP_BIND_PASSWORD_FILE
+            #   value: /etc/kartal/ldap-password
+            # - name: KARTAL_LDAP_GROUPS
+            #   value: |
+            #     Kartal-Admins => admin
+            #     Platform-Oncall => operator
+            #     Team-Payments => operator@production/payments-*+staging
+            #     Developers => viewer
             # Where people open the UI; notifications link to it.
             # - name: KARTAL_PUBLIC_URL
             #   value: https://panel.example.org/devops/kartal
@@ -59,6 +78,12 @@ spec:
             #   value: kartal
             # - name: KARTAL_SMTP_PASSWORD_FILE
             #   value: /etc/kartal/smtp-password
+            # When a volume (in percent full) or a certificate (in days before
+            # it expires) needs attention; these are the defaults.
+            # - name: KARTAL_ALERT_VOLUME_WARNING
+            #   value: "85"
+            # - name: KARTAL_ALERT_CERT_WARNING_DAYS
+            #   value: "14"
           ports:
             - name: http
               containerPort: 8080

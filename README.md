@@ -38,8 +38,19 @@ tunnel), and the server works under any URL path without configuration.
   agents are collected on one page and sent to Microsoft Teams, e-mail or any
   webhook, with a message when they are resolved. E-mail is set up right on
   that page, and tried before it is saved.
+- **Warnings before an outage.** Volumes that fill up, TLS certificates that
+  are about to expire (in the cluster's Secrets and on any address), and URL
+  checks that the server runs itself, with a 24-hour history for each.
+- **What changed, and what runs where.** A timeline of what changed in each
+  cluster (new images, scaling, restarts, nodes going away), with who did it
+  when it was done through Kartal Gözü. The versions of every app side by
+  side across clusters, with the differences marked. And, for any object,
+  what was changed since the last `kubectl apply`.
 - **Users, roles and an audit log.** Viewers look, operators act, admins also
-  edit YAML and use the console. Every change is recorded with who made it.
+  edit YAML and use the console, everywhere or only in the clusters and
+  namespaces you choose. People can sign in with Active Directory or another
+  LDAP directory, whose groups give them their roles. Every change is recorded
+  with who made it.
 - **Fast to get around.** A namespace picker scopes every view. Every column
   sorts. Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd> to jump anywhere. Star
   a namespace or any row to pin it to the top.
@@ -70,9 +81,15 @@ go run ./cmd/kartal-demo
 Then open http://127.0.0.1:8080/. The demo runs the real server and real
 agents against simulated clusters, with every action allowed. One cluster has
 no metrics-server and one never connects, so you can see how both look. The
-charts start with six hours of invented history, and e-mail settings made on
-the Alerts page last until the demo stops. Options:
+charts start with six hours of invented history, and e-mail settings and URL
+checks made in the UI last until the demo stops. There is something to find
+on every page: a volume at 91%, a certificate that expires in twelve days, an
+address that does not answer, release candidates in staging and, every two
+minutes, a new build of one app in production. Options:
 
+- `-ldap` signs people in against a small built-in directory: `ayse` is an
+  admin, `mehmet` an operator in production's `team-0*` namespaces and all of
+  staging, and `zeynep` a viewer of production. The password is `demo`.
 - `-admin-token <token>` shows the sign-in page.
 - `-namespaces 500` makes the main cluster big (1,500 pods) so you can check
   the speed.
@@ -95,14 +112,24 @@ the Alerts page last until the demo stops. Options:
     - Overview
     - Workloads: Pods, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs
     - Networking: Services, Ingresses
-    - Configuration: ConfigMaps, Secrets
-    - Storage: volume claims
-    - Applications: Helm releases
+    - Configuration: ConfigMaps, Secrets, Certificates
+    - Storage: volume claims, with how full each one is
+    - Applications: Helm releases, Versions
     - Cluster: Nodes, Namespaces, Events
-    - Operations: Alerts, Audit log
+    - Operations: Alerts, URL checks, Changes, Audit log
     - All resources: a browser for every API type, including CRDs
 - **Overview:** capacity, usage and requests, what needs attention, the
   cluster's usage over the last hour and recent warnings.
+- **Changes:** what changed in the cluster (or the selected namespace), newest
+  first: workloads created or deleted, new images, scaling, pod template
+  changes such as restarts, schedule changes and suspensions of CronJobs, and
+  nodes that were added, removed, cordoned or went not ready. A change made
+  through Kartal Gözü says who made it (operators see that). The server keeps
+  the last 5,000 changes in memory, from what the agents report; the first
+  report after a start is only the baseline.
+- **Versions:** every app's images in every cluster, side by side. Rows whose
+  versions differ are marked, and "Only differences" keeps those and the apps
+  missing from a cluster. A cell opens the app in that cluster.
 - **Lists:** click a column header to sort (again to reverse, a third time for
   the natural order); the choice is remembered. "Problems only" keeps what
   needs attention. Starred objects come first, then everything in a starred
@@ -112,12 +139,13 @@ the Alerts page last until the demo stops. Options:
 
   | Tab | For |
   |---|---|
-  | Summary | every kind; the built-in kinds get their own summary |
+  | Summary | every kind; the built-in kinds get their own summary. An object applied with `kubectl apply` also shows what changed since: the fields the last apply set that differ now, which the next apply would set back |
   | Logs | pods, with init containers, previous containers and all containers merged |
   | Pods | Deployments, StatefulSets, DaemonSets, Jobs and nodes |
   | Jobs | CronJobs |
   | YAML | every kind: copy, download, and edit with a diff preview |
   | Events | every kind: the events about that object only |
+  | Changes | Deployments, StatefulSets, DaemonSets, CronJobs and nodes: that object's timeline |
   | History | Deployments: revisions with images and change cause, and rollback |
   | Metrics | pods and nodes, 1 or 6 hours |
   | Console | pods, for admins |
@@ -163,9 +191,10 @@ the Alerts page last until the demo stops. Options:
   agent runs the command and posts the result back.
 - The server keeps state in memory. Agents resend a full snapshot every
   interval, so a restarted server has everything back within seconds; the
-  charts' history and the audit log start over (the audit log is also written
-  to the server's log). For the same reason the server runs as a **single
-  replica**.
+  charts' history, the change timeline, the URL checks' results, sign-in
+  sessions and the audit log start over (the audit log is also written to the
+  server's log). Settings made in the UI are kept, in a Secret or a file. For
+  the same reason the server runs as a **single replica**.
 
 ## Installation
 
@@ -198,9 +227,12 @@ kubectl -n $NS create secret generic kartal-server \
   --from-literal=admin-token='<admin-token>'
 ```
 
-For named users, add a `users` key with one `name:role:token` per line and
+For named users, add a `users` key with one `name:grant:token` per line and
 uncomment `KARTAL_USERS_FILE` in `deploy/server/deployment.yaml`; see
-[Users and roles](#users-and-roles). The manifests also create an empty
+[Users and roles](#users-and-roles). To let people sign in with Active
+Directory or LDAP, uncomment the `KARTAL_LDAP_*` variables there and put the
+service account's password in the Secret as `ldap-password`; see
+[Active Directory and LDAP](#active-directory-and-ldap). The manifests also create an empty
 Secret, `kartal-server-settings`, where the server keeps the settings made in
 the UI, and a Role that lets the server read and change that one Secret and
 nothing else. Set `namespace` and `images` in
@@ -235,6 +267,14 @@ kind of action, set its variable to `"true"` and enable its RBAC file in
 | `rbac-write.yaml` | `KARTAL_ALLOW_WRITE` | Restart, scale, rollback, deleting pods, cordoning nodes, running and suspending CronJobs |
 | `rbac-exec.yaml` | `KARTAL_ALLOW_EXEC` | The pod console |
 | `rbac-edit.yaml` | `KARTAL_ALLOW_EDIT` | Saving objects edited as YAML (common kinds; widen it in the file) |
+| `rbac-volumes.yaml` | `KARTAL_VOLUME_STATS` | How full volume claims are, asked from each node's kubelet once a minute |
+| `rbac-certificates.yaml` | `KARTAL_TLS_SECRETS` | When the certificates of `kubernetes.io/tls` Secrets expire, read every five minutes |
+
+Two of these grant more than their feature needs, because Kubernetes cannot
+grant less: `rbac-volumes.yaml` gives `get` on `nodes/proxy`, which reaches
+every read-only kubelet endpoint, and `rbac-certificates.yaml` lets the agent
+list all Secrets. The agent itself reads only volume statistics, and only the
+`tls.crt` of TLS Secrets, never their keys.
 
 ```sh
 kubectl apply -k deploy/agent
@@ -249,23 +289,89 @@ token belongs to a user with one of three roles:
 
 | Role | May |
 |---|---|
-| `viewer` | See everything: lists, details, YAML, logs, events, charts, alerts |
-| `operator` | Also restart, scale, roll back, delete pods, cordon nodes, run and suspend CronJobs, and read the audit log |
-| `admin` | Also edit YAML, use the pod console, set up e-mail and send test notifications |
+| `viewer` | See everything: lists, details, YAML, logs, events, charts, alerts, changes, versions, URL checks |
+| `operator` | Also restart, scale, roll back, delete pods, cordon nodes, run and suspend CronJobs, read the audit log, and see who made a change |
+| `admin` | Also edit YAML, use the pod console, set up e-mail and URL checks, and send test notifications |
+
+### Where a role applies
+
+A role applies everywhere, or only where you say. A *grant* is written as
+`role` (everywhere) or `role@scope+scope…`, where a scope is `cluster` (all
+of it) or `cluster/namespace`. Either part may be `*` (any) or end in `*` (any
+name that starts so):
+
+| Grant | Means |
+|---|---|
+| `viewer` | viewer in every cluster and namespace |
+| `operator@production/payments` | operator in one namespace |
+| `operator@production/team-*+staging` | operator in production's `team-…` namespaces and in all of staging |
+| `viewer@*/monitoring` | viewer of the `monitoring` namespace in every cluster |
+
+Someone with roles only in some namespaces sees only those namespaces, their
+objects and their alerts; the clusters list counts only what they may see.
+Nodes, the cluster's usage, cordoning and other cluster-wide things need a
+role over a whole cluster (`cluster` or `cluster/*`). The audit log shows
+each operator the entries of the places where they are operators. The
+server's own settings (e-mail, URL checks, test notifications) need an admin
+role everywhere.
+
+### Tokens
 
 Users are listed in `KARTAL_USERS` (or the file in `KARTAL_USERS_FILE`) as
-`name:role:token` entries, separated by commas or newlines:
+`name:grant:token` entries, separated by commas or newlines:
 
 ```
-# name:role:token
+# name:grant:token
 ayse:admin:3f0c…
 oncall:operator:9a1d…
-team:viewer:77b2…
+payments:operator@production/payments+staging/payments:77b2…
 ```
 
 `KARTAL_ADMIN_TOKEN` adds one more user, named `admin`. Tokens are at least
-16 characters. What a role allows is still limited by what each cluster's
-agent allows: a button the agent would refuse is shown disabled.
+16 characters.
+
+### Active Directory and LDAP
+
+With `KARTAL_LDAP_URL`, people sign in with their own user name and password,
+and the groups they belong to give them their grants. A rule per line, in
+`KARTAL_LDAP_GROUPS` (or the file in `KARTAL_LDAP_GROUPS_FILE`), reads
+`group => grant`; the group is its CN or, when two groups share a CN, its
+whole DN. Someone in several of the groups gets all of their grants; someone
+in none cannot sign in.
+
+```
+Kartal-Admins => admin
+Platform-Oncall => operator
+Team-Payments => operator@production/payments-*+staging
+CN=Developers,OU=Groups,DC=example,DC=org => viewer
+```
+
+The server looks a person up under `KARTAL_LDAP_USER_BASE` by
+`sAMAccountName` (or `KARTAL_LDAP_USER_ATTR`, such as `uid`) and checks the
+password by binding as them. To look people up it binds either as a service
+account (`KARTAL_LDAP_BIND_DN` and `KARTAL_LDAP_BIND_PASSWORD` / `_FILE`) or,
+in Active Directory, as the person themselves (`KARTAL_LDAP_UPN_DOMAIN`, such
+as `example.org`, which makes `user@example.org`). Use `ldaps://`, or
+`ldap://` with `KARTAL_LDAP_STARTTLS=true`; a private CA goes in
+`KARTAL_LDAP_CA_FILE`. Groups come from `memberOf`, which lists the groups a
+person is directly in.
+
+People may write their name as `ayse`, `EXAMPLE\ayse` or, in Active
+Directory, `ayse@example.org`; the audit log names them as the directory
+does. Someone whose password has expired or must be changed, or whose
+account is disabled or has expired, is told so (Active Directory says that
+only after the right password); every other refusal reads "wrong user name
+or password".
+
+A sign-in gives a session that lasts `KARTAL_SESSION_TTL` (12 hours by
+default), kept in the server's memory; signing out ends it at once. Tokens
+from `KARTAL_USERS` keep working next to directory sign-in, for scripts. Five
+failed attempts for a name within 15 minutes, or 30 within a minute in all,
+make the server turn further attempts away for a while; every attempt is in
+the audit log. A restart of the server ends every session.
+
+What a role allows is still limited by what each cluster's agent allows: a
+button the agent would refuse is shown disabled.
 
 Every change a user's role allows goes to the audit log with the user, the
 object and whether it worked. The UI shows the last 1,000 entries to
@@ -287,6 +393,14 @@ on are sent as soon as one is.
 | Workload degraded | fewer replicas are ready than wanted |
 | Job failed | a Job gave up (its `Failed` condition); one still retrying is not a problem yet |
 | Volume claim unbound | a claim is not bound |
+| Volume filling up | a volume is 85% full (a warning) or 95% (critical), by space or by inodes; needs `KARTAL_VOLUME_STATS` on the agent |
+| Certificate expiring | a TLS Secret's certificate, or that of an address a URL check asks, expires within 14 days (a warning) or 3 days (critical), or has expired |
+| Address not answering | a URL check fails: no answer, an error status, the wrong status or text, or a certificate that cannot be trusted |
+
+The levels can be changed with `KARTAL_ALERT_VOLUME_WARNING` and
+`KARTAL_ALERT_VOLUME_CRITICAL` (percent), and
+`KARTAL_ALERT_CERT_WARNING_DAYS` and `KARTAL_ALERT_CERT_CRITICAL_DAYS`. The
+lists in the UI mark volumes and certificates at the same levels.
 
 Channels, any number of them together:
 
@@ -324,6 +438,35 @@ Set `KARTAL_PUBLIC_URL` to the UI's address so messages link to it. Outbound
 requests honour `HTTPS_PROXY`. The Alerts page shows active and recent
 problems, the channels and the last deliveries; admins can send a test.
 
+## URL checks
+
+The server can watch addresses itself: the sites your clusters serve, and
+anything else that people depend on. Admins add them on the **URL checks**
+page, where **Try now** asks the address once before the check is saved.
+Each check has:
+
+- the address (`http://` or `https://`) and a name;
+- how often to ask it, from every 30 seconds to every hour, and how long to
+  wait for an answer;
+- what counts as up: by default any status below 400, after up to five
+  redirects; optionally an exact status, and a text that the answer must
+  contain;
+- whether to skip verifying the certificate, for a private CA (its expiry is
+  watched all the same).
+
+The page shows each check's state and how long it has been in it, a bar for
+each of the last 24 hours, the share of good answers, the response time and
+when the certificate expires. A failing check raises *Address not answering*
+and a certificate close to its end *Certificate expiring*; these alerts
+belong to no cluster and go to the same channels. Every change to the checks
+is in the audit log.
+
+The checks are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
+`KARTAL_SETTINGS_FILE`); their results, 24 hours of them, in memory. Requests
+come from the server, so the addresses must be reachable from where it runs;
+they honour `HTTPS_PROXY` and `NO_PROXY`. At most 200 checks, and 20 requests
+at a time.
+
 ## Configuration
 
 ### Server
@@ -332,8 +475,18 @@ problems, the channels and the last deliveries; admins can send a test.
 |---|---|---|
 | `KARTAL_LISTEN` | `:8080` | Address to listen on |
 | `KARTAL_AGENT_TOKENS` / `_FILE` | — | `cluster=token` entries, separated by commas or newlines; `#` starts a comment. Tokens are at least 16 characters |
-| `KARTAL_USERS` / `_FILE` | — | `name:role:token` entries; see [Users and roles](#users-and-roles) |
+| `KARTAL_USERS` / `_FILE` | — | `name:grant:token` entries; see [Users and roles](#users-and-roles) |
 | `KARTAL_ADMIN_TOKEN` / `_FILE` | — | One more user, named `admin`, with the admin role |
+| `KARTAL_LDAP_URL` | — | `ldaps://host:636` or `ldap://host:389`: sign in with a directory; see [Active Directory and LDAP](#active-directory-and-ldap) |
+| `KARTAL_LDAP_USER_BASE` | — | Where people are looked up, such as `OU=People,DC=example,DC=org` |
+| `KARTAL_LDAP_USER_ATTR` | `sAMAccountName` | The attribute that holds the user name |
+| `KARTAL_LDAP_BIND_DN`, `KARTAL_LDAP_BIND_PASSWORD` / `_FILE` | — | A service account to look people up with |
+| `KARTAL_LDAP_UPN_DOMAIN` | — | Active Directory without a service account: people bind as `user@domain` |
+| `KARTAL_LDAP_GROUPS` / `_FILE` | — | `group => grant` rules, one per line |
+| `KARTAL_LDAP_STARTTLS` | `false` | Upgrade an `ldap://` connection with StartTLS |
+| `KARTAL_LDAP_CA_FILE` | — | The directory's CA, if it is private |
+| `KARTAL_LDAP_INSECURE_SKIP_VERIFY` | `false` | Skip verifying the directory's certificate (testing only) |
+| `KARTAL_SESSION_TTL` | `12h` | How long a sign-in lasts |
 | `KARTAL_ALLOW_ANONYMOUS` | `false` | Run without any user (local testing only) |
 | `KARTAL_STALE_AFTER` | `1m` | An agent silent for this long is shown as offline |
 | `KARTAL_MAX_POLL_WAIT` | `25s` | Longest long-poll; keep it below any proxy or load balancer timeout |
@@ -342,8 +495,10 @@ problems, the channels and the last deliveries; admins can send a test.
 | `KARTAL_ALERT_AFTER` | `2m` | How long a problem lasts before it is notified |
 | `KARTAL_ALERT_TEAMS_URL` | — | Microsoft Teams workflow URL |
 | `KARTAL_ALERT_WEBHOOK_URL` | — | Any URL that accepts a JSON POST |
+| `KARTAL_ALERT_VOLUME_WARNING`, `_CRITICAL` | `85`, `95` | How full a volume may get, in percent |
+| `KARTAL_ALERT_CERT_WARNING_DAYS`, `_CRITICAL_DAYS` | `14`, `3` | How close a certificate's expiry may come |
 | `KARTAL_SMTP_ADDR`, `_FROM`, `_TO`, `_USERNAME`, `_PASSWORD` / `_PASSWORD_FILE` | — | E-mail notifications; when set, the UI cannot change them |
-| `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI |
+| `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI (e-mail, URL checks) |
 | `KARTAL_SETTINGS_FILE` | — | File that keeps them instead, outside Kubernetes |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
@@ -360,6 +515,8 @@ problems, the channels and the last deliveries; admins can send a test.
 | `KARTAL_ALLOW_EXEC` | `false` | Allow the pod console (with `rbac-exec.yaml`) |
 | `KARTAL_ALLOW_EDIT` | `false` | Allow saving edited YAML (with `rbac-edit.yaml`) |
 | `KARTAL_INCLUDE_SECRETS` | `false` | Add Secret names to the snapshot (values are never sent) |
+| `KARTAL_VOLUME_STATS` | `false` | Report how full volume claims are (with `rbac-volumes.yaml`) |
+| `KARTAL_TLS_SECRETS` | `false` | Report when the certificates of TLS Secrets expire (with `rbac-certificates.yaml`) |
 | `KARTAL_CA_FILE` | — | Extra CA file, if the server uses a private CA |
 | `KARTAL_INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (testing only) |
 | `KARTAL_HEALTH_LISTEN` | `:8081` | Liveness endpoint; `off` disables it |
@@ -376,11 +533,14 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 
 | Method | Path | Role | Returns or does |
 |---|---|---|---|
-| GET | `/api/v1/me` | viewer | The signed-in user and role |
+| GET | `/api/v1/login` | — | Whether directory sign-in is on: `{"password": true}` |
+| POST | `/api/v1/login` | — | Body: `{"username", "password"}`; returns a session token, the user and when the session ends |
+| POST | `/api/v1/logout` | viewer | Ends the session of the token used |
+| GET | `/api/v1/me` | viewer | The signed-in user, their role, their grants and the levels at which volumes and certificates need attention |
 | GET | `/api/v1/clusters` | viewer | Clusters, their status, capacity, requests, usage, summary counts, the actions their agent allows and their active alerts |
 | GET | `/api/v1/clusters/{c}` | viewer | One cluster's summary |
 | GET | `/api/v1/clusters/{c}/namespaces` | viewer | Namespaces with object counts, problems and warnings |
-| GET | `/api/v1/clusters/{c}/{kind}` | viewer | `nodes`, `workloads`, `pods`, `services`, `ingresses`, `configmaps`, `secrets`, `volumeclaims`, `jobs`, `cronjobs`, `events`. Namespaced kinds take `?namespace=`. `nodes`, `workloads`, `pods`, `volumeclaims` and `jobs` take `?problems=true` to return only what needs attention |
+| GET | `/api/v1/clusters/{c}/{kind}` | viewer | `nodes`, `workloads`, `pods`, `services`, `ingresses`, `configmaps`, `secrets`, `certificates`, `volumeclaims`, `jobs`, `cronjobs`, `events`. Namespaced kinds take `?namespace=`. `nodes`, `workloads`, `pods`, `certificates`, `volumeclaims` and `jobs` take `?problems=true` to return only what needs attention |
 | GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/logs?container=&tail=&previous=` | viewer | Pod logs (plain text); `previous=true` for the last terminated container |
 | GET | `/api/v1/clusters/{c}/object-events?kind=&namespace=&name=` | viewer | The events about one object, newest first |
 | GET | `/api/v1/clusters/{c}/namespaces/{ns}/deployments/{name}/history` | viewer | Revisions with images, change cause and readiness |
@@ -390,6 +550,9 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | GET | `/api/v1/clusters/{c}/resources/{group}/{version}/{resource}?namespace=` | viewer | A list of any type; use `core` for the core group |
 | GET | `/api/v1/clusters/{c}/resources/{group}/{version}/{resource}/{name}?namespace=` | viewer | Any object's contents |
 | GET | `/api/v1/alerts` | viewer | Active and recent problems, channels, last deliveries |
+| GET | `/api/v1/changes?cluster=&namespace=&kind=&name=&limit=` | viewer | What changed, newest first (500 by default, at most 2,000); for operators with who made each change done through Kartal Gözü |
+| GET | `/api/v1/releases` | viewer | Every workload in every cluster with its images and readiness |
+| GET | `/api/v1/checks` | viewer | The URL checks with their latest result, uptime and last 24 hours |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/workloads/{kind}/{name}/restart` | operator | `deployment`, `statefulset`, `daemonset` |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/workloads/{kind}/{name}/scale` | operator | Body: `{"replicas": N}` |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/deployments/{name}/rollback` | operator | Body: `{"revision": N}` |
@@ -404,6 +567,15 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | GET | `/api/v1/settings/email` | admin | The e-mail settings, without the password |
 | PUT | `/api/v1/settings/email` | admin | Body: `{"enabled", "addr", "from", "to": [...], "username", "password"}`; a missing password keeps the saved one, `""` removes it |
 | POST | `/api/v1/settings/email/test` | admin | Sends a test e-mail with the settings in the body, without saving them |
+| POST | `/api/v1/checks` | admin | Body: `{"name", "url", "interval", "timeout", "status", "contains", "insecure"}`; adds a check |
+| PUT | `/api/v1/checks/{id}` | admin | Same body; changes a check |
+| DELETE | `/api/v1/checks/{id}` | admin | Removes a check and its results |
+| POST | `/api/v1/checks/try` | admin | Same body; asks the address once, without saving anything |
+
+The server's own settings (`alerts/test`, `settings/…` and changes to
+`checks`) need the admin role everywhere. Every other call needs its role in
+the cluster and namespace it acts on, and lists hold only what the user may
+see.
 
 Lists carry an `ETag` computed from their content. Send it back in
 `If-None-Match` and you get `304 Not Modified` for as long as the content stays
@@ -427,6 +599,13 @@ are `api/v1/`, `agent/v1/` and `_ui/`.
   read.
 - The agent's default RBAC is read-only and does not include Secrets. The
   server's own RBAC covers a single Secret, its settings.
+- For certificates, the agent reads only the `tls.crt` of TLS Secrets: the
+  key is never decoded or kept, and only names and dates leave the cluster.
+- Directory sign-in builds its LDAP search from the user name as encoded
+  data, never as filter text, so a name cannot change the search. An empty
+  password is refused before the directory is asked (LDAP would take it as an
+  anonymous bind). Passwords are never stored or logged; sessions are random
+  tokens held in memory.
 - Console commands have a 15-second limit and their output is capped. Each
   command is recorded in the audit log.
 - The UI is served with a strict Content-Security-Policy: same-origin only, no
@@ -449,7 +628,7 @@ end to end.
 
 ## Roadmap
 
-- User sign-in with OIDC or LDAP
+- User sign-in with OIDC
 - A full terminal (TTY) in the pod console
 
 ## License

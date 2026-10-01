@@ -51,12 +51,15 @@ const (
 )
 
 var titles = map[string]string{
-	"AgentOffline":       "Agent offline",
-	"NodeNotReady":       "Node not ready",
-	"PodFailing":         "Pod failing",
-	"WorkloadDegraded":   "Workload degraded",
-	"JobFailed":          "Job failed",
-	"VolumeClaimUnbound": "Volume claim unbound",
+	"AgentOffline":        "Agent offline",
+	"NodeNotReady":        "Node not ready",
+	"PodFailing":          "Pod failing",
+	"WorkloadDegraded":    "Workload degraded",
+	"JobFailed":           "Job failed",
+	"VolumeClaimUnbound":  "Volume claim unbound",
+	"VolumeFilling":       "Volume filling up",
+	"CertificateExpiring": "Certificate expiring",
+	"URLDown":             "Address not answering",
 }
 
 // podFailing are the pod reasons worth telling someone about; a pod merely
@@ -83,6 +86,10 @@ func (n Notification) Title() string {
 	}
 	if len(n.Resolved) > 0 {
 		parts = append(parts, fmt.Sprintf("%d resolved", len(n.Resolved)))
+	}
+	if n.Cluster == "" {
+		// The server's own checks, of no cluster.
+		return "Kartal Gözü: " + strings.Join(parts, ", ")
 	}
 	return "Kartal Gözü · " + n.Cluster + ": " + strings.Join(parts, ", ")
 }
@@ -160,6 +167,12 @@ type Manager struct {
 	// PublicURL, when set, is linked from notifications.
 	PublicURL string
 	Log       *slog.Logger
+	// VolumeWarning and VolumeCritical are how full a volume may get, in
+	// percent; zero means 85 and 95.
+	VolumeWarning, VolumeCritical float64
+	// CertificateWarning and CertificateCritical are how close a
+	// certificate's expiry may come; zero means 14 days and 3 days.
+	CertificateWarning, CertificateCritical time.Duration
 
 	mu     sync.Mutex
 	active map[string]*Alert
@@ -245,8 +258,131 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 		if v.Phase != "Bound" {
 			add(Alert{Kind: "VolumeClaimUnbound", Severity: warning, Namespace: v.Namespace, Object: v.Name, Detail: v.Phase})
 		}
+		if sev, detail := m.volumeFilling(v); sev != "" {
+			add(Alert{Kind: "VolumeFilling", Severity: sev, Namespace: v.Namespace, Object: v.Name, Detail: detail})
+		}
+	}
+	for _, c := range snap.Certificates {
+		if a, ok := m.CertificateAlert(c.NotAfter, now); ok {
+			a.Namespace, a.Object = c.Namespace, c.Secret
+			if c.Subject != "" {
+				a.Detail = c.Subject + ": " + a.Detail
+			}
+			add(a)
+		}
 	}
 	m.update(cluster, found, func(a *Alert) bool { return a.Kind != "AgentOffline" }, now)
+}
+
+// VolumeLevels are how full a volume may get, in percent, before it is a
+// warning and before it is critical. A nil manager has the defaults.
+func (m *Manager) VolumeLevels() (warn, crit float64) {
+	warn, crit = 85, 95
+	if m != nil && m.VolumeWarning > 0 {
+		warn = m.VolumeWarning
+	}
+	if m != nil && m.VolumeCritical > 0 {
+		crit = m.VolumeCritical
+	}
+	return warn, crit
+}
+
+// CertificateLevels are how close a certificate's expiry may come before
+// it is a warning and before it is critical. A nil manager has the defaults.
+func (m *Manager) CertificateLevels() (warn, crit time.Duration) {
+	warn, crit = 14*24*time.Hour, 3*24*time.Hour
+	if m != nil && m.CertificateWarning > 0 {
+		warn = m.CertificateWarning
+	}
+	if m != nil && m.CertificateCritical > 0 {
+		crit = m.CertificateCritical
+	}
+	return warn, crit
+}
+
+// volumeFilling tells how bad a volume's fill level is: by space or, when
+// that is worse, by inodes (many small files fill a disk too).
+func (m *Manager) volumeFilling(v protocol.VolumeClaim) (severity, detail string) {
+	warn, crit := m.VolumeLevels()
+	var p float64
+	if v.CapacityBytes > 0 {
+		p = 100 * float64(v.UsedBytes) / float64(v.CapacityBytes)
+		detail = fmt.Sprintf("%.0f%% full (%s of %s)", p, size(v.UsedBytes), size(v.CapacityBytes))
+	}
+	if v.Inodes > 0 {
+		if q := 100 * float64(v.InodesUsed) / float64(v.Inodes); q > p {
+			p, detail = q, fmt.Sprintf("%.0f%% of inodes used (%d of %d files)", q, v.InodesUsed, v.Inodes)
+		}
+	}
+	switch {
+	case p >= crit:
+		return critical, detail
+	case p >= warn:
+		return warning, detail
+	}
+	return "", ""
+}
+
+// size writes bytes for people: 9.5 GiB.
+func size(b int64) string {
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
+	v, i := float64(b), 0
+	for v >= 1024 && i < len(units)-1 {
+		v /= 1024
+		i++
+	}
+	if i == 0 || v >= 10 {
+		return fmt.Sprintf("%.0f %s", v, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", v, units[i])
+}
+
+// CertificateAlert is the alert for a certificate that expires at notAfter,
+// if it expires soon or has. The caller says which certificate it is.
+func (m *Manager) CertificateAlert(notAfter, now time.Time) (Alert, bool) {
+	if notAfter.IsZero() {
+		return Alert{}, false
+	}
+	warn, crit := m.CertificateLevels()
+	left := notAfter.Sub(now)
+	a := Alert{Kind: "CertificateExpiring", Severity: warning}
+	switch {
+	case left <= 0:
+		a.Severity, a.Detail = critical, "expired "+days(-left)+" ago"
+	case left <= crit:
+		a.Severity, a.Detail = critical, "expires in "+days(left)
+	case left <= warn:
+		a.Detail = "expires in " + days(left)
+	default:
+		return Alert{}, false
+	}
+	a.Detail += " (" + notAfter.UTC().Format("2006-01-02 15:04") + " UTC)"
+	return a, true
+}
+
+// days writes a span in whole days, or hours under a day.
+func days(d time.Duration) string {
+	switch h := int(d.Hours()); {
+	case h < 1:
+		return "less than an hour"
+	case h < 24:
+		return fmt.Sprintf("%d hours", h)
+	case h < 48:
+		return "1 day"
+	default:
+		return fmt.Sprintf("%d days", h/24)
+	}
+}
+
+// ObserveChecks replaces the alerts of the server's own address checks,
+// which belong to no cluster.
+func (m *Manager) ObserveChecks(alerts []Alert, now time.Time) {
+	found := map[string]Alert{}
+	for _, a := range alerts {
+		a.Cluster = ""
+		found[a.key()] = a
+	}
+	m.update("", found, func(*Alert) bool { return true }, now)
 }
 
 // AgentStatus records whether a cluster's agent is reporting.
@@ -441,13 +577,14 @@ func (m *Manager) State() State {
 	return st
 }
 
-// ActiveCount is how many problems a cluster has right now.
-func (m *Manager) ActiveCount(cluster string) int {
+// ActiveCount is how many problems a cluster has right now, counting only
+// those keep accepts (nil: all).
+func (m *Manager) ActiveCount(cluster string, keep func(Alert) bool) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for _, a := range m.active {
-		if a.Cluster == cluster {
+		if a.Cluster == cluster && (keep == nil || keep(*a)) {
 			n++
 		}
 	}

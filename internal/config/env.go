@@ -103,3 +103,16 @@ func AgentTokens(raw string) (map[string]string, []string, error) {
 	}
 	return tokens, clusters, nil
 }
+
+// Number reads a number from lo to hi.
+func Number(key string, def, lo, hi float64) (float64, error) {
+	v := String(key, "")
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n < lo || n > hi {
+		return 0, fmt.Errorf("%s: %q is not a number from %g to %g", key, v, lo, hi)
+	}
+	return n, nil
+}

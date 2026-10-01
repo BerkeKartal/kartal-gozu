@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Token is the bearer token the fake API expects.
@@ -35,6 +36,9 @@ type Server struct {
 	// Live makes usage figures drift over time, so history charts have
 	// something to show.
 	Live bool
+	// Variant is added to the image tags of every other generated team, so
+	// a second cluster can run other versions than the first.
+	Variant string
 
 	mu       sync.Mutex
 	patches  []Patch
@@ -66,7 +70,8 @@ const (
 		"status":{"capacity":{"cpu":"8","memory":"16Gi","pods":"110"},"allocatable":{"cpu":"8","memory":"15Gi","pods":"110"},
 			"conditions":[{"type":"MemoryPressure","status":"True"},{"type":"Ready","status":"False"}]}}`
 	deployAPI = `{"metadata":{"name":"api","namespace":"demo","uid":"uid-deploy-api","creationTimestamp":"2026-09-01T10:00:00Z",
-			"annotations":{"deployment.kubernetes.io/revision":"2"}},
+			"annotations":{"deployment.kubernetes.io/revision":"2",
+				"kubectl.kubernetes.io/last-applied-configuration":"{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{},\"name\":\"api\",\"namespace\":\"demo\"},\"spec\":{\"replicas\":3,\"selector\":{\"matchLabels\":{\"app\":\"api\"}},\"template\":{\"metadata\":{\"labels\":{\"app\":\"api\"}},\"spec\":{\"containers\":[{\"image\":\"registry.example.org/demo/api:abc123\",\"name\":\"app\"}]}}}}"}},
 		"spec":{"replicas":2,"selector":{"matchLabels":{"app":"api"}},
 			"template":{"metadata":{"labels":{"app":"api"}},"spec":{"containers":[{"name":"app","image":"registry.example.org/demo/api:abc123"}]}}},
 		"status":{"readyReplicas":1,"updatedReplicas":2}}`
@@ -137,7 +142,8 @@ func metaItem(ns, name string) string {
 // extra generates the demo namespaces: every team runs a three-replica
 // "web" deployment; every third one has a crash-looping replica.
 type extra struct {
-	namespaces, deployments, pods, podMetrics, events []string
+	namespaces, deployments, pods, podMetrics, events, pvcs []string
+	volumes                                                 []volumeUse
 }
 
 func (f *Server) extra() extra {
@@ -150,9 +156,30 @@ func (f *Server) extra() extra {
 			ready = 2
 		}
 		e.namespaces = append(e.namespaces, fmt.Sprintf(`{"metadata":{"name":%q},"status":{"phase":"Active"}}`, ns))
+		// Every fourth team keeps data on a volume; team-08's is nearly full.
+		if i%4 == 0 {
+			e.pvcs = append(e.pvcs, fmt.Sprintf(`{"metadata":{"name":"data","namespace":%q,"creationTimestamp":"2026-09-%02dT10:00:00Z"},
+				"spec":{"storageClassName":"local","volumeName":"pv-%s","accessModes":["ReadWriteOnce"]},
+				"status":{"phase":"Bound","capacity":{"storage":"20Gi"}}}`, ns, 1+i%28, ns))
+			pct := int64(20 + (i*13)%60)
+			if i == 8 {
+				pct = 91
+			}
+			e.volumes = append(e.volumes, volumeUse{ns: ns, claim: "data", node: "cp1", used: 20 * gib * pct / 100, capacity: 20 * gib,
+				inodesUsed: 12_000 * int64(i), inodes: 1_310_720})
+		}
+		tag := fmt.Sprintf("1.%d", i)
+		switch {
+		case f.Variant != "" && i%2 == 1:
+			tag += f.Variant
+		case f.Live && i == 2:
+			// team-02 rolls out a new build every two minutes, so the
+			// demo's timeline has something to show.
+			tag += fmt.Sprintf(".%d", time.Now().Unix()/120%100)
+		}
 		e.deployments = append(e.deployments, fmt.Sprintf(`{"metadata":{"name":"web","namespace":%q,"creationTimestamp":"2026-09-%02dT10:00:00Z"},
-			"spec":{"replicas":3,"template":{"spec":{"containers":[{"name":"web","image":"registry.example.org/%s/web:1.%d"}]}}},
-			"status":{"readyReplicas":%d,"updatedReplicas":3}}`, ns, 1+i%28, ns, i, ready))
+			"spec":{"replicas":3,"template":{"spec":{"containers":[{"name":"web","image":"registry.example.org/%s/web:%s"}]}}},
+			"status":{"readyReplicas":%d,"updatedReplicas":3}}`, ns, 1+i%28, ns, tag, ready))
 		for r := 1; r <= 3; r++ {
 			name := fmt.Sprintf("web-5d8c-%02d%d", i, r)
 			node := []string{"cp1", "worker1"}[r%2]
@@ -219,7 +246,7 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	x := f.extra()
 
-	if f.serveMore(w, r, x, metaOnly) {
+	if f.serveMore(w, r, x, metaOnly) || f.serveStorage(w, r, x, metaOnly) {
 		return
 	}
 	if ns, pod, ok := logPath(p); ok {
@@ -281,7 +308,9 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if requireMeta() {
 			io.WriteString(w, list(metaItem("demo", "db")))
 		}
-	case "/api/v1/persistentvolumeclaims", "/api/v1/namespaces/demo/persistentvolumeclaims":
+	case "/api/v1/persistentvolumeclaims":
+		io.WriteString(w, list(append([]string{pvcData}, x.pvcs...)...))
+	case "/api/v1/namespaces/demo/persistentvolumeclaims":
 		io.WriteString(w, list(pvcData))
 	case "/apis/batch/v1/jobs", "/apis/batch/v1/namespaces/demo/jobs":
 		io.WriteString(w, list(jobBackup))
@@ -340,7 +369,7 @@ func (f *Server) collections(x extra) map[string][]string {
 		"/api/v1/nodes":                        {nodeCP, nodeWorker},
 		"/api/v1/pods":                         append([]string{podAPI, podExporter}, x.pods...),
 		"/api/v1/services":                     {svcAPI},
-		"/api/v1/persistentvolumeclaims":       {pvcData},
+		"/api/v1/persistentvolumeclaims":       append([]string{pvcData}, x.pvcs...),
 		"/apis/apps/v1/deployments":            append([]string{deployAPI}, x.deployments...),
 		"/apis/apps/v1/daemonsets":             {dsExporter},
 		"/apis/networking.k8s.io/v1/ingresses": {ingAPI},

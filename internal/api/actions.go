@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
@@ -29,22 +30,22 @@ const (
 func (s *Server) routeActions(mux *http.ServeMux) {
 	const c = "/api/v1/clusters/{cluster}"
 	mux.HandleFunc("GET /api/v1/me", s.require(auth.Viewer, s.me))
-	mux.HandleFunc("GET "+c+"/object-events", s.require(auth.Viewer, s.objectEvents))
-	mux.HandleFunc("GET "+c+"/namespaces/{ns}/deployments/{name}/history", s.require(auth.Viewer, s.rolloutHistory))
-	mux.HandleFunc("GET "+c+"/helm", s.require(auth.Viewer, s.helm))
-	mux.HandleFunc("GET "+c+"/metrics", s.require(auth.Viewer, s.metrics))
+	mux.HandleFunc("GET "+c+"/object-events", s.inCluster(auth.Viewer, queryNamespace, s.objectEvents))
+	mux.HandleFunc("GET "+c+"/namespaces/{ns}/deployments/{name}/history", s.inCluster(auth.Viewer, pathNamespace, s.rolloutHistory))
+	mux.HandleFunc("GET "+c+"/helm", s.inCluster(auth.Viewer, anywhere, s.helm))
+	mux.HandleFunc("GET "+c+"/metrics", s.inCluster(auth.Viewer, anywhere, s.metrics))
 
-	mux.HandleFunc("DELETE "+c+"/namespaces/{ns}/pods/{pod}", s.require(auth.Operator, s.deletePod))
-	mux.HandleFunc("POST "+c+"/nodes/{node}/cordon", s.require(auth.Operator, s.cordon))
-	mux.HandleFunc("POST "+c+"/namespaces/{ns}/cronjobs/{name}/suspend", s.require(auth.Operator, s.suspend))
-	mux.HandleFunc("POST "+c+"/namespaces/{ns}/cronjobs/{name}/trigger", s.require(auth.Operator, s.trigger))
-	mux.HandleFunc("POST "+c+"/namespaces/{ns}/deployments/{name}/rollback", s.require(auth.Operator, s.rollback))
+	mux.HandleFunc("DELETE "+c+"/namespaces/{ns}/pods/{pod}", s.inCluster(auth.Operator, pathNamespace, s.deletePod))
+	mux.HandleFunc("POST "+c+"/nodes/{node}/cordon", s.inCluster(auth.Operator, wholeCluster, s.cordon))
+	mux.HandleFunc("POST "+c+"/namespaces/{ns}/cronjobs/{name}/suspend", s.inCluster(auth.Operator, pathNamespace, s.suspend))
+	mux.HandleFunc("POST "+c+"/namespaces/{ns}/cronjobs/{name}/trigger", s.inCluster(auth.Operator, pathNamespace, s.trigger))
+	mux.HandleFunc("POST "+c+"/namespaces/{ns}/deployments/{name}/rollback", s.inCluster(auth.Operator, pathNamespace, s.rollback))
 
-	mux.HandleFunc("POST "+c+"/namespaces/{ns}/pods/{pod}/exec", s.require(auth.Admin, s.exec))
-	mux.HandleFunc("PUT "+c+"/resources/{group}/{version}/{resource}/{name}", s.require(auth.Admin, s.apply))
+	mux.HandleFunc("POST "+c+"/namespaces/{ns}/pods/{pod}/exec", s.inCluster(auth.Admin, pathNamespace, s.exec))
+	mux.HandleFunc("PUT "+c+"/resources/{group}/{version}/{resource}/{name}", s.inCluster(auth.Admin, queryNamespace, s.apply))
 
 	mux.HandleFunc("GET /api/v1/alerts", s.require(auth.Viewer, s.alerts))
-	mux.HandleFunc("POST /api/v1/alerts/test", s.require(auth.Admin, s.testAlerts))
+	mux.HandleFunc("POST /api/v1/alerts/test", s.requireEverywhere(auth.Admin, s.testAlerts))
 	mux.HandleFunc("GET /api/v1/audit", s.require(auth.Operator, s.auditEntries))
 }
 
@@ -119,15 +120,52 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request, cmd protocol.Comman
 	}
 }
 
-func (s *Server) auditEntries(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.audit.newestFirst())
+// auditEntries shows each operator the changes made where they are one;
+// changes to the server itself only to operators over everything.
+func (s *Server) auditEntries(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	out := []AuditEntry{}
+	for _, e := range s.audit.newestFirst() {
+		role := u.Everywhere()
+		if e.Cluster != "" {
+			role = u.RoleIn(e.Cluster, e.Namespace)
+		}
+		if role >= auth.Operator {
+			out = append(out, e)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---------------------------------------------------------------- reads
 
+type grantView struct {
+	Role   string       `json:"role"`
+	Scopes []auth.Scope `json:"scopes"`
+}
+
+// me tells the UI who is signed in and what they may do where, so it can
+// offer only what the server will allow.
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	u := userOf(r)
-	writeJSON(w, http.StatusOK, map[string]string{"name": u.Name, "role": u.Role.String()})
+	grants := []grantView{}
+	if u.Grants == nil {
+		grants = append(grants, grantView{Role: u.Role.String(), Scopes: []auth.Scope{}})
+	}
+	for _, g := range u.Grants {
+		scopes := g.Scopes
+		if scopes == nil {
+			scopes = []auth.Scope{}
+		}
+		grants = append(grants, grantView{Role: g.Role.String(), Scopes: scopes})
+	}
+	// The levels at which the UI marks volumes and certificates, as the
+	// alerts do.
+	volumeWarn, volumeCrit := s.cfg.Alerts.VolumeLevels()
+	certWarn, certCrit := s.cfg.Alerts.CertificateLevels()
+	writeJSON(w, http.StatusOK, map[string]any{"name": u.Name, "role": u.Role.String(), "everywhere": u.Everywhere().String(), "grants": grants,
+		"levels": map[string]any{"volumeWarning": volumeWarn, "volumeCritical": volumeCrit,
+			"certificateWarningDays": certWarn.Hours() / 24, "certificateCriticalDays": certCrit.Hours() / 24}})
 }
 
 func (s *Server) objectEvents(w http.ResponseWriter, r *http.Request) {
@@ -143,10 +181,23 @@ func (s *Server) rolloutHistory(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// helm lists the Helm releases in the namespaces the user may see.
 func (s *Server) helm(w http.ResponseWriter, r *http.Request) {
-	if res, ok := s.dispatch(w, r, protocol.Command{Type: protocol.CommandHelm}); ok {
-		writeRawJSON(w, r, res.Output)
+	res, ok := s.dispatch(w, r, protocol.Command{Type: protocol.CommandHelm})
+	if !ok {
+		return
 	}
+	u, cluster := userOf(r), r.PathValue("cluster")
+	if u.RoleIn(cluster, "") >= auth.Viewer {
+		writeRawJSON(w, r, res.Output)
+		return
+	}
+	var all []protocol.HelmRelease
+	if err := json.Unmarshal([]byte(res.Output), &all); err != nil {
+		writeError(w, http.StatusBadGateway, "the agent's Helm list could not be read: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, keep(all, func(h protocol.HelmRelease) bool { return u.RoleIn(cluster, h.Namespace) >= auth.Viewer }))
 }
 
 // metrics answers with the recorded usage of the cluster, a node or a pod:
@@ -161,6 +212,19 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	kind := q.Get("kind")
 	if kind != "cluster" && kind != "node" && kind != "pod" {
 		writeError(w, http.StatusBadRequest, "kind must be cluster, node or pod")
+		return
+	}
+	// A pod's usage is its namespace's; a node's and the cluster's belong
+	// to the whole cluster.
+	where := ""
+	if kind == "pod" {
+		if where = q.Get("namespace"); where == "" {
+			writeError(w, http.StatusBadRequest, "a pod's usage needs ?namespace=")
+			return
+		}
+	}
+	if userOf(r).RoleIn(name, where) < auth.Viewer {
+		writeError(w, http.StatusForbidden, "you have no access to this usage")
 		return
 	}
 	window := defaultWindow
@@ -307,12 +371,18 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- alerts
 
-func (s *Server) alerts(w http.ResponseWriter, _ *http.Request) {
+// alerts shows each user the problems where they have a role. The
+// deliveries name only how many problems a message had, so they stay.
+func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Alerts == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "active": []any{}, "recent": []any{}, "channels": []any{}, "deliveries": []any{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.cfg.Alerts.State())
+	u := userOf(r)
+	st := s.cfg.Alerts.State()
+	visibleTo := func(a alert.Alert) bool { return alertVisible(u, a) }
+	st.Active, st.Recent = keep(st.Active, visibleTo), keep(st.Recent, visibleTo)
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) testAlerts(w http.ResponseWriter, r *http.Request) {

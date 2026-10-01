@@ -13,9 +13,9 @@ import (
 
 // routeSettings adds what admins change in the UI: the e-mail channel.
 func (s *Server) routeSettings(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/settings/email", s.require(auth.Admin, s.emailSettings))
-	mux.HandleFunc("PUT /api/v1/settings/email", s.require(auth.Admin, s.saveEmailSettings))
-	mux.HandleFunc("POST /api/v1/settings/email/test", s.require(auth.Admin, s.testEmailSettings))
+	mux.HandleFunc("GET /api/v1/settings/email", s.requireEverywhere(auth.Admin, s.emailSettings))
+	mux.HandleFunc("PUT /api/v1/settings/email", s.requireEverywhere(auth.Admin, s.saveEmailSettings))
+	mux.HandleFunc("POST /api/v1/settings/email/test", s.requireEverywhere(auth.Admin, s.testEmailSettings))
 }
 
 // note adds a change that is not a cluster command to the audit log.

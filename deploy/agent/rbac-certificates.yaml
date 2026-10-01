@@ -1,0 +1,25 @@
+# Optional: lets the agent watch when the certificates of kubernetes.io/tls
+# Secrets expire (also set KARTAL_TLS_SECRETS to "true"). The agent reads
+# tls.crt only, never the key, and only names and dates leave the cluster.
+# Kubernetes cannot grant some Secrets only, though: this role can read all
+# of them inside the cluster. rbac-browse.yaml includes it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kartal-agent-certificates
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kartal-agent-certificates
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kartal-agent-certificates
+subjects:
+  - kind: ServiceAccount
+    name: kartal-agent

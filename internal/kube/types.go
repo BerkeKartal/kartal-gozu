@@ -176,11 +176,13 @@ type APIGroupList struct {
 }
 
 type Meta struct {
-	Name              string            `json:"name"`
-	Namespace         string            `json:"namespace"`
-	CreationTimestamp time.Time         `json:"creationTimestamp"`
-	Labels            map[string]string `json:"labels"`
-	OwnerReferences   []OwnerReference  `json:"ownerReferences"`
+	Name              string    `json:"name"`
+	Namespace         string    `json:"namespace"`
+	CreationTimestamp time.Time `json:"creationTimestamp"`
+	// Generation counts the changes to an object's spec.
+	Generation      int64             `json:"generation"`
+	Labels          map[string]string `json:"labels"`
+	OwnerReferences []OwnerReference  `json:"ownerReferences"`
 }
 
 type OwnerReference struct {

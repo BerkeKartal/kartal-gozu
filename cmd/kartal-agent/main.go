@@ -71,6 +71,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	volumeStats, err := config.Bool("KARTAL_VOLUME_STATS", false)
+	if err != nil {
+		return err
+	}
+	tlsSecrets, err := config.Bool("KARTAL_TLS_SECRETS", false)
+	if err != nil {
+		return err
+	}
 	namespaces := config.List("KARTAL_NAMESPACES")
 
 	kc, err := kubeClient()
@@ -86,7 +94,8 @@ func run(log *slog.Logger) error {
 		ServerURL: serverURL,
 		Token:     token,
 		HTTP:      httpClient,
-		Collector: &agent.Collector{Kube: kc, Namespaces: namespaces, IncludeSecrets: includeSecrets, MaxEvents: 200, Version: version},
+		Collector: &agent.Collector{Kube: kc, Namespaces: namespaces, IncludeSecrets: includeSecrets, VolumeStats: volumeStats,
+			TLSSecrets: tlsSecrets, MaxEvents: 200, Version: version},
 		Executor: &agent.Executor{
 			Kube:        kc,
 			AllowWrite:  allowWrite,
