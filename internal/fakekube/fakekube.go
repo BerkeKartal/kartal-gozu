@@ -202,6 +202,15 @@ func (f *Server) extra() extra {
 			e.podMetrics = append(e.podMetrics, fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q},
 				"containers":[{"usage":{"cpu":"%dm","memory":"%dMi"}}]}`, name, ns, f.drift(20+i*7+r*3, i*3+r), f.drift(90+i*11+r*5, i*5+r)))
 		}
+		// Every fifth team still lists a pod that was evicted when worker1
+		// ran short of disk; its Deployment has long replaced it.
+		if i%5 == 0 {
+			e.pods = append(e.pods, fmt.Sprintf(`{"metadata":{"name":"web-5d8c-%02dx","namespace":%q,"labels":{"pod-template-hash":"5d8c"},
+				"ownerReferences":[{"kind":"ReplicaSet","name":"web-5d8c","controller":true}]},
+				"spec":{"nodeName":"worker1","containers":[{"name":"web","image":"x"},{"name":"proxy","image":"y"}]},
+				"status":{"phase":"Failed","reason":"Evicted","message":"The node was low on resource: ephemeral-storage.",
+				"startTime":"2026-09-20T08:00:00Z"}}`, i, ns))
+		}
 	}
 	return e
 }

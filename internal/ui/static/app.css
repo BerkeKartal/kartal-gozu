@@ -150,7 +150,14 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 .ns-sep { border-top: 1px solid var(--line); margin: 4px 6px; }
 
 .nav { margin-top: 6px; }
-.nav-group { margin: 14px 10px 4px; font-size: 11px; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+button.nav-group {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; padding: 6px 10px;
+  border: 0; border-radius: 6px; background: none; cursor: pointer; text-align: left; font-weight: 600;
+}
+button.nav-group:hover { background: var(--panel-2); }
+.nav-group .caret { width: 10px; color: var(--muted); transition: transform .15s; }
+.nav-group[aria-expanded="true"] .caret { transform: rotate(90deg); }
+.nav-sub a.nav-item { padding-left: 28px; }
 a.nav-item {
   display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px;
   text-decoration: none; color: inherit;
@@ -231,6 +238,8 @@ td.actions-cell { width: 1%; white-space: nowrap; }
 .status-ok { color: var(--ok); }
 .status-bad { color: var(--bad); }
 .status-warn { color: var(--warn); }
+.status-idle { color: var(--muted); }
+.issue code.detail { display: block; margin-top: 2px; }
 .more-note { color: var(--muted); padding: 8px 2px; font-size: 13px; }
 .errors { border-color: var(--warn); }
 .errors li { color: var(--muted); }

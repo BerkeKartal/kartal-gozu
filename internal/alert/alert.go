@@ -53,6 +53,7 @@ const (
 var titles = map[string]string{
 	"AgentOffline":        "Agent offline",
 	"NodeNotReady":        "Node not ready",
+	"NodePressure":        "Node under pressure",
 	"PodFailing":          "Pod failing",
 	"WorkloadDegraded":    "Workload degraded",
 	"JobFailed":           "Job failed",
@@ -216,12 +217,17 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 				detail += " (" + strings.Join(n.Pressure, ", ") + ")"
 			}
 			add(Alert{Kind: "NodeNotReady", Severity: critical, Object: n.Name, Detail: detail})
+		} else if len(n.Pressure) > 0 {
+			// A ready node short of disk or memory evicts pods to cope.
+			add(Alert{Kind: "NodePressure", Severity: warning, Object: n.Name, Detail: strings.Join(n.Pressure, ", ")})
 		}
 	}
 	for _, p := range snap.Pods {
 		// A Job's finished pods are its history; the Job's own alert says
-		// how it ended. Its running pods can still crash-loop.
-		if strings.HasPrefix(p.Owner, "Job/") && (p.Phase == "Failed" || p.Phase == "Succeeded") {
+		// how it ended. Its running pods can still crash-loop. A pod that
+		// its controller replaced is history too; NodePressure and
+		// WorkloadDegraded tell what matters.
+		if strings.HasPrefix(p.Owner, "Job/") && (p.Phase == "Failed" || p.Phase == "Succeeded") || p.Replaced() {
 			continue
 		}
 		// An init container's trouble comes as "Init:CrashLoopBackOff" and

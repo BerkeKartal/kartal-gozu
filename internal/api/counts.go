@@ -21,6 +21,7 @@ type objectCounts struct {
 	DaemonSetsDegraded   int `json:"daemonSetsDegraded"`
 	Pods                 int `json:"pods"`
 	PodsUnhealthy        int `json:"podsUnhealthy"`
+	PodsReplaced         int `json:"podsReplaced"` // left behind, not unhealthy
 	Services             int `json:"services"`
 	Ingresses            int `json:"ingresses"`
 	ConfigMaps           int `json:"configMaps"`
@@ -75,11 +76,14 @@ func tally(snap *protocol.Snapshot, lv levels) (objectCounts, map[string]*object
 		})
 	}
 	for _, p := range snap.Pods {
-		unhealthy := !p.Healthy()
+		unhealthy, replaced := p.Troubled(), p.Replaced()
 		count(p.Namespace, func(c *objectCounts) {
 			c.Pods++
 			if unhealthy {
 				c.PodsUnhealthy++
+			}
+			if replaced {
+				c.PodsReplaced++
 			}
 		})
 	}

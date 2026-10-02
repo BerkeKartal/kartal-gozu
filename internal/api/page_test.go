@@ -103,6 +103,7 @@ func TestProblemsFilter(t *testing.T) {
 			{Namespace: "a", Name: "crash", Phase: "Running", Total: 1, Reason: "CrashLoopBackOff"},
 			{Namespace: "b", Name: "done", Phase: "Succeeded", Total: 1},
 			{Namespace: "b", Name: "pending", Phase: "Pending", Total: 1},
+			{Namespace: "b", Name: "evicted", Phase: "Failed", Reason: "Evicted", Total: 1, Owner: "Deployment/web"},
 		},
 	}, time.Now())
 	get := func(query string) *httptest.ResponseRecorder {
@@ -120,9 +121,9 @@ func TestProblemsFilter(t *testing.T) {
 		return strings.Join(out, ",")
 	}
 	for query, want := range map[string]string{
-		"pods":                             "ok,crash,done,pending",
+		"pods":                             "ok,crash,done,pending,evicted",
 		"pods?problems=true":               "crash,pending",
-		"pods?problems=false":              "ok,crash,done,pending",
+		"pods?problems=false":              "ok,crash,done,pending,evicted",
 		"pods?problems=true&namespace=b":   "pending",
 		"pods?namespace=a&problems=1":      "crash",
 		"workloads?problems=true":          "",

@@ -125,7 +125,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	mux.HandleFunc(c+"/workloads", snapshotList(s, func(x *protocol.Snapshot) []protocol.Workload { return x.Workloads },
 		func(x protocol.Workload) string { return x.Namespace }, protocol.Workload.Degraded))
 	mux.HandleFunc(c+"/pods", snapshotList(s, func(x *protocol.Snapshot) []protocol.Pod { return x.Pods },
-		func(x protocol.Pod) string { return x.Namespace }, func(p protocol.Pod) bool { return !p.Healthy() }))
+		func(x protocol.Pod) string { return x.Namespace }, protocol.Pod.Troubled))
 	mux.HandleFunc(c+"/services", snapshotList(s, func(x *protocol.Snapshot) []protocol.Service { return x.Services },
 		func(x protocol.Service) string { return x.Namespace }, nil))
 	mux.HandleFunc(c+"/ingresses", snapshotList(s, func(x *protocol.Snapshot) []protocol.Ingress { return x.Ingresses },

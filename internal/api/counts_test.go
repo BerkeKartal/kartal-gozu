@@ -23,6 +23,7 @@ func TestCountsPerKindAndNamespace(t *testing.T) {
 		Pods: []protocol.Pod{
 			{Namespace: "a", Name: "web-1", Phase: "Running", Ready: 1, Total: 1},
 			{Namespace: "a", Name: "web-2", Phase: "Running", Total: 1, Reason: "CrashLoopBackOff"},
+			{Namespace: "b", Name: "api-old", Phase: "Failed", Total: 1, Reason: "Evicted", Owner: "Deployment/api"},
 		},
 		Services:     []protocol.Service{{Namespace: "a", Name: "web"}, {Namespace: "b", Name: "api"}},
 		Ingresses:    []protocol.Ingress{{Namespace: "a", Name: "web"}},
@@ -46,7 +47,7 @@ func TestCountsPerKindAndNamespace(t *testing.T) {
 	get("/api/v1/clusters/demo", &sum)
 	want := objectCounts{
 		Workloads: 4, WorkloadsDegraded: 2, Deployments: 2, DeploymentsDegraded: 1, StatefulSets: 1, StatefulSetsDegraded: 1, DaemonSets: 1,
-		Pods: 2, PodsUnhealthy: 1, Services: 2, Ingresses: 1, ConfigMaps: 2, Secrets: 1, VolumeClaims: 1, VolumeClaimsUnbound: 1,
+		Pods: 3, PodsUnhealthy: 1, PodsReplaced: 1, Services: 2, Ingresses: 1, ConfigMaps: 2, Secrets: 1, VolumeClaims: 1, VolumeClaimsUnbound: 1,
 		Jobs: 2, JobsFailed: 1, CronJobs: 1, Warnings: 3,
 	}
 	if sum.Counts.objectCounts != want || sum.Counts.Namespaces != 3 {
@@ -63,7 +64,7 @@ func TestCountsPerKindAndNamespace(t *testing.T) {
 		a.ConfigMaps != 2 || a.Ingresses != 1 || a.Warnings != 1 {
 		t.Errorf("namespace a: %+v", a)
 	}
-	if b.StatefulSetsDegraded != 1 || b.Secrets != 1 || b.VolumeClaimsUnbound != 1 || b.JobsFailed != 1 || b.CronJobs != 1 || b.Warnings != 2 {
+	if b.StatefulSetsDegraded != 1 || b.Pods != 1 || b.PodsUnhealthy != 0 || b.PodsReplaced != 1 || b.Secrets != 1 || b.VolumeClaimsUnbound != 1 || b.JobsFailed != 1 || b.CronJobs != 1 || b.Warnings != 2 {
 		t.Errorf("namespace b: %+v", b)
 	}
 	if empty.objectCounts != (objectCounts{}) {

@@ -89,7 +89,7 @@ const STRINGS = {
     grpApps: 'Applications', grpOps: 'Operations',
     chooseNamespace: 'Choose the namespace every view shows',
     pinned: 'Pinned', namespaces: 'Namespaces', namespace: 'Namespace', allNamespaces: 'All namespaces',
-    filterNamespaces: 'Filter namespaces', pinHint: 'Star ☆ a namespace or any row to keep it here.',
+    filterNamespaces: 'Filter namespaces',
     pin: 'Pin to the top', unpin: 'Unpin', podsIn: 'Pods in {0}', eventsIn: 'Warning events in {0}',
     logsOf: 'Logs of {0}', unhealthyPods: '{0} unhealthy pods', noMatch: 'Nothing matches.',
     loading: 'Loading…', menu: 'Menu', search: 'Search', searchTitle: 'Jump to a namespace, view or object',
@@ -107,7 +107,9 @@ const STRINGS = {
     cpu: 'CPU', memory: 'Memory', cores: 'cores', usedOf: '{0} of {1}', noMetrics: 'metrics-server not available',
     used: 'Used', requested: 'Requested', clusterUsage: 'Cluster usage, last hour',
     attention: 'Needs attention', allGood: 'Everything looks healthy.', recentWarnings: 'Recent warnings',
-    collectionErrors: 'Could not collect', nodeNotReady: 'Node {0} is not ready', readyOf: '{0} of {1} ready',
+    collectionErrors: 'Could not collect', nodeNotReady: 'Node {0} is not ready', nodePressure: 'Node {0} is short of resources', replaced: 'replaced',
+    replacedPods: 'Old pods left behind: {0}', replacedHint: 'Evicted or failed pods that their Deployment, StatefulSet or DaemonSet already replaced. Kubernetes keeps them until someone deletes them.',
+    readyOf: '{0} of {1} ready',
     nRestarts: '{0} restarts', andMore: 'and {0} more', yes: 'yes', no: 'no', none: 'none',
     'col.name': 'Name', 'col.kind': 'Kind', 'col.namespace': 'Namespace', 'col.status': 'Status',
     'col.ready': 'Ready', 'col.restarts': 'Restarts', 'col.cpu': 'CPU', 'col.memory': 'Memory',
@@ -203,7 +205,7 @@ const STRINGS = {
     notified: 'notified', waitingNotify: 'waiting', noAlerts: 'No active problems.',
     alertsAfter: 'A problem is notified once it has lasted {0}; problems that start or end together go out as one message.',
     deliveries: 'Last deliveries', resolvedAt: 'resolved', startedAt: 'started',
-    'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.PodFailing': 'Pod failing',
+    'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.NodePressure': 'Node under pressure', 'alert.PodFailing': 'Pod failing',
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
     'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
     certificates: 'Certificates', uptime: 'URL checks', fromServer: 'Checked from the Kartal Gözü server',
@@ -248,7 +250,6 @@ const STRINGS = {
     chooseNamespace: 'Tüm görünümlerin gösterdiği namespace’i seç',
     pinned: 'Sabitlenenler', namespaces: 'Namespace’ler', namespace: 'Namespace',
     allNamespaces: 'Tüm namespace’ler', filterNamespaces: 'Namespace ara',
-    pinHint: 'Yıldızladığın ☆ namespace ve satırlar burada durur.',
     pin: 'Üste sabitle', unpin: 'Sabitlemeyi kaldır', podsIn: '{0} içindeki podlar',
     eventsIn: '{0} içindeki uyarı olayları', logsOf: '{0} logları', unhealthyPods: '{0} sorunlu pod',
     noMatch: 'Eşleşen bir şey yok.', loading: 'Yükleniyor…', menu: 'Menü', search: 'Ara',
@@ -267,7 +268,9 @@ const STRINGS = {
     cpu: 'CPU', memory: 'Bellek', cores: 'çekirdek', usedOf: '{0} / {1}', noMetrics: 'metrics-server yok',
     used: 'Kullanılan', requested: 'Ayrılan', clusterUsage: 'Cluster kullanımı, son bir saat',
     attention: 'İlgilenilmesi gerekenler', allGood: 'Her şey sağlıklı görünüyor.', recentWarnings: 'Son uyarılar',
-    collectionErrors: 'Toplanamayanlar', nodeNotReady: '{0} node’u hazır değil', readyOf: '{1} replikadan {0} hazır',
+    collectionErrors: 'Toplanamayanlar', nodeNotReady: '{0} node’u hazır değil', nodePressure: '{0} node’unda kaynak sıkıntısı', replaced: 'yenisi açıldı',
+    replacedPods: 'Geride kalan eski pod: {0}', replacedHint: 'Deployment, StatefulSet ya da DaemonSet’in yerine yenisini açtığı, evict edilmiş ya da düşmüş podlar. Kubernetes bunları biri silene kadar tutar.',
+    readyOf: '{1} replikadan {0} hazır',
     nRestarts: '{0} yeniden başlama', andMore: 've {0} tane daha', yes: 'evet', no: 'hayır', none: 'yok',
     'col.name': 'Ad', 'col.kind': 'Tür', 'col.namespace': 'Namespace', 'col.status': 'Durum',
     'col.ready': 'Hazır', 'col.restarts': 'Yeniden başlama', 'col.cpu': 'CPU', 'col.memory': 'Bellek',
@@ -365,7 +368,7 @@ const STRINGS = {
     notified: 'bildirildi', waitingNotify: 'bekliyor', noAlerts: 'Aktif sorun yok.',
     alertsAfter: 'Bir sorun {0} sürerse bildirilir; birlikte başlayan ya da biten sorunlar tek mesajda gider.',
     deliveries: 'Son gönderimler', resolvedAt: 'çözüldü', startedAt: 'başladı',
-    'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.PodFailing': 'Pod hata veriyor',
+    'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.NodePressure': 'Node’da kaynak sıkıntısı', 'alert.PodFailing': 'Pod hata veriyor',
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
     'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
     certificates: 'Sertifikalar', uptime: 'URL kontrolleri', fromServer: 'Kartal Gözü sunucusundan denetlenir',
@@ -541,6 +544,17 @@ function quantity(q, milli) {
 
 function podHealthy(p) {
   return p.phase === 'Succeeded' || (p.phase === 'Running' && p.ready === p.total && !p.reason);
+}
+// podReplaced: the pod stopped for good and its controller already runs
+// another in its place, like an evicted pod of a Deployment. It is only
+// left over, as the server counts it (protocol.Pod.Replaced).
+const REPLACING = new Set(['Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet']);
+function podReplaced(p) {
+  return p.phase === 'Failed' && REPLACING.has((p.owner || '').split('/')[0]);
+}
+function podStatus(p) {
+  if (podReplaced(p)) return h('span', { class: 'status-idle', title: t('replacedHint') }, podState(p) + ' · ' + t('replaced'));
+  return pill(podState(p), podHealthy(p) ? 'ok' : 'bad');
 }
 function podState(p) {
   if (p.reason) return p.reason;
@@ -1059,11 +1073,12 @@ function startApp() {
   els.top = h('header', { class: 'top' });
   els.nsPicker = h('div', { class: 'ns-picker' });
   els.pinned = h('div');
+  els.pinnedBox = h('div', { hidden: true }, h('h3', null, h('span', null, '★ ' + t('pinned'))), els.pinned);
   els.nav = h('nav', { class: 'nav', 'aria-label': t('menu') });
   navSig = '';
   els.side = h('aside', { class: 'side' },
     els.nsPicker,
-    h('h3', null, h('span', null, '★ ' + t('pinned'))), els.pinned,
+    els.pinnedBox,
     els.nav);
   els.head = h('div');
   els.banner = h('div');
@@ -1204,7 +1219,9 @@ function renderNsMenuList() {
 function renderPinned() {
   if (!els.pinned) return;
   const rows = [...favs.ns.map(ns => namespaceRow(nsSummary(ns), true)), ...favs.obj.map(objectRow)];
-  fill(els.pinned, rows.length ? rows : h('div', { class: 'empty-note' }, t('pinHint')));
+  // Nothing pinned yet: the section stays out of the way.
+  els.pinnedBox.hidden = !rows.length;
+  fill(els.pinned, rows);
 }
 
 // navCounts are the numbers in the navigation: the selected namespace's, or
@@ -1215,6 +1232,31 @@ function navCounts() {
   if (!state.ns) return cluster;
   return Object.assign({}, (state.namespaces || []).find(n => n.name === state.ns),
     { nodes: cluster.nodes, nodesNotReady: cluster.nodesNotReady, namespaces: cluster.namespaces, alerts: cluster.alerts });
+}
+
+// The navigation's groups open and close with a click. The group holding
+// the current view opens by itself; the others stay as the user left them,
+// remembered in this browser.
+const NAV_OPEN_KEY = 'kartal.navOpen';
+const navOpen = new Set((readStore('localStorage', NAV_OPEN_KEY) || '').split(',').filter(Boolean));
+let navShutAt = null; // the view whose own group the user closed
+
+function groupOpen(section) {
+  if (section.items.includes(state.view)) return navShutAt !== state.view;
+  return navOpen.has(section.group);
+}
+
+function toggleGroup(section) {
+  if (groupOpen(section)) {
+    navOpen.delete(section.group);
+    if (section.items.includes(state.view)) navShutAt = state.view;
+  } else {
+    navOpen.add(section.group);
+    if (section.items.includes(state.view)) navShutAt = null;
+  }
+  writeStore('localStorage', NAV_OPEN_KEY, [...navOpen].join(',') || null);
+  navSig = '';
+  renderNav();
 }
 
 // The navigation is redrawn only when something it shows changed.
@@ -1228,17 +1270,31 @@ function renderNav() {
   fill(els.nav, NAV.map(section => {
     // The audit log is for operators; nodes are the whole cluster's.
     const items = section.items.filter(id => (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0));
+    if (!section.group) return items.map(id => navItem(id, counts));
+    if (!items.length) return null;
+    const open = groupOpen(section);
+    // A closed group still shows that something inside needs attention.
+    const bad = open ? 0 : items.reduce((n, id) => n + (id === 'events' ? 0 : navProblems(id, counts)), 0);
+    const warn = open || bad || !items.includes('events') ? 0 : navProblems('events', counts);
     return [
-      section.group && items.length ? h('div', { class: 'nav-group' }, t(section.group)) : null,
-      items.map(id => navItem(id, counts)),
+      h('button', { type: 'button', class: 'nav-group', 'aria-expanded': String(open), onclick: () => toggleGroup(section) },
+        h('span', { class: 'caret', 'aria-hidden': 'true' }, '›'),
+        h('span', { class: 'nav-label' }, t(section.group)),
+        bad ? h('span', { class: 'badge bad' }, bad) : warn ? h('span', { class: 'badge warn' }, warn) : null),
+      open ? h('div', { class: 'nav-sub' }, items.map(id => navItem(id, counts))) : null,
     ];
   }));
 }
 
+function navProblems(id, counts) {
+  const problemKey = (NAV_COUNT[id] || [])[1];
+  return [].concat(problemKey || []).reduce((n, k) => n + (counts[k] || 0), 0);
+}
+
 function navItem(id, counts) {
-  const [totalKey, problemKey] = NAV_COUNT[id] || [];
+  const totalKey = (NAV_COUNT[id] || [])[0];
   const total = totalKey ? counts[totalKey] : null;
-  const problems = [].concat(problemKey || []).reduce((n, k) => n + (counts[k] || 0), 0);
+  const problems = navProblems(id, counts);
   const active = id === state.view;
   return h('a', { class: active ? 'nav-item active' : 'nav-item', href: routeHash({ view: id }), 'aria-current': active ? 'page' : null },
     h('span', { class: 'nav-label' }, t(id)),
@@ -1527,12 +1583,12 @@ const TABLES = {
   },
   pods: {
     key: p => 'Pod/' + p.namespace + '/' + p.name,
-    problem: p => !podHealthy(p),
+    problem: p => !podHealthy(p) && !podReplaced(p),
     text: p => [p.namespace, p.name, p.phase, p.reason, p.node, p.ip, p.owner],
     columns: [
       ['name', p => nameLink('Pod', p.namespace, p.name, p.owner), p => p.name],
       ['namespace', p => nsLink(p.namespace), p => p.namespace],
-      ['status', p => pill(podState(p), podHealthy(p) ? 'ok' : 'bad'), p => podState(p)],
+      ['status', podStatus, p => podState(p)],
       ['ready', p => p.ready + '/' + p.total, p => (p.total ? p.ready / p.total : 1)],
       ['restarts', p => (p.restarts ? pill(p.restarts, 'warn') : '0'), p => p.restarts],
       ['cpu', p => usageWithRequest(p.usage && p.usage.cpuMilli, p.requests && p.requests.cpuMilli, p.limits && p.limits.cpuMilli, cpu),
@@ -1872,7 +1928,7 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
       card(t('warnings'), events.length, t('warningEvents'), false, routeHash({ view: 'events' })),
       whole ? capacityCard(t('cpu'), use && use.cpuMilli, req.cpuMilli, cap.cpuMilli, cores, ' ' + t('cores')) : null,
       whole ? capacityCard(t('memory'), use && use.memoryBytes, req.memoryBytes, cap.memoryBytes, bytes) : null),
-    attentionPanel(notReady, degraded, unhealthy),
+    attentionPanel(nodes.filter(n => !n.ready || (n.pressure || []).length), degraded, unhealthy, total.podsReplaced || 0),
     usage && usage.points && usage.points.length > 1 ? panel(t('clusterUsage'), h('div', { class: 'charts' },
       lineChart({ title: t('cpu'), points: usage.points, value: p => p.cpu, format: cpuUnit, guides: [
         { label: upper(t('allocatable')), value: cap.cpuMilli }, { label: upper(t('requested')), value: req.cpuMilli }] }),
@@ -1886,11 +1942,13 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
   ];
 }
 
-function attentionPanel(notReady, degraded, unhealthy) {
+// attentionPanel lists what is wrong, and notes the pods left behind by
+// their controllers, which only want cleaning up.
+function attentionPanel(troubledNodes, degraded, unhealthy, replaced) {
   const items = [
-    ...notReady.map(n => ({
-      rank: 2, title: t('nodeNotReady', n.name), detail: (n.pressure || []).join(', '),
-      actions: [detailButton('Node', '', n.name)],
+    ...troubledNodes.map(n => ({
+      rank: 2, level: n.ready ? 'warn' : 'bad', title: t(n.ready ? 'nodePressure' : 'nodeNotReady', n.name),
+      detail: (n.pressure || []).join(', '), actions: [detailButton('Node', '', n.name)],
     })),
     ...degraded.map(w => ({
       rank: favRank(w.kind + '/' + w.namespace + '/' + w.name, w.namespace),
@@ -1908,14 +1966,24 @@ function attentionPanel(notReady, degraded, unhealthy) {
     })),
   ].sort((a, b) => a.rank - b.rank);
   const shown = items.slice(0, 20);
+  const cleanup = 'kubectl delete pod ' + (state.ns ? '-n ' + state.ns : '-A') + ' --field-selector=status.phase=Failed';
   return panel(t('attention'), [
     items.length ? shown.map(it => h('div', { class: 'issue' },
-      h('span', { class: 'dot bad' }),
+      h('span', { class: 'dot ' + (it.level || 'bad') }),
       h('div', { class: 'what' }, h('div', { class: 'title' }, it.rank < 2 ? '★ ' : '', it.title), it.detail ? h('div', { class: 'detail' }, it.detail) : null),
       h('div', { class: 'actions' }, it.actions))) : h('div', { class: 'ok-note' }, '✓ ' + t('allGood')),
     items.length > shown.length
       ? h('div', { class: 'issue' }, h('a', { class: 'ns-link', href: routeHash({ view: 'pods', problems: true }) }, t('andMore', items.length - shown.length)))
       : null,
+    replaced ? h('div', { class: 'issue' },
+      h('span', { class: 'dot' }),
+      h('div', { class: 'what' },
+        h('div', { class: 'title' }, t('replacedPods', replaced)),
+        h('div', { class: 'detail' }, t('replacedHint')),
+        h('code', { class: 'mono detail' }, cleanup)),
+      h('div', { class: 'actions' },
+        button(t('copy'), () => copyText(cleanup)),
+        linkButton(t('pods'), routeHash({ view: 'pods', q: 'Failed' })))) : null,
   ]);
 }
 
@@ -2027,7 +2095,7 @@ function renderAlerts(st) {
 function alertObject(a) {
   if (a.cluster !== state.cluster) return a.object;
   const kinds = {
-    NodeNotReady: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim',
+    NodeNotReady: 'Node', NodePressure: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim',
     VolumeFilling: 'PersistentVolumeClaim', CertificateExpiring: 'Secret',
   };
   let kind = kinds[a.kind];

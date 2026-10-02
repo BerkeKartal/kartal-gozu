@@ -389,7 +389,8 @@ on are sent as soon as one is.
 |---|---|
 | Agent offline | the agent has been silent longer than `KARTAL_STALE_AFTER` |
 | Node not ready | a node is not ready |
-| Pod failing | `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `OOMKilled`, `Evicted` and similar, in init containers too; a Job's finished pods are left to the Job |
+| Node under pressure | a ready node reports `DiskPressure`, `MemoryPressure` or `PIDPressure`, and starts evicting pods |
+| Pod failing | `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `OOMKilled`, `Evicted` and similar, in init containers too; a Job's finished pods are left to the Job, and a failed pod that its Deployment, StatefulSet or DaemonSet already replaced is only counted as left behind |
 | Workload degraded | fewer replicas are ready than wanted |
 | Job failed | a Job gave up (its `Failed` condition); one still retrying is not a problem yet |
 | Volume claim unbound | a claim is not bound |

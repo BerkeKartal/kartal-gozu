@@ -151,11 +151,14 @@ func TestTeamsAndWebhookPayloads(t *testing.T) {
 func TestWhatCountsAsAProblem(t *testing.T) {
 	m := NewManager(time.Hour, nil)
 	m.Observe("prod", &protocol.Snapshot{
+		Nodes: []protocol.Node{{Name: "n1", Ready: true, Pressure: []string{"DiskPressure"}}, {Name: "n2", Ready: true}},
 		Pods: []protocol.Pod{
 			{Namespace: "a", Name: "init-loop", Phase: "Pending", Reason: "Init:CrashLoopBackOff", Owner: "Deployment/web"},
 			{Namespace: "a", Name: "job-pod-done", Phase: "Failed", Reason: "Error", Owner: "Job/backup-1"},
 			{Namespace: "a", Name: "job-pod-looping", Phase: "Running", Reason: "CrashLoopBackOff", Owner: "Job/backup-2"},
+			// Its Deployment already runs another pod in its place.
 			{Namespace: "a", Name: "evicted", Phase: "Failed", Reason: "Evicted", Owner: "Deployment/web"},
+			{Namespace: "a", Name: "evicted-alone", Phase: "Failed", Reason: "Evicted"},
 		},
 		Jobs: []protocol.Job{
 			{Namespace: "a", Name: "backup-1", Completions: 1, Failed: 3, Condition: "Failed"},
@@ -166,7 +169,7 @@ func TestWhatCountsAsAProblem(t *testing.T) {
 	for _, a := range m.State().Active {
 		got = append(got, a.Kind+" "+a.Object)
 	}
-	want := "JobFailed backup-1,PodFailing evicted,PodFailing init-loop,PodFailing job-pod-looping"
+	want := "JobFailed backup-1,NodePressure n1,PodFailing evicted-alone,PodFailing init-loop,PodFailing job-pod-looping"
 	sort.Strings(got)
 	if strings.Join(got, ",") != want {
 		t.Errorf("active:\n got %s\nwant %s", strings.Join(got, ","), want)

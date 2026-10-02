@@ -1,7 +1,10 @@
 // Package protocol holds the wire types shared by the server and the agent.
 package protocol
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Snapshot is the periodic summary an agent sends about its cluster. It
 // carries names and status only; object contents are fetched on demand.
@@ -125,6 +128,22 @@ func (p Pod) Healthy() bool {
 	}
 	return p.Phase == "Running" && p.Ready == p.Total && p.Reason == ""
 }
+
+// Replaced reports whether the pod stopped for good and its controller
+// already runs another in its place, like an evicted pod of a Deployment.
+// Kubernetes keeps such pods until someone deletes them. They are history,
+// not a problem: the workload's own readiness says whether it suffers.
+func (p Pod) Replaced() bool {
+	kind, _, _ := strings.Cut(p.Owner, "/")
+	return p.Phase == "Failed" && replacing[kind]
+}
+
+// replacing are the controllers that start a new pod when one fails.
+var replacing = map[string]bool{"Deployment": true, "ReplicaSet": true, "StatefulSet": true, "DaemonSet": true}
+
+// Troubled reports whether the pod needs someone's attention: it is not
+// healthy, and no controller has taken over from it.
+func (p Pod) Troubled() bool { return !p.Healthy() && !p.Replaced() }
 
 type ServicePort struct {
 	Name       string `json:"name,omitempty"`
