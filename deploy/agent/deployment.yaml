@@ -48,6 +48,9 @@ spec:
             # only tls.crt is read, never the key.
             - name: KARTAL_TLS_SECRETS
               value: "false"
+            # The metrics that pods expose, such as /metrics (needs rbac-pod-metrics.yaml).
+            - name: KARTAL_POD_METRICS
+              value: "false"
             # List Secret names in the snapshot (needs rbac-browse.yaml); values are never sent.
             - name: KARTAL_INCLUDE_SECRETS
               value: "false"

@@ -67,6 +67,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	podMetrics, err := config.Bool("KARTAL_POD_METRICS", false)
+	if err != nil {
+		return err
+	}
 	includeSecrets, err := config.Bool("KARTAL_INCLUDE_SECRETS", false)
 	if err != nil {
 		return err
@@ -101,6 +105,7 @@ func run(log *slog.Logger) error {
 			AllowWrite:  allowWrite,
 			AllowExec:   allowExec,
 			AllowEdit:   allowEdit,
+			AllowScrape: podMetrics,
 			Namespaces:  namespaces,
 			MaxLogBytes: 1 << 20,
 		},

@@ -61,6 +61,7 @@ var titles = map[string]string{
 	"VolumeFilling":       "Volume filling up",
 	"CertificateExpiring": "Certificate expiring",
 	"URLDown":             "Address not answering",
+	"MetricLimit":         "Metric past its limit",
 }
 
 // podFailing are the pod reasons worth telling someone about; a pod merely
@@ -277,7 +278,7 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 			add(a)
 		}
 	}
-	m.update(cluster, found, func(a *Alert) bool { return a.Kind != "AgentOffline" }, now)
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind != "AgentOffline" && a.Kind != MetricLimit }, now)
 }
 
 // VolumeLevels are how full a volume may get, in percent, before it is a
@@ -389,6 +390,19 @@ func (m *Manager) ObserveChecks(alerts []Alert, now time.Time) {
 		found[a.key()] = a
 	}
 	m.update("", found, func(*Alert) bool { return true }, now)
+}
+
+// MetricLimit is the kind of alert for a watched metric past its limit.
+const MetricLimit = "MetricLimit"
+
+// ObserveMetrics replaces a cluster's alerts about watched metrics.
+func (m *Manager) ObserveMetrics(cluster string, alerts []Alert, now time.Time) {
+	found := map[string]Alert{}
+	for _, a := range alerts {
+		a.Cluster, a.Kind = cluster, MetricLimit
+		found[a.key()] = a
+	}
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind == MetricLimit }, now)
 }
 
 // AgentStatus records whether a cluster's agent is reporting.

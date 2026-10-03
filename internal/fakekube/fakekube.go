@@ -192,9 +192,10 @@ func (f *Server) extra() extra {
 					"lastTimestamp":"2026-09-29T08:%02d:00Z"}`, ns, name, ns, restarts, i%60))
 			}
 			e.pods = append(e.pods, fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q,"labels":{"pod-template-hash":"5d8c"},
+				"annotations":{"prometheus.io/scrape":"true","prometheus.io/port":"9100"},
 				"ownerReferences":[{"kind":"ReplicaSet","name":"web-5d8c","controller":true}]},
 				"spec":{"nodeName":%q,"containers":[
-					{"name":"web","image":"x","resources":{"requests":{"cpu":"50m","memory":"64Mi"},"limits":{"cpu":"250m","memory":"256Mi"}}},
+					{"name":"web","image":"x","ports":[{"name":"http","containerPort":8080},{"name":"metrics","containerPort":9100}],"resources":{"requests":{"cpu":"50m","memory":"64Mi"},"limits":{"cpu":"250m","memory":"256Mi"}}},
 					{"name":"proxy","image":"y","resources":{"requests":{"cpu":"10m","memory":"32Mi"}}}]},
 				"status":{"phase":"Running","podIP":"10.1.%d.%d","startTime":"2026-09-2%dT08:00:00Z",
 				"containerStatuses":[{"name":"web","ready":%t,"restartCount":%d,"state":%s},{"name":"proxy","ready":true,"restartCount":0,"state":{"running":{}}}]}}`,
@@ -255,7 +256,7 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	x := f.extra()
 
-	if f.serveMore(w, r, x, metaOnly) || f.serveStorage(w, r, x, metaOnly) {
+	if f.serveMore(w, r, x, metaOnly) || f.serveStorage(w, r, x, metaOnly) || f.servePodMetrics(w, r) {
 		return
 	}
 	if ns, pod, ok := logPath(p); ok {

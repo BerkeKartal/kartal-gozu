@@ -36,7 +36,9 @@ export function lineChart({ title, points, value, format, guides = [], height = 
     return box;
   }
   const values = points.map(value);
-  const peak = Math.max(1, ...values);
+  // Small values, such as a few errors a second, still fill the chart.
+  const highest = Math.max(...values);
+  const peak = highest > 0 ? highest : 1;
   // A guide far above the data, such as a node's whole capacity, would
   // flatten the line into the floor; those are only named below the chart.
   const drawn = guides.filter(g => g.value > 0 && g.value <= peak * 4);

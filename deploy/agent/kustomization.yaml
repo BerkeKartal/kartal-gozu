@@ -21,6 +21,9 @@ resources:
   # - rbac-volumes.yaml
   # When the certificates of TLS Secrets expire (also KARTAL_TLS_SECRETS):
   # - rbac-certificates.yaml
+  # The metrics pods expose, read through the API server (also
+  # KARTAL_POD_METRICS):
+  # - rbac-pod-metrics.yaml
 
 images:
   - name: kartal-gozu

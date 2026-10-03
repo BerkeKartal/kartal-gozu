@@ -18,6 +18,7 @@ import (
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
+	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/config"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
@@ -89,7 +90,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	// Settings admins make in the UI: the e-mail channel (unless the
-	// environment sets it) and the URL checks.
+	// environment sets it), the URL checks and the watched metrics.
 	loadCtx, cancelLoad := context.WithTimeout(context.Background(), 15*time.Second)
 	keeper := settings.NewKeeper(loadCtx, st, log)
 	cancelLoad()
@@ -99,6 +100,7 @@ func run(log *slog.Logger) error {
 	}
 	mail := settings.NewMail(keeper, alerts.Email, env)
 	checks := uptime.New(keeper, alerts.Manager, log)
+	watches := appmetrics.New(keeper, alerts.Manager, log)
 	keeper.OnLoad(mail.Reload)
 	keeper.OnLoad(checks.Reload)
 	staleAfter, err := config.Duration("KARTAL_STALE_AFTER", time.Minute)
@@ -124,6 +126,7 @@ func run(log *slog.Logger) error {
 		Alerts:         alerts.Manager,
 		Mail:           mail,
 		Checks:         checks,
+		Watches:        watches,
 		SessionTTL:     sessionTTL,
 	}
 	if login != nil {
@@ -136,6 +139,7 @@ func run(log *slog.Logger) error {
 	defer stop()
 	go server.Watch(ctx)
 	checks.Start(ctx)
+	watches.Start(ctx)
 	// Settings that could not be read at the start are read again.
 	go keeper.Retry(ctx, time.Minute)
 

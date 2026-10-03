@@ -2,6 +2,10 @@
 package protocol
 
 import (
+	"fmt"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,7 +37,7 @@ type Snapshot struct {
 	// the rest of the snapshot is still valid.
 	Errors []string `json:"errors,omitempty"`
 	// Capabilities lists what this agent was allowed to do beyond reading:
-	// CapabilityWrite, CapabilityExec, CapabilityEdit.
+	// CapabilityWrite, CapabilityExec, CapabilityEdit, CapabilityScrape.
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
@@ -45,6 +49,8 @@ const (
 	CapabilityExec = "exec"
 	// CapabilityEdit covers changing objects from their YAML.
 	CapabilityEdit = "edit"
+	// CapabilityScrape covers reading the metrics that pods expose.
+	CapabilityScrape = "scrape"
 )
 
 // Resources is an amount of CPU (millicores), memory (bytes) and pod slots.
@@ -354,7 +360,71 @@ const (
 	CommandApply = "apply"
 	// CommandHelm lists Helm releases.
 	CommandHelm = "helm"
+	// CommandScrape reads the metrics a pod (Namespace, Name) exposes at
+	// Port and Path, in the Prometheus text format, and returns a Scrape.
+	CommandScrape = "scrape"
+	// CommandSample reads the samples named in Metrics from each of Pods
+	// (in Namespace) at Port and Path, and returns []PodSamples.
+	CommandSample = "sample"
 )
+
+// Scrape is what a pod exposes: its metrics, by name.
+type Scrape struct {
+	Families []MetricFamily `json:"families"`
+	// Truncated says that more samples were exposed than are returned.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// MetricFamily is one metric with its samples. A histogram's samples are
+// named <name>_bucket, <name>_sum and <name>_count.
+type MetricFamily struct {
+	Name    string   `json:"name"`
+	Type    string   `json:"type"` // counter, gauge, histogram, summary or untyped
+	Help    string   `json:"help,omitempty"`
+	Samples []Sample `json:"samples"`
+}
+
+// Sample is one value of a metric, for one set of labels.
+type Sample struct {
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Value  Number            `json:"value"`
+}
+
+// PodSamples are the samples read from one pod, or why it could not be read.
+type PodSamples struct {
+	Pod     string   `json:"pod"`
+	Samples []Sample `json:"samples,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// Number is a sample's value. JSON has no NaN or infinity, which samples
+// can be (a summary with no observations), so those travel as the strings
+// "NaN", "+Inf" and "-Inf".
+type Number float64
+
+func (n Number) MarshalJSON() ([]byte, error) {
+	f := float64(n)
+	switch {
+	case math.IsNaN(f):
+		return []byte(`"NaN"`), nil
+	case math.IsInf(f, 1):
+		return []byte(`"+Inf"`), nil
+	case math.IsInf(f, -1):
+		return []byte(`"-Inf"`), nil
+	}
+	return strconv.AppendFloat(nil, f, 'g', -1, 64), nil
+}
+
+func (n *Number) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("invalid sample value %s", b)
+	}
+	*n = Number(f)
+	return nil
+}
 
 // Command is an action the server asks an agent to perform.
 type Command struct {
@@ -379,6 +449,12 @@ type Command struct {
 	Exec     []string `json:"exec,omitempty"`
 	Body     string   `json:"body,omitempty"`
 	DryRun   bool     `json:"dryRun,omitempty"`
+	// Port (a number) and Path are where pods expose their metrics; Pods
+	// and Metrics say which to read for CommandSample.
+	Port    string   `json:"port,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Pods    []string `json:"pods,omitempty"`
+	Metrics []string `json:"metrics,omitempty"`
 }
 
 type Result struct {
@@ -386,4 +462,24 @@ type Result struct {
 	OK        bool   `json:"ok"`
 	Output    string `json:"output,omitempty"`
 	Error     string `json:"error,omitempty"`
+}
+
+var metricsPath = regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)*/?$`)
+
+// CheckEndpoint accepts where pods expose metrics: a port number and a
+// plain path. Both become part of the URL that the API server proxies to
+// the pod; it does not look up ports by name.
+func CheckEndpoint(port, path string) error {
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+		return fmt.Errorf("invalid port %q: it must be a port number", port)
+	}
+	if path == "" || len(path) > 200 || !metricsPath.MatchString(path) {
+		return fmt.Errorf("invalid path %q: it must look like /metrics", path)
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("invalid path %q", path)
+		}
+	}
+	return nil
 }

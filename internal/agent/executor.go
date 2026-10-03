@@ -61,9 +61,11 @@ type Executor struct {
 	// AllowWrite enables restart, scale, pod delete, cordon, CronJob
 	// suspend/trigger and rollback; AllowExec running commands in containers;
 	// AllowEdit changing objects from YAML.
-	AllowWrite  bool
-	AllowExec   bool
-	AllowEdit   bool
+	AllowWrite bool
+	AllowExec  bool
+	AllowEdit  bool
+	// AllowScrape enables reading the metrics that pods expose.
+	AllowScrape bool
 	Namespaces  []string
 	MaxLogBytes int64
 	Now         func() time.Time
@@ -81,6 +83,9 @@ func (e *Executor) Capabilities() []string {
 	}
 	if e.AllowEdit {
 		out = append(out, protocol.CapabilityEdit)
+	}
+	if e.AllowScrape {
+		out = append(out, protocol.CapabilityScrape)
 	}
 	return out
 }
@@ -192,6 +197,27 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 			return "", errEditDisabled
 		}
 		return e.apply(ctx, cmd)
+	case protocol.CommandScrape, protocol.CommandSample:
+		if cmd.Path == "" {
+			cmd.Path = "/metrics"
+		}
+		if cmd.Type == protocol.CommandScrape {
+			if err := e.checkObject(cmd.Namespace, cmd.Name); err != nil {
+				return "", err
+			}
+		} else if err := e.checkSample(cmd); err != nil {
+			return "", err
+		}
+		if err := protocol.CheckEndpoint(cmd.Port, cmd.Path); err != nil {
+			return "", err
+		}
+		if !e.AllowScrape {
+			return "", errScrapeDisabled
+		}
+		if cmd.Type == protocol.CommandScrape {
+			return e.scrape(ctx, cmd)
+		}
+		return e.sample(ctx, cmd)
 	default:
 		return "", fmt.Errorf("unsupported command %q", cmd.Type)
 	}

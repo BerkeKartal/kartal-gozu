@@ -41,6 +41,12 @@ tunnel), and the server works under any URL path without configuration.
 - **Warnings before an outage.** Volumes that fill up, TLS certificates that
   are about to expire (in the cluster's Secrets and on any address), and URL
   checks that the server runs itself, with a 24-hour history for each.
+- **The metrics your applications expose.** Open a pod to read what it
+  exposes at `/metrics` (the Prometheus text format), searchable. Watch any of
+  it, for one pod or every pod of a workload: requests per second from a
+  counter, a queue's length, memory. The server reads it every 30 seconds,
+  charts the last day, and raises an alert past a limit you set. No
+  Prometheus needed.
 - **What changed, and what runs where.** A timeline of what changed in each
   cluster (new images, scaling, restarts, nodes going away), with who did it
   when it was done through Kartal Gözü. The versions of every app side by
@@ -148,6 +154,7 @@ minutes, a new build of one app in production. Options:
   | Changes | Deployments, StatefulSets, DaemonSets, CronJobs and nodes: that object's timeline |
   | History | Deployments: revisions with images and change cause, and rollback |
   | Metrics | pods and nodes, 1 or 6 hours |
+  | App metrics | pods: the metrics they expose at a port and path (from the `prometheus.io/port` and `prometheus.io/path` annotations, or chosen), and Watch for any of them |
   | Console | pods, for admins |
 
   The panel follows the object while it is open. Buttons for actions you may
@@ -269,12 +276,16 @@ kind of action, set its variable to `"true"` and enable its RBAC file in
 | `rbac-edit.yaml` | `KARTAL_ALLOW_EDIT` | Saving objects edited as YAML (common kinds; widen it in the file) |
 | `rbac-volumes.yaml` | `KARTAL_VOLUME_STATS` | How full volume claims are, asked from each node's kubelet once a minute |
 | `rbac-certificates.yaml` | `KARTAL_TLS_SECRETS` | When the certificates of `kubernetes.io/tls` Secrets expire, read every five minutes |
+| `rbac-pod-metrics.yaml` | `KARTAL_POD_METRICS` | The metrics that pods expose, read through the API server: a pod's page on request, and the watched metrics every 30 seconds |
 
-Two of these grant more than their feature needs, because Kubernetes cannot
-grant less: `rbac-volumes.yaml` gives `get` on `nodes/proxy`, which reaches
-every read-only kubelet endpoint, and `rbac-certificates.yaml` lets the agent
-list all Secrets. The agent itself reads only volume statistics, and only the
-`tls.crt` of TLS Secrets, never their keys.
+Three of these grant more than their feature needs, because Kubernetes
+cannot grant less: `rbac-volumes.yaml` gives `get` on `nodes/proxy`, which
+reaches every read-only kubelet endpoint; `rbac-pod-metrics.yaml` gives `get`
+on `pods/proxy`, which reaches every pod's HTTP endpoints; and
+`rbac-certificates.yaml` lets the agent list all Secrets. The agent itself
+reads only volume statistics; only pages in the Prometheus text format, whose
+metrics are all it passes on (never another page, nor an error page a pod
+answers with); and only the `tls.crt` of TLS Secrets, never their keys.
 
 ```sh
 kubectl apply -k deploy/agent
@@ -289,8 +300,8 @@ token belongs to a user with one of three roles:
 
 | Role | May |
 |---|---|
-| `viewer` | See everything: lists, details, YAML, logs, events, charts, alerts, changes, versions, URL checks |
-| `operator` | Also restart, scale, roll back, delete pods, cordon nodes, run and suspend CronJobs, read the audit log, and see who made a change |
+| `viewer` | See everything: lists, details, YAML, logs, events, charts, the metrics pods expose and the watched ones, alerts, changes, versions, URL checks |
+| `operator` | Also restart, scale, roll back, delete pods, cordon nodes, run and suspend CronJobs, choose which metrics are watched, read the audit log, and see who made a change |
 | `admin` | Also edit YAML, use the pod console, set up e-mail and URL checks, and send test notifications |
 
 ### Where a role applies
@@ -397,6 +408,7 @@ on are sent as soon as one is.
 | Volume filling up | a volume is 85% full (a warning) or 95% (critical), by space or by inodes; needs `KARTAL_VOLUME_STATS` on the agent |
 | Certificate expiring | a TLS Secret's certificate, or that of an address a URL check asks, expires within 14 days (a warning) or 3 days (critical), or has expired |
 | Address not answering | a URL check fails: no answer, an error status, the wrong status or text, or a certificate that cannot be trusted |
+| Metric past its limit | a watched metric's latest value is above or below the limit set for it |
 
 The levels can be changed with `KARTAL_ALERT_VOLUME_WARNING` and
 `KARTAL_ALERT_VOLUME_CRITICAL` (percent), and
@@ -518,6 +530,7 @@ at a time.
 | `KARTAL_INCLUDE_SECRETS` | `false` | Add Secret names to the snapshot (values are never sent) |
 | `KARTAL_VOLUME_STATS` | `false` | Report how full volume claims are (with `rbac-volumes.yaml`) |
 | `KARTAL_TLS_SECRETS` | `false` | Report when the certificates of TLS Secrets expire (with `rbac-certificates.yaml`) |
+| `KARTAL_POD_METRICS` | `false` | Read the metrics that pods expose (with `rbac-pod-metrics.yaml`) |
 | `KARTAL_CA_FILE` | — | Extra CA file, if the server uses a private CA |
 | `KARTAL_INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (testing only) |
 | `KARTAL_HEALTH_LISTEN` | `:8081` | Liveness endpoint; `off` disables it |
@@ -572,6 +585,11 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | PUT | `/api/v1/checks/{id}` | admin | Same body; changes a check |
 | DELETE | `/api/v1/checks/{id}` | admin | Removes a check and its results |
 | POST | `/api/v1/checks/try` | admin | Same body; asks the address once, without saving anything |
+| GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/scrape?port=&path=` | viewer | The metrics a pod exposes, by name, with their samples |
+| GET | `/api/v1/clusters/{c}/watches?namespace=&hours=1..24` | viewer | The watched metrics with their values, averaged down to at most 360 points |
+| POST | `/api/v1/clusters/{c}/namespaces/{ns}/watches` | operator | Body: `{"name", "target", "port", "path", "metric", "labels", "rate", "aggregate", "above", "below"}`; `target` is `Deployment/web` (each of its running pods), a StatefulSet, a DaemonSet or `Pod/web-1`; `aggregate` is `sum`, `avg`, `max` or `min` |
+| PUT | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Same body; changes a watch of that namespace |
+| DELETE | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Removes a watch, its history and its alert |
 
 The server's own settings (`alerts/test`, `settings/…` and changes to
 `checks`) need the admin role everywhere. Every other call needs its role in

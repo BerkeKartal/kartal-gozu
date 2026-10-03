@@ -170,7 +170,13 @@ func (c *Client) getAs(ctx context.Context, path, accept string, out any) error 
 
 // GetRaw returns the raw JSON body of path, refusing bodies above limit.
 func (c *Client) GetRaw(ctx context.Context, path string, limit int64) ([]byte, error) {
-	resp, err := c.do(ctx, http.MethodGet, path, "application/json", "", nil)
+	return c.GetBody(ctx, path, "application/json", limit)
+}
+
+// GetBody returns the body of path in the format accept asks for, refusing
+// bodies above limit.
+func (c *Client) GetBody(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
+	resp, err := c.do(ctx, http.MethodGet, path, accept, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +186,7 @@ func (c *Client) GetRaw(ctx context.Context, path string, limit int64) ([]byte, 
 		return nil, err
 	}
 	if int64(len(b)) > limit {
-		return nil, fmt.Errorf("object is larger than %d bytes", limit)
+		return nil, fmt.Errorf("response is larger than %d bytes", limit)
 	}
 	return b, nil
 }

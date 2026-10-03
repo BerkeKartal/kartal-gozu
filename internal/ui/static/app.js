@@ -13,7 +13,7 @@ const TOKEN_KEY = 'kartal.token';
 
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
-  'alerts', 'uptime', 'changes', 'releases', 'audit', 'resources'];
+  'alerts', 'appmetrics', 'uptime', 'changes', 'releases', 'audit', 'resources'];
 // Views that are not about one namespace.
 const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit']);
 // Views that show every cluster at once.
@@ -50,7 +50,7 @@ const NAV = [
   { group: 'grpStorage', items: ['volumeclaims'] },
   { group: 'grpApps', items: ['helm', 'releases'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events'] },
-  { group: 'grpOps', items: ['alerts', 'uptime', 'changes', 'audit'] },
+  { group: 'grpOps', items: ['alerts', 'appmetrics', 'uptime', 'changes', 'audit'] },
   { items: ['resources'] },
 ];
 const NAV_COUNT = {
@@ -208,6 +208,21 @@ const STRINGS = {
     'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.NodePressure': 'Node under pressure', 'alert.PodFailing': 'Pod failing',
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
     'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
+    'alert.MetricLimit': 'Metric past its limit',
+    appmetrics: 'App metrics', 'tab.scrape': 'App metrics', 'capMissing.scrape': 'This cluster’s agent does not read the metrics of pods (KARTAL_POD_METRICS=false).',
+    scrapeHint: 'Applications often expose metrics of their own, such as requests, errors or queue lengths, at an address like :9100/metrics. Choose the port and read them.',
+    readMetrics: 'Read', port: 'Port', path: 'Path', metricsFilter: 'Filter metrics', nSeries: '{0} series', moreSeries: '… and {0} more series',
+    truncatedMetrics: 'The pod exposes more than is shown here.', noMetricsHere: 'The pod exposed no metrics.', moreMetrics: 'Show {0} more metrics',
+    watch: 'Watch', watchTitle: 'Watch a metric', editWatch: 'Change the watch', watchTarget: 'Pods', allPodsOf: 'Every pod of {0}',
+    onlyThisPod: 'Only this pod ({0})', watchSeries: 'Series', allSeries: '{0}: all series', watchMetric: 'Metric', watchLabels: 'Labels',
+    watchLabelsHelp: 'Only the series with these labels, such as code=500. Empty: all of them.', watchRate: 'How fast it grows, per second (for counters)',
+    watchAggregate: 'Joined over the pods as', 'agg.sum': 'sum', 'agg.avg': 'average', 'agg.max': 'maximum', 'agg.min': 'minimum',
+    watchAbove: 'Alert above', watchBelow: 'Alert below', watchLimitHelp: 'Optional: an alert is raised while the value is past it.',
+    watchSaved: 'Watch saved; its chart is under App metrics.', watchRemoved: 'Watch removed.', removeWatch: 'Remove',
+    removeWatchTitle: 'Remove watch', removeWatchConfirm: 'Stop watching {0}? Its history is lost.', badLabels: 'Write labels as name=value, separated by commas.',
+    watchesHint: 'The server reads these metrics from the pods every 30 seconds and keeps a day of them in memory. To add one, open a pod and choose its App metrics tab.',
+    noWatches: 'Nothing is watched yet. Open a pod, choose its App metrics tab and press Watch next to a metric.', noPointsYet: 'Waiting for the first readings.',
+    last24h: '24 hours', perSecond: 'per second', limitAbove: 'Limit', limitBelow: 'Lower limit', podsRead: '{0} pods',
     certificates: 'Certificates', uptime: 'URL checks', fromServer: 'Checked from the Kartal Gözü server',
     'col.subject': 'Subject', 'col.issuer': 'Issuer', 'col.expires': 'Expires', 'col.used': 'Used', 'col.check': 'Check',
     'col.last24h': 'Last 24 hours', 'col.uptime': 'Uptime', 'col.response': 'Response', 'col.certificate': 'Certificate',
@@ -371,6 +386,21 @@ const STRINGS = {
     'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.NodePressure': 'Node’da kaynak sıkıntısı', 'alert.PodFailing': 'Pod hata veriyor',
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
     'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
+    'alert.MetricLimit': 'Metrik sınırı aştı',
+    appmetrics: 'Uygulama metrikleri', 'tab.scrape': 'Metrikler', 'capMissing.scrape': 'Bu cluster’ın agent’ı podların metriklerini okumuyor (KARTAL_POD_METRICS=false).',
+    scrapeHint: 'Uygulamalar çoğu zaman istek, hata ya da kuyruk uzunluğu gibi kendi metriklerini :9100/metrics gibi bir adreste yayınlar. Portu seçip okuyun.',
+    readMetrics: 'Oku', port: 'Port', path: 'Yol', metricsFilter: 'Metriklerde ara', nSeries: '{0} seri', moreSeries: '… ve {0} seri daha',
+    truncatedMetrics: 'Pod burada gösterilenden fazlasını yayınlıyor.', noMetricsHere: 'Pod hiç metrik yayınlamadı.', moreMetrics: '{0} metrik daha göster',
+    watch: 'İzle', watchTitle: 'Metriği izle', editWatch: 'İzlemeyi değiştir', watchTarget: 'Podlar', allPodsOf: '{0} altındaki tüm podlar',
+    onlyThisPod: 'Yalnızca bu pod ({0})', watchSeries: 'Seri', allSeries: '{0}: tüm seriler', watchMetric: 'Metrik', watchLabels: 'Etiketler',
+    watchLabelsHelp: 'Yalnızca bu etiketlere sahip seriler, örneğin code=500. Boş bırakılırsa hepsi.', watchRate: 'Saniyedeki artışı göster (sayaçlar için)',
+    watchAggregate: 'Podlar üzerinden birleştirme', 'agg.sum': 'toplam', 'agg.avg': 'ortalama', 'agg.max': 'en yüksek', 'agg.min': 'en düşük',
+    watchAbove: 'Şunun üstünde uyar', watchBelow: 'Şunun altında uyar', watchLimitHelp: 'İsteğe bağlı: değer bu sınırı geçtiği sürece uyarı verilir.',
+    watchSaved: 'İzleme kaydedildi; grafiği Uygulama metrikleri sayfasında.', watchRemoved: 'İzleme kaldırıldı.', removeWatch: 'Kaldır',
+    removeWatchTitle: 'İzlemeyi kaldır', removeWatchConfirm: '{0} artık izlenmesin mi? Geçmişi silinir.', badLabels: 'Etiketleri virgülle ayrılmış ad=değer olarak yazın.',
+    watchesHint: 'Sunucu bu metrikleri 30 saniyede bir podlardan okur ve bir günlüğünü bellekte tutar. Eklemek için bir pod açıp Metrikler sekmesine geçin.',
+    noWatches: 'Henüz izlenen metrik yok. Bir pod açın, Metrikler sekmesine geçin ve bir metriğin yanındaki İzle’ye basın.', noPointsYet: 'İlk ölçümler bekleniyor.',
+    last24h: '24 saat', perSecond: 'saniyede', limitAbove: 'Sınır', limitBelow: 'Alt sınır', podsRead: '{0} pod',
     certificates: 'Sertifikalar', uptime: 'URL kontrolleri', fromServer: 'Kartal Gözü sunucusundan denetlenir',
     'col.subject': 'Sertifika adı', 'col.issuer': 'Veren', 'col.expires': 'Bitiş', 'col.used': 'Doluluk', 'col.check': 'Kontrol',
     'col.last24h': 'Son 24 saat', 'col.uptime': 'Erişilebilirlik', 'col.response': 'Yanıt', 'col.certificate': 'Sertifika',
@@ -963,7 +993,7 @@ function sameData(a, b) {
     if (k === 'summary') return shown(a.summary) === shown(b.summary);
     // Alerts, the audit log, changes, versions and checks have no ETag; they
     // are small.
-    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime'].includes(state.view)) return JSON.stringify(a[k]) === JSON.stringify(b[k]);
+    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime', 'appmetrics'].includes(state.view)) return JSON.stringify(a[k]) === JSON.stringify(b[k]);
     return false;
   });
 }
@@ -1005,6 +1035,11 @@ async function loadView(signal) {
     }
     case 'uptime':
       return { checks: await api('checks', { signal }) };
+    case 'appmetrics': {
+      const q = new URLSearchParams({ hours: String(state.watchHours || 1) });
+      if (state.ns) q.set('namespace', state.ns);
+      return { watches: await api(c + '/watches?' + q, { signal }) };
+    }
     case 'releases':
       return { items: await api('releases', { signal }) };
     default: {
@@ -1406,6 +1441,7 @@ function renderContent() {
     case 'changes': body = renderChanges(state.data.items); break;
     case 'releases': body = renderReleases(state.data.items); break;
     case 'uptime': body = renderUptime(state.data.checks); break;
+    case 'appmetrics': body = renderAppMetrics(state.data.watches); break;
     case 'certificates':
       body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays))];
       break;
@@ -2094,6 +2130,8 @@ function renderAlerts(st) {
 // alertObject links an alert to the object when it is in this cluster.
 function alertObject(a) {
   if (a.cluster !== state.cluster) return a.object;
+  // A watched metric's alert leads to its chart.
+  if (a.kind === 'MetricLimit') return h('a', { class: 'ns-link', href: routeHash({ view: 'appmetrics', ns: a.namespace, q: a.object }) }, a.object);
   const kinds = {
     NodeNotReady: 'Node', NodePressure: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim',
     VolumeFilling: 'PersistentVolumeClaim', CertificateExpiring: 'Secret',
@@ -2501,6 +2539,214 @@ function checkDialog(c) {
   url.focus();
 }
 
+// ---------------------------------------------------------------- app metrics
+
+// metricValue writes a watched value for people, going by what the
+// metric's name says it measures.
+function metricValue(w, v) {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const per = w.rate ? '/s' : '';
+  if (/_bytes(_total)?$/.test(w.metric)) return bytes(Math.max(0, v)) + per;
+  if (/_seconds$/.test(w.metric) && !w.rate) return v < 1 ? +(v * 1000).toPrecision(3) + ' ms' : +v.toPrecision(3) + ' s';
+  return compact(v) + per;
+}
+function compact(v) {
+  const a = Math.abs(v);
+  if (a >= 1e9) return +(v / 1e9).toFixed(2) + 'G';
+  if (a >= 1e6) return +(v / 1e6).toFixed(2) + 'M';
+  if (a >= 1e4) return +(v / 1e3).toFixed(1) + 'k';
+  if (a >= 100) return String(Math.round(v));
+  return String(+v.toPrecision(3));
+}
+// labelsText writes labels the way Prometheus does: {code="500"}.
+function labelsText(labels) {
+  const keys = Object.keys(labels || {}).sort();
+  return keys.length ? '{' + keys.map(k => k + '="' + labels[k] + '"').join(', ') + '}' : '';
+}
+// labelsInput and parseLabelsInput are labels as people type them:
+// code=500, method=GET.
+function labelsInput(labels) {
+  return Object.keys(labels || {}).sort().map(k => k + '=' + labels[k]).join(', ');
+}
+function parseLabelsInput(text) {
+  const out = {};
+  for (const part of text.split(',').map(s => s.trim()).filter(Boolean)) {
+    const m = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"?(.*?)"?$/.exec(part);
+    if (!m) return null;
+    out[m[1]] = m[2];
+  }
+  return out;
+}
+function watchPath(ns, id) {
+  return clusterPath() + '/namespaces/' + enc(ns) + '/watches' + (id ? '/' + enc(id) : '');
+}
+// targetLink opens the workload or pod a watch reads.
+function targetLink(ns, target) {
+  const [kind, name] = target.split('/');
+  const gvr = KIND_API[kind];
+  return gvr ? h('button', { type: 'button', class: 'link-button', onclick: () => openDetail({ gvr, ns, name }) }, target) : target;
+}
+
+function renderAppMetrics({ watches, where, loadError }) {
+  const hours = state.watchHours || 1;
+  const head = panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' },
+      h('div', { class: 'detail' }, t('watchesHint')),
+      canIn('operator', state.ns) ? h('div', { class: where ? 'detail' : 'detail status-warn' }, where ? t('mailWhere', where) : t('mailNotKept')) : null,
+      loadError ? h('div', { class: 'detail status-bad' }, t('mailLoadError', loadError)) : null),
+    h('div', { class: 'actions' }, [1, 6, 24].map(n => h('button', {
+      type: 'button', class: n === hours ? 'chip active' : 'chip',
+      onclick: () => {
+        state.watchHours = n;
+        state.data = null;
+        renderContent();
+        refresh();
+      },
+    }, n === 1 ? t('last1h') : n === 6 ? t('last6h') : t('last24h'))))));
+  if (!watches.length) return [head, emptyState(t('noWatches'))];
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = watches.filter(w => matches(words, [w.name, w.metric, w.target, w.namespace, labelsText(w.labels)]));
+  if (!rows.length) return [head, emptyState(t('noMatch'))];
+  return [head, h('div', { class: 'watch-grid' }, rows.map(watchCard))];
+}
+
+function watchCard(w) {
+  const guides = [];
+  if (w.above != null) guides.push({ label: upper(t('limitAbove')), value: w.above });
+  if (w.below != null) guides.push({ label: upper(t('limitBelow')), value: w.below });
+  const what = [t('agg.' + w.aggregate), w.metric + labelsText(w.labels), w.rate ? t('perSecond') : null].filter(Boolean).join(' · ');
+  return h('section', { class: w.past ? 'watch-card past' : 'watch-card' },
+    lineChart({ title: w.name, points: w.points || [], value: p => p.v, format: v => metricValue(w, v), guides, empty: w.error ? '—' : t('noPointsYet') }),
+    h('div', { class: 'watch-meta' },
+      h('div', null, nsLink(w.namespace), ' · ', targetLink(w.namespace, w.target), w.pods ? h('span', { class: 'muted' }, ' · ' + t('podsRead', w.pods)) : null),
+      h('div', { class: 'mono muted small-text', title: ':' + w.port + w.path }, what)),
+    w.error ? h('div', { class: 'status-bad small-text' }, w.error) : null,
+    canIn('operator', w.namespace) ? h('div', { class: 'actions' },
+      button(t('edit'), () => watchDialog({ watch: w })),
+      button(t('removeWatch'), () => removeWatch(w), 'danger')) : null);
+}
+
+async function removeWatch(w) {
+  const ok = await ask({ title: t('removeWatchTitle'), message: t('removeWatchConfirm', w.name), confirm: t('removeWatch'), danger: true });
+  if (!ok) return;
+  try {
+    await api(watchPath(w.namespace, w.id), { method: 'DELETE' });
+    toast(t('watchRemoved'));
+    refresh();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+  }
+}
+
+// podOwner is the workload whose pods a pod is one of, as the agent names
+// it: a ReplicaSet's pods belong to its Deployment.
+function podOwner(pod) {
+  const m = pod.metadata || {};
+  const o = (m.ownerReferences || []).find(x => x.controller);
+  if (!o) return '';
+  const hash = (m.labels || {})['pod-template-hash'];
+  if (o.kind === 'ReplicaSet' && hash && o.name.endsWith('-' + hash)) return 'Deployment/' + o.name.slice(0, -hash.length - 1);
+  return ['Deployment', 'StatefulSet', 'DaemonSet'].includes(o.kind) ? o.kind + '/' + o.name : '';
+}
+// isCounter tells whether a sample only grows, so its rate is what matters.
+function isCounter(type, name) {
+  return type === 'counter' || (['histogram', 'summary'].includes(type) && /_(sum|count|bucket)$/.test(name)) ||
+    (type === 'untyped' && /_total$/.test(name));
+}
+
+// watchDialog changes a watch, or watches a metric of a pod's page.
+function watchDialog({ watch: w, pod, family, port, path }) {
+  const field = (label, input, help) => h('label', { class: 'field' }, h('span', null, label), input,
+    help ? h('span', { class: 'muted small-text' }, help) : null);
+  const ns = w ? w.namespace : pod.metadata.namespace;
+  const owner = pod ? podOwner(pod) : '';
+  const targets = w ? [w.target] : [owner, 'Pod/' + pod.metadata.name].filter(Boolean);
+  const target = h('select', { disabled: !!w }, targets.map(x => h('option', { value: x },
+    x.startsWith('Pod/') ? t('onlyThisPod', x.slice(4)) : t('allPodsOf', x))));
+  const name = h('input', { type: 'text', value: w ? w.name : '', maxlength: '100', autocomplete: 'off', spellcheck: 'false' });
+  const metric = h('input', { type: 'text', class: 'mono', value: w ? w.metric : '', autocomplete: 'off', spellcheck: 'false' });
+  const labels = h('input', { type: 'text', class: 'mono', value: w ? labelsInput(w.labels) : '', placeholder: 'code=500', autocomplete: 'off', spellcheck: 'false' });
+  const rate = h('input', { type: 'checkbox', checked: !!(w && w.rate) });
+  const aggregate = h('select', null, ['sum', 'avg', 'max', 'min'].map(a => h('option', { value: a, selected: (w ? w.aggregate : 'sum') === a }, t('agg.' + a))));
+  const above = h('input', { type: 'number', step: 'any', value: w && w.above != null ? String(w.above) : '' });
+  const below = h('input', { type: 'number', step: 'any', value: w && w.below != null ? String(w.below) : '' });
+  const portIn = h('input', { type: 'text', inputmode: 'numeric', value: w ? w.port : port });
+  const pathIn = h('input', { type: 'text', class: 'mono', value: w ? w.path : path, spellcheck: 'false' });
+  // The family's series to choose from: all of each sample name, or one
+  // set of labels. Choosing one fills in the fields below.
+  let series = null;
+  if (family) {
+    // A histogram's count comes first: how many a second is what is
+    // usually wanted; its buckets last.
+    const rank = n => (/_count$/.test(n) ? 0 : /_sum$/.test(n) ? 1 : /_bucket$/.test(n) ? 3 : 2);
+    const names = [...new Set(family.samples.map(s => s.name))].sort((a, b) => rank(a) - rank(b));
+    const choices = names.map(n => ({ name: n, labels: {}, text: t('allSeries', n) }));
+    for (const s of family.samples.slice(0, 50)) {
+      if (Object.keys(s.labels || {}).length) choices.push({ name: s.name, labels: s.labels, text: s.name + labelsText(s.labels) });
+    }
+    let named = false;
+    name.addEventListener('input', () => { named = true; });
+    const pick = c => {
+      metric.value = c.name;
+      labels.value = labelsInput(c.labels);
+      rate.checked = isCounter(family.type, c.name);
+      if (!named) name.value = c.name;
+    };
+    series = h('select', { class: 'mono', onchange: () => pick(choices[Number(series.value)]) },
+      choices.map((c, i) => h('option', { value: String(i) }, c.text)));
+    pick(choices[0]);
+  }
+  const note = h('div', { class: 'form-status', role: 'status' });
+  const say = (text, kind) => {
+    note.className = kind ? 'form-status ' + kind : 'form-status';
+    note.textContent = text;
+  };
+  const number = v => (v.trim() === '' ? null : Number(v));
+  const buttons = [];
+  const busy = on => buttons.forEach(b => { b.disabled = on; });
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      const parsed = parseLabelsInput(labels.value);
+      if (!parsed) {
+        say(t('badLabels'), 'bad');
+        return;
+      }
+      busy(true);
+      try {
+        await api(w ? watchPath(ns, w.id) : watchPath(ns), {
+          method: w ? 'PUT' : 'POST',
+          body: {
+            name: name.value, target: target.value, port: portIn.value.trim(), path: pathIn.value.trim(), metric: metric.value.trim(),
+            labels: parsed, rate: rate.checked, aggregate: aggregate.value, above: number(above.value), below: number(below.value),
+          },
+        });
+        close();
+        toast(t('watchSaved'));
+        if (state.view === 'appmetrics') refresh();
+      } catch (err) {
+        if (err.status !== 401) say(err.message, 'bad');
+        busy(false);
+      }
+    },
+  },
+  h('h2', null, w ? t('editWatch') : t('watchTitle')),
+  series ? field(t('watchSeries'), series) : null,
+  h('div', { class: 'field-row' }, field(t('watchMetric'), metric), field(t('watchLabels'), labels, t('watchLabelsHelp'))),
+  h('label', { class: 'check-line' }, rate, t('watchRate')),
+  h('div', { class: 'field-row' }, field(t('watchTarget'), target), field(t('watchAggregate'), aggregate)),
+  h('div', { class: 'field-row' }, field(t('watchAbove'), above, t('watchLimitHelp')), field(t('watchBelow'), below)),
+  h('div', { class: 'field-row' }, field(t('col.name'), name), h('div', { class: 'field-row' }, field(t('port'), portIn), field(t('path'), pathIn))),
+  note,
+  h('div', { class: 'dialog-actions' },
+    h('span', { class: 'grow' }),
+    buttons[0] = button(t('cancel'), () => close()),
+    buttons[1] = h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  (series || metric).focus();
+}
+
 // ---------------------------------------------------------------- actions
 
 function workloadPath(w, action) {
@@ -2655,6 +2901,7 @@ function tabsFor(kind) {
   if (kind === 'Deployment') tabs.push('history');
   const c = currentCluster();
   if ((kind === 'Pod' || kind === 'Node') && c && c.metricsAvailable) tabs.push('metrics');
+  if (kind === 'Pod') tabs.push('scrape');
   if (kind === 'Pod' && canIn('admin', detail.ref ? detail.ref.ns : '')) tabs.push('console');
   return tabs;
 }
@@ -2697,7 +2944,7 @@ async function loadDetailObject(quiet) {
     d.error = e;
   }
   // The logs and the console keep what they show; only the header changes.
-  if (quiet && ['logs', 'console'].includes(currentTab())) renderDetailHead();
+  if (quiet && ['logs', 'console', 'scrape'].includes(currentTab())) renderDetailHead();
   else renderDetail();
 }
 
@@ -2720,7 +2967,7 @@ function detailTick() {
     if (c && !c.loading && Date.now() - c.at >= src.maxAge) fetchInto(src.name, src.load);
   }
   // Ages move on even when nothing else does.
-  if (Date.now() - d.drawnAt > 60000 && !['logs', 'console', 'yaml'].includes(currentTab())) renderDetail();
+  if (Date.now() - d.drawnAt > 60000 && !['logs', 'console', 'yaml', 'scrape'].includes(currentTab())) renderDetail();
 }
 
 // Tab data is kept per object. fetchInto keeps the last value while it
@@ -2814,6 +3061,7 @@ function renderDetail() {
 const DETAIL_TABS = {
   summary: renderSummary, yaml: renderYAMLTab, events: renderEventsTab, pods: renderPodsTab, jobs: renderJobsTab,
   changes: renderChangesTab, history: renderHistoryTab, metrics: renderMetricsTab, logs: renderLogsTab, console: renderConsoleTab,
+  scrape: renderScrapeTab,
 };
 
 function objectStatus(kind, o) {
@@ -3481,6 +3729,124 @@ function podResourcesOf(pod) {
     out.limMem = out.limMem == null || l.memory == null ? null : out.limMem + (quantity(l.memory) || 0);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- detail: app metrics
+
+// metricPorts are the ports a pod may expose metrics on: the one its
+// prometheus.io/port annotation names first, then ports named like
+// metrics, then the others.
+function metricPorts(pod) {
+  const ann = (pod.metadata && pod.metadata.annotations) || {};
+  const ports = ((pod.spec && pod.spec.containers) || []).flatMap(c => (c.ports || []).map(p => ({ port: String(p.containerPort), name: p.name || c.name })));
+  const out = [];
+  const add = p => {
+    if (/^\d+$/.test(p.port) && !out.some(x => x.port === p.port)) out.push(p);
+  };
+  if (ann['prometheus.io/port']) add({ port: String(ann['prometheus.io/port']), name: 'prometheus.io/port' });
+  ports.filter(p => /metric|prom/i.test(p.name)).forEach(add);
+  ports.forEach(add);
+  return out;
+}
+
+// renderScrapeTab reads the metrics a pod exposes, through its agent. A pod
+// that says where they are is read at once; otherwise the port is chosen
+// first. The page is read again only on request: its numbers change all
+// the time, and redrawing would take away the filter as it is typed into.
+function renderScrapeTab() {
+  const { ref, obj } = detail;
+  if (!agentAllows('scrape')) {
+    fill(els.detailBody, h('div', { class: 'empty-note' }, t('capMissing.scrape')));
+    return;
+  }
+  const ann = (obj.metadata && obj.metadata.annotations) || {};
+  const ports = metricPorts(obj);
+  const s = detail.scrape || (detail.scrape = {
+    port: ports.length ? ports[0].port : '', path: ann['prometheus.io/path'] || '/metrics', q: '', shown: 30,
+    asked: ann['prometheus.io/scrape'] === 'true' || ports.some(p => /metric|prom/i.test(p.name)),
+  });
+  const portIn = h('input', { type: 'text', inputmode: 'numeric', class: 'port-input', value: s.port, list: 'scrape-ports', placeholder: t('port'), 'aria-label': t('port') });
+  const pathIn = h('input', { type: 'text', class: 'mono path-input', value: s.path, placeholder: '/metrics', 'aria-label': t('path') });
+  const read = () => {
+    s.port = portIn.value.trim();
+    s.path = pathIn.value.trim() || '/metrics';
+    s.asked = true;
+    delete detail.cache['scrape ' + s.port + ' ' + s.path];
+    renderDetail();
+  };
+  const onEnter = e => {
+    if (e.key === 'Enter') read();
+  };
+  portIn.addEventListener('keydown', onEnter);
+  pathIn.addEventListener('keydown', onEnter);
+  const list = h('div');
+  const toolbar = h('div', { class: 'detail-toolbar' },
+    portIn, h('datalist', { id: 'scrape-ports' }, ports.map(p => h('option', { value: p.port }, p.name))), pathIn,
+    button(t('readMetrics'), read),
+    s.asked ? h('input', {
+      type: 'text', class: 'filter', value: s.q, placeholder: t('metricsFilter'), 'aria-label': t('metricsFilter'),
+      oninput: e => {
+        s.q = e.target.value;
+        s.shown = 30;
+        drawList();
+      },
+    }) : null);
+  if (!s.asked) {
+    fill(els.detailBody, toolbar, h('p', { class: 'muted' }, t('scrapeHint')));
+    return;
+  }
+  const key = 'scrape ' + s.port + ' ' + s.path;
+  if (!detail.cache[key]) {
+    const q = new URLSearchParams({ port: s.port, path: s.path });
+    fetchInto(key, () => api(clusterPath() + '/namespaces/' + enc(ref.ns) + '/pods/' + enc(ref.name) + '/scrape?' + q));
+  }
+  const c = detail.cache[key];
+  const drawList = () => {
+    if (c.error || c.value === undefined) {
+      fill(list, c.error ? errorPanel(c.error) : h('div', { class: 'empty-note' }, t('loading')));
+      return;
+    }
+    const page = c.value;
+    const words = s.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const fams = page.families.filter(f => matches(words, [f.name, f.help, f.type])).sort((a, b) => cmp(a.name, b.name));
+    const onWatch = canIn('operator', ref.ns) ? f => () => watchDialog({ pod: obj, family: f, port: s.port, path: s.path }) : null;
+    fill(list,
+      page.truncated ? h('div', { class: 'more-note' }, t('truncatedMetrics')) : null,
+      fams.length ? null : h('div', { class: 'empty-note' }, page.families.length ? t('noMatch') : t('noMetricsHere')),
+      fams.slice(0, s.shown).map(f => metricFamily(f, onWatch && onWatch(f))),
+      fams.length > s.shown ? h('div', { class: 'more-note' }, button(t('moreMetrics', Math.min(100, fams.length - s.shown)), () => {
+        s.shown += 100;
+        drawList();
+      })) : null);
+  };
+  fill(els.detailBody, toolbar, list);
+  drawList();
+}
+
+// metricFamily shows one metric of a pod's page: its samples, a few of
+// them when there are many, and a way to watch it.
+function metricFamily(f, onWatch) {
+  const rows = f.samples.slice(0, 20);
+  return h('div', { class: 'metric-family' },
+    h('div', { class: 'metric-head' },
+      h('div', { class: 'what' },
+        h('span', { class: 'mono metric-name' }, f.name), ' ', h('span', { class: 'metric-type' }, f.type),
+        f.samples.length > 1 ? h('span', { class: 'muted small-text' }, ' ' + t('nSeries', f.samples.length)) : null,
+        f.help ? h('div', { class: 'muted small-text' }, f.help) : null),
+      onWatch ? button(t('watch'), onWatch) : null),
+    rows.length ? h('table', { class: 'metric-samples' }, h('tbody', null, rows.map(s => h('tr', null,
+      h('td', null, h('div', { class: 'chips' },
+        s.name !== f.name ? h('span', { class: 'mono muted small-text' }, s.name.startsWith(f.name) ? s.name.slice(f.name.length) : s.name) : null,
+        Object.keys(s.labels || {}).sort().map(k => h('span', { class: 'label-chip' }, k + '=' + s.labels[k])))),
+      h('td', { class: 'num mono' }, sampleValue(s)))))) : null,
+    f.samples.length > rows.length ? h('div', { class: 'muted small-text' }, t('moreSeries', f.samples.length - rows.length)) : null);
+}
+
+function sampleValue(s) {
+  const v = s.value;
+  if (typeof v !== 'number') return String(v);
+  const text = Number.isInteger(v) ? String(v) : String(+v.toPrecision(7));
+  return /_bytes(_total)?$/.test(s.name) && v >= 1024 ? text + ' (' + bytes(v) + ')' : text;
 }
 
 // ---------------------------------------------------------------- detail: logs

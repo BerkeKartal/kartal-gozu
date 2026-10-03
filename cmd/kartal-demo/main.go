@@ -25,6 +25,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/agent"
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
+	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
 	"github.com/BerkeKartal/kartal-gozu/internal/fakekube"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
@@ -84,6 +85,11 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 	if err := demoChecks(ctx, keeper); err != nil {
 		return err
 	}
+	watches := appmetrics.New(keeper, alerts, log)
+	watches.Every = 10 * time.Second
+	if err := demoWatches(ctx, keeper); err != nil {
+		return err
+	}
 	cfg := api.Config{
 		AgentTokens:    tokens,
 		AdminToken:     adminToken,
@@ -93,6 +99,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 		Alerts:         alerts,
 		Mail:           settings.NewMail(keeper, email, nil),
 		Checks:         checks,
+		Watches:        watches,
 		History:        hist,
 	}
 	if withLDAP {
@@ -112,6 +119,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 	go srv.Serve(ln)
 	go server.Watch(ctx)
 	checks.Start(ctx)
+	watches.Start(ctx)
 	serverURL := "http://" + ln.Addr().String()
 
 	for i, c := range clusters {
@@ -125,7 +133,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 			Token:       fmt.Sprintf("demo-agent-token-%02d", i),
 			HTTP:        &http.Client{Timeout: 30 * time.Second},
 			Collector:   &agent.Collector{Kube: kc, Version: "demo", IncludeSecrets: true, VolumeStats: true, TLSSecrets: true},
-			Executor:    &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true},
+			Executor:    &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true, AllowScrape: true},
 			Interval:    5 * time.Second,
 			PollWait:    15 * time.Second,
 			Concurrency: 2,
@@ -268,4 +276,27 @@ func demoDirectory() (ldap.Authenticator, error) {
 	}
 	fmt.Println("Sign in as ayse (admin), mehmet (operator in production/team-0* and all of staging) or zeynep (viewer in production); the password is \"demo\".")
 	return ldap.Authenticator{Config: ldap.Config{URL: url, UPNDomain: upnDomain, UserBase: userBase}, Rules: rules}, nil
+}
+
+// demoWatches sets up watched metrics in production: requests and errors
+// per second, a queue that sometimes passes its limit, and memory.
+func demoWatches(ctx context.Context, keeper *settings.Keeper) error {
+	above := func(v float64) *float64 { return &v }
+	_, err := keeper.Update(ctx, func(s *settings.Settings) error {
+		for _, w := range []settings.Watch{
+			{Name: "Requests per second", Namespace: "team-01", Metric: "http_requests_total", Rate: true},
+			{Name: "Server errors per second", Namespace: "team-03", Metric: "http_requests_total", Labels: map[string]string{"code": "500"},
+				Rate: true, Above: above(0.5)},
+			{Name: "Queue depth", Namespace: "team-02", Metric: "app_queue_depth", Aggregate: "max", Above: above(40)},
+			{Name: "Memory", Namespace: "team-01", Metric: "process_resident_memory_bytes"},
+		} {
+			w.ID, w.Cluster, w.Target, w.Port = settings.NewCheckID(), "production", "Deployment/web", "9100"
+			if err := w.Normalize(); err != nil {
+				return err
+			}
+			s.Watches = append(s.Watches, w)
+		}
+		return nil
+	})
+	return err
 }

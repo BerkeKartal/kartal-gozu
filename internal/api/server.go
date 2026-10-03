@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
+	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/changes"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
@@ -61,6 +62,8 @@ type Config struct {
 	Mail *settings.Mail
 	// Checks runs the URL checks admins set up in the UI.
 	Checks *uptime.Monitor
+	// Watches reads the metrics that operators chose to watch in pods.
+	Watches *appmetrics.Monitor
 	// Login, when set, lets people sign in with a name and password, for a
 	// session of SessionTTL (12 hours when zero).
 	Login      Login
@@ -159,6 +162,10 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeLogin(mux)
 	s.routeTimeline(mux)
 	s.routeChecks(mux)
+	s.routeWatches(mux)
+	if cfg.Watches != nil {
+		cfg.Watches.Attach(s.snapshotPods, s.ask)
+	}
 
 	// The web UI: its files below /_ui/, the page itself everywhere else.
 	mux.Handle("GET /_ui/", ui.Assets())

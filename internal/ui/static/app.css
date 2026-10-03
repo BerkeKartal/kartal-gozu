@@ -456,6 +456,30 @@ input:disabled, textarea:disabled { opacity: .65; cursor: not-allowed; }
 
 .menu-btn { display: none; }
 
+/* ---------------------------------------------------------------- app metrics */
+
+.port-input { width: 90px; }
+.path-input { width: 140px; }
+.metric-family { border-top: 1px solid var(--line); padding: 10px 0; }
+.metric-head { display: flex; gap: 10px; align-items: flex-start; }
+.metric-head .what { flex: 1; min-width: 0; }
+.metric-name { font-weight: 600; overflow-wrap: anywhere; }
+.metric-type { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+table.metric-samples { margin-top: 6px; background: none; border: 0; }
+.metric-samples td { padding: 2px 4px; border: 0; vertical-align: top; }
+.metric-samples tbody tr:hover { background: none; }
+.metric-samples td.num { text-align: right; white-space: nowrap; width: 1%; }
+.watch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.watch-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; display: grid; gap: 8px; min-width: 0;
+}
+.watch-card.past { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
+.watch-card > .chart { border: 0; padding: 0; background: none; }
+.watch-card .chart-title { text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.watch-meta { font-size: 13px; display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.watch-card .actions { justify-content: flex-start; }
+
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; grid-template-areas: "top" "main"; }
   .detail-panel { width: 100vw !important; max-width: 100vw; }
