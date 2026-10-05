@@ -92,7 +92,8 @@ const STRINGS = {
     filterNamespaces: 'Filter namespaces',
     pin: 'Pin to the top', unpin: 'Unpin', podsIn: 'Pods in {0}', eventsIn: 'Warning events in {0}',
     logsOf: 'Logs of {0}', unhealthyPods: '{0} unhealthy pods', noMatch: 'Nothing matches.',
-    loading: 'Loading…', menu: 'Menu', search: 'Search', searchTitle: 'Jump to a namespace, view or object',
+    loading: 'Loading…', menu: 'Menu', navEdit: 'Arrange menu', navEditHint: 'Drag the entries, or move them with the arrows; views can go into and out of the groups.', navReset: 'Default order', moveUp: 'Move up', moveDown: 'Move down',
+    search: 'Search', searchTitle: 'Jump to a namespace, view or object',
     language: 'Türkçe', theme: 'Light / dark theme', logout: 'Sign out',
     'status.online': 'Online', 'status.offline': 'Offline', 'status.never-seen': 'Never connected',
     lastSeen: 'last seen {0} ago', clusterWide: 'Cluster-wide', problemsOnly: 'Problems only',
@@ -272,7 +273,8 @@ const STRINGS = {
     allNamespaces: 'Tüm namespace’ler', filterNamespaces: 'Namespace ara',
     pin: 'Üste sabitle', unpin: 'Sabitlemeyi kaldır', podsIn: '{0} içindeki podlar',
     eventsIn: '{0} içindeki uyarı olayları', logsOf: '{0} logları', unhealthyPods: '{0} sorunlu pod',
-    noMatch: 'Eşleşen bir şey yok.', loading: 'Yükleniyor…', menu: 'Menü', search: 'Ara',
+    noMatch: 'Eşleşen bir şey yok.', loading: 'Yükleniyor…', menu: 'Menü', navEdit: 'Menüyü düzenle', navEditHint: 'Sürükleyerek ya da oklarla sırala; sayfalar gruplara girip çıkabilir.', navReset: 'Varsayılan sıra', moveUp: 'Yukarı taşı', moveDown: 'Aşağı taşı',
+    search: 'Ara',
     searchTitle: 'Namespace, görünüm ya da nesneye git', language: 'English', theme: 'Açık / koyu tema',
     logout: 'Çıkış yap', 'status.online': 'Bağlı', 'status.offline': 'Bağlantı yok',
     'status.never-seen': 'Hiç bağlanmadı', lastSeen: 'son görülme {0} önce', clusterWide: 'Cluster geneli',
@@ -1304,31 +1306,220 @@ function toggleGroup(section) {
   renderNav();
 }
 
+// The menu's order is the user's to change, in its edit mode: entries are
+// dragged, or moved with the arrows, also into and out of the groups. The
+// order is remembered in this browser; views added later go to their usual
+// place.
+const NAV_LAYOUT_KEY = 'kartal.navLayout';
+let navEntries = navLayout();
+let navEditing = false;
+let navDrag = null; // what is being dragged: { id } or { group }
+let navMark = null; // the row that shows where it would land
+
+function defaultNavLayout() {
+  return NAV.flatMap(s => (s.group ? [{ group: s.group, items: s.items.slice() }] : s.items));
+}
+
+// navLayout is the menu as entries: a view's id, or a group with its views.
+// A saved order is checked against the views and groups there are now.
+function navLayout() {
+  let saved = null;
+  try { saved = JSON.parse(readStore('localStorage', NAV_LAYOUT_KEY) || 'null'); } catch { saved = null; }
+  if (!Array.isArray(saved)) return defaultNavLayout();
+  const home = new Map(); // each view's group by default, '' for none
+  NAV.forEach(s => s.items.forEach(id => home.set(id, s.group || '')));
+  const placed = new Set();
+  const take = id => {
+    if (typeof id !== 'string' || !home.has(id) || placed.has(id)) return false;
+    placed.add(id);
+    return true;
+  };
+  const out = [];
+  for (const e of saved) {
+    if (typeof e === 'string') {
+      if (take(e)) out.push(e);
+    } else if (e && NAV.some(s => s.group && s.group === e.group) && !out.some(x => x.group === e.group)) {
+      out.push({ group: e.group, items: (Array.isArray(e.items) ? e.items : []).filter(take) });
+    }
+  }
+  for (const s of NAV) if (s.group && !out.some(x => x.group === s.group)) out.push({ group: s.group, items: [] });
+  for (const [id, group] of home) {
+    if (placed.has(id)) continue;
+    if (group) out.find(x => x.group === group).items.push(id);
+    else out.push(id);
+  }
+  return out;
+}
+
+function saveNavLayout(entries) {
+  navEntries = entries;
+  const json = JSON.stringify(entries);
+  writeStore('localStorage', NAV_LAYOUT_KEY, json === JSON.stringify(defaultNavLayout()) ? null : json);
+  navSig = '';
+  renderNav();
+}
+
+function setNavEditing(on) {
+  navEditing = on;
+  navDrag = null;
+  navSig = '';
+  renderNav();
+}
+
+// The audit log is for operators; nodes are the whole cluster's.
+function navShown(id) {
+  return (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0);
+}
+
+// navRows lays the entries out as the menu shows them, a group's views
+// after its heading and before a mark at its end: a view moved past the
+// heading joins the group, one moved past the end leaves it.
+function navRows(entries) {
+  return entries.flatMap(e => (typeof e === 'string' ? [{ id: e }]
+    : [{ group: e.group, head: true }, ...e.items.map(id => ({ id })), { group: e.group, end: true }]));
+}
+function navEntriesOf(rows) {
+  const out = [];
+  let group = null;
+  for (const r of rows) {
+    if (r.head) out.push(group = { group: r.group, items: [] });
+    else if (r.end) group = null;
+    else if (group) group.items.push(r.id);
+    else out.push(r.id);
+  }
+  return out;
+}
+
+// moveNav moves a view or a group one step up (-1) or down (+1), past
+// what the menu shows: a view steps over one view, heading or group end; a
+// group over one view or group. With dry, it only says whether it can.
+function moveNav(target, dir, dry) {
+  const list = target.id ? navRows(navEntries) : navEntries.slice();
+  const i = list.findIndex(x => (target.id ? x.id === target.id : x.group === target.group));
+  const hidden = x => (target.id ? x.id && !navShown(x.id) : typeof x === 'string' && !navShown(x));
+  let j = i + dir;
+  while (list[j] && hidden(list[j])) j += dir;
+  if (i < 0 || !list[j]) return false;
+  if (dry) return true;
+  list.splice(j, 0, list.splice(i, 1)[0]);
+  saveNavLayout(target.id ? navEntriesOf(list) : list);
+  return true;
+}
+
+// dropNav puts what is dragged before or after the target: a view where
+// the target is, inside a group or not (after a heading is the group's
+// first place); a group before or after the target's own top-level entry.
+// The footer stands for the end of the menu.
+function dropNav(target, after) {
+  const drag = navDrag;
+  navDrag = null;
+  if (!drag || (drag.id && drag.id === target.id) || (drag.group && drag.group === target.group)) return;
+  if (drag.id) {
+    const rows = navRows(navEntries);
+    const row = rows.splice(rows.findIndex(r => r.id === drag.id), 1)[0];
+    let at = target.footer ? rows.length : rows.findIndex(r => (target.id ? r.id === target.id : r.head && r.group === target.group));
+    if (after && !target.footer) at++;
+    rows.splice(at, 0, row);
+    saveNavLayout(navEntriesOf(rows));
+    return;
+  }
+  const entries = navEntries.slice();
+  const g = entries.splice(entries.findIndex(e => e.group === drag.group), 1)[0];
+  let at = target.footer ? entries.length
+    : entries.findIndex(e => (typeof e === 'string' ? e === target.id : e.group === target.group || e.items.includes(target.id)));
+  if (at < 0) return; // inside the group being dragged
+  if (after && !target.footer) at++;
+  entries.splice(at, 0, g);
+  saveNavLayout(entries);
+}
+
+function markNavDrop(el, after) {
+  if (navMark && navMark !== el) navMark.classList.remove('drop-before', 'drop-after');
+  navMark = el;
+  if (!el) return;
+  el.classList.toggle('drop-before', !after);
+  el.classList.toggle('drop-after', after);
+}
+
+// navDropTarget makes a row of the edit mode take drops.
+function navDropTarget(el, target) {
+  const after = e => target.footer || e.clientY > el.getBoundingClientRect().top + el.offsetHeight / 2;
+  el.addEventListener('dragover', e => {
+    if (!navDrag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    markNavDrop(el, after(e));
+  });
+  el.addEventListener('drop', e => {
+    e.preventDefault();
+    markNavDrop(null);
+    dropNav(target, after(e));
+  });
+  return el;
+}
+
+function navEditRow(target, label) {
+  const row = h('div', { class: target.group ? 'nav-edit-row group' : 'nav-edit-row', draggable: 'true' },
+    h('span', { class: 'grip', 'aria-hidden': 'true' }, '⠿'),
+    h('span', { class: 'nav-label' }, label),
+    [[-1, '↑', 'moveUp'], [1, '↓', 'moveDown']].map(([dir, arrow, key]) =>
+      h('button', { type: 'button', class: 'icon-btn small', title: t(key), 'aria-label': t(key) + ': ' + label,
+        disabled: !moveNav(target, dir, true), onclick: () => moveNav(target, dir) }, arrow)));
+  row.addEventListener('dragstart', e => {
+    navDrag = target;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', label);
+    row.classList.add('dragging');
+  });
+  row.addEventListener('dragend', () => {
+    navDrag = null;
+    row.classList.remove('dragging');
+    markNavDrop(null);
+  });
+  return navDropTarget(row, target);
+}
+
+function renderNavEditor() {
+  fill(els.nav,
+    h('div', { class: 'nav-edit-hint' }, t('navEditHint')),
+    navEntries.map(e => (typeof e === 'string'
+      ? (navShown(e) ? navEditRow({ id: e }, t(e)) : null)
+      : [navEditRow({ group: e.group }, t(e.group)),
+        h('div', { class: 'nav-sub' }, e.items.filter(navShown).map(id => navEditRow({ id }, t(id))))])),
+    navDropTarget(h('div', { class: 'nav-edit-foot' },
+      button(t('navReset'), () => saveNavLayout(defaultNavLayout()), 'small'),
+      button(t('done'), () => setNavEditing(false), 'small primary')), { footer: true }));
+}
+
 // The navigation is redrawn only when something it shows changed.
 let navSig = '';
 function renderNav() {
-  if (!els.nav) return;
+  // Redrawing would drop what is being dragged; it waits for the drop.
+  if (!els.nav || navDrag) return;
   const counts = navCounts();
   const sig = JSON.stringify([state.cluster, state.view, state.ns, lang, counts, state.me]);
   if (sig === navSig) return;
   navSig = sig;
-  fill(els.nav, NAV.map(section => {
-    // The audit log is for operators; nodes are the whole cluster's.
-    const items = section.items.filter(id => (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0));
-    if (!section.group) return items.map(id => navItem(id, counts));
+  if (navEditing) {
+    renderNavEditor();
+    return;
+  }
+  fill(els.nav, navEntries.map(entry => {
+    if (typeof entry === 'string') return navShown(entry) ? navItem(entry, counts) : null;
+    const items = entry.items.filter(navShown);
     if (!items.length) return null;
-    const open = groupOpen(section);
+    const open = groupOpen(entry);
     // A closed group still shows that something inside needs attention.
     const bad = open ? 0 : items.reduce((n, id) => n + (id === 'events' ? 0 : navProblems(id, counts)), 0);
     const warn = open || bad || !items.includes('events') ? 0 : navProblems('events', counts);
     return [
-      h('button', { type: 'button', class: 'nav-group', 'aria-expanded': String(open), onclick: () => toggleGroup(section) },
+      h('button', { type: 'button', class: 'nav-group', 'aria-expanded': String(open), onclick: () => toggleGroup(entry) },
         h('span', { class: 'caret', 'aria-hidden': 'true' }, '›'),
-        h('span', { class: 'nav-label' }, t(section.group)),
+        h('span', { class: 'nav-label' }, t(entry.group)),
         bad ? h('span', { class: 'badge bad' }, bad) : warn ? h('span', { class: 'badge warn' }, warn) : null),
       open ? h('div', { class: 'nav-sub' }, items.map(id => navItem(id, counts))) : null,
     ];
-  }));
+  }), h('button', { type: 'button', class: 'nav-edit', onclick: () => setNavEditing(true) }, '⇅ ' + t('navEdit')));
 }
 
 function navProblems(id, counts) {
