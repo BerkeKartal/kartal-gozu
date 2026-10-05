@@ -61,10 +61,12 @@ type reading struct {
 type series struct {
 	reads  string // settings.Watch.Reads of the points
 	points []Point
-	// last is a counter's previous value, by pod and labels, for its rate.
-	last map[string]reading
-	err  string
-	pods int
+	// last is a counter's previous value, by pod and labels, for its rate;
+	// readAt is when the pods were last read.
+	last   map[string]reading
+	readAt time.Time
+	err    string
+	pods   int
 }
 
 // Monitor reads the watches kept in the settings.
@@ -286,14 +288,22 @@ func (m *Monitor) fail(w settings.Watch, msg string) {
 // record turns what the pods answered into the watch's next point: each
 // matching series' value, or for a counter how fast it grew since the last
 // reading, joined over the pods.
+//
+// A metric that the pods expose, but with no series of the labels asked
+// for, counts as zero: no request has failed with code 502 yet, no app is
+// Degraded. A counter's series that appears between two readings started
+// from zero, as counters do, so all it counts is new. Only a metric that is
+// not there at all is an error: the wrong name, port or path.
 func (m *Monitor) record(w settings.Watch, pods []string, answers map[string]protocol.PodSamples, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.seriesOf(w)
 	var values []float64
 	matched, failed := 0, 0
+	named := false
 	firstErr := ""
 	seen := map[string]bool{}
+	answered := map[string]bool{}
 	for _, pod := range pods {
 		a, ok := answers[pod]
 		if !ok || a.Error != "" {
@@ -306,8 +316,12 @@ func (m *Monitor) record(w settings.Watch, pods []string, answers map[string]pro
 			}
 			continue
 		}
+		answered[pod] = true
 		for _, smp := range a.Samples {
 			v := float64(smp.Value)
+			if smp.Name == w.Metric {
+				named = true
+			}
 			if smp.Name != w.Metric || !labelsMatch(w.Labels, smp.Labels) || math.IsNaN(v) || math.IsInf(v, 0) {
 				continue
 			}
@@ -318,7 +332,11 @@ func (m *Monitor) record(w settings.Watch, pods []string, answers map[string]pro
 			}
 			key := pod + "\x00" + labelKey(smp.Labels)
 			seen[key] = true
-			if prev, ok := s.last[key]; ok && now.After(prev.t) {
+			prev, had := s.last[key]
+			if !had && !s.readAt.IsZero() {
+				prev, had = reading{v: 0, t: s.readAt}, true
+			}
+			if had && now.After(prev.t) {
 				grew := v - prev.v
 				if grew < 0 {
 					grew = v // the counter started over, as a restarted pod's does
@@ -328,8 +346,12 @@ func (m *Monitor) record(w settings.Watch, pods []string, answers map[string]pro
 			s.last[key] = reading{v: v, t: now}
 		}
 	}
+	// A series is forgotten once its pod answered without it, or is no
+	// longer read; a pod that did not answer keeps its own, so that a
+	// counter is not taken for new when the pod answers again.
 	for k := range s.last {
-		if !seen[k] {
+		pod, _, _ := strings.Cut(k, "\x00")
+		if !seen[k] && (answered[pod] || !slices.Contains(pods, pod)) {
 			delete(s.last, k)
 		}
 	}
@@ -338,18 +360,24 @@ func (m *Monitor) record(w settings.Watch, pods []string, answers map[string]pro
 	case failed == len(pods):
 		s.err = firstErr
 		return
-	case matched == 0:
-		s.err = fmt.Sprintf("no sample %s%s on %s", w.Metric, labelText(w.Labels), w.Target)
+	case !named:
+		s.err = fmt.Sprintf("no sample named %s on %s", w.Metric, w.Target)
 		return
 	case failed > 0:
 		s.err = fmt.Sprintf("%d of %d pods could not be read: %s", failed, len(pods), firstErr)
 	default:
 		s.err = ""
 	}
-	if len(values) == 0 {
+	first := s.readAt.IsZero()
+	s.readAt = now
+	value := 0.0
+	switch {
+	case len(values) > 0:
+		value = join(w.Aggregate, values)
+	case matched > 0 && w.Rate && first:
 		return // a rate needs two readings
 	}
-	s.points = append(s.points, Point{T: now.UnixMilli(), V: join(w.Aggregate, values)})
+	s.points = append(s.points, Point{T: now.UnixMilli(), V: value})
 	cut := 0
 	for cut < len(s.points) && (now.UnixMilli()-s.points[cut].T > keepFor.Milliseconds() || len(s.points)-cut > keepPoints) {
 		cut++

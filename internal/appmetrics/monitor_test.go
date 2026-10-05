@@ -48,6 +48,10 @@ func (f *fakeCluster) ask(_ context.Context, cluster string, cmd protocol.Comman
 	var out []protocol.PodSamples
 	for _, p := range cmd.Pods {
 		ps := protocol.PodSamples{Pod: p}
+		// A pod without values does not answer.
+		if _, ok := f.values[p]; !ok {
+			ps.Error = "connection refused"
+		}
 		for _, s := range f.values[p] {
 			if want[s.Name] {
 				ps.Samples = append(ps.Samples, s)
@@ -260,5 +264,65 @@ func TestRemovedDuringARound(t *testing.T) {
 	}
 	if len(m.List(func(settings.Watch) bool { return true }, 1)) != 0 || len(m.series) != 0 {
 		t.Errorf("the removed watch is still kept: %d series", len(m.series))
+	}
+}
+
+// A label that matches nothing yet counts as zero, and a counter's series
+// that appears later counts from zero. A pod that misses a reading does not
+// make its counter look new when it answers again.
+func TestAbsentSeriesAreZero(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	keeper := settings.NewKeeper(ctx, settings.Memory{}, log)
+	m := New(keeper, nil, log)
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	m.Now = func() time.Time { return now }
+	f := &fakeCluster{}
+	m.Attach(f.pods, f.ask)
+	for _, w := range []settings.Watch{
+		{Name: "bad gateway", Metric: "http_requests_total", Labels: map[string]string{"code": "502"}, Rate: true},
+		{Name: "missing", Metric: "no_such_metric"},
+	} {
+		w.Cluster, w.Namespace, w.Target, w.Port = "prod", "a", "Deployment/web", "9100"
+		if _, err := m.Add(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(values map[string][]protocol.Sample) map[string]Status {
+		f.set(values)
+		m.Round(ctx)
+		now = now.Add(30 * time.Second)
+		out := map[string]Status{}
+		for _, s := range m.List(func(settings.Watch) bool { return true }, 1) {
+			out[s.Name] = s
+		}
+		return out
+	}
+	last := func(s Status) float64 { return s.Points[len(s.Points)-1].V }
+
+	st := read(map[string][]protocol.Sample{"web-1": requests(100, 0), "web-2": requests(50, 0)})
+	if b := st["bad gateway"]; b.Error != "" || len(b.Points) != 1 || last(b) != 0 {
+		t.Errorf("no 502 yet: %+v", b)
+	}
+	if !strings.Contains(st["missing"].Error, "no sample named no_such_metric") {
+		t.Errorf("a metric that is not there: %+v", st["missing"])
+	}
+	// Three 502s on web-1 since the last reading, 30 seconds ago.
+	bad := protocol.Sample{Name: "http_requests_total", Labels: map[string]string{"code": "502"}, Value: 3}
+	st = read(map[string][]protocol.Sample{"web-1": append(requests(160, 0), bad), "web-2": requests(80, 0)})
+	if b := st["bad gateway"]; math.Abs(last(b)-0.1) > 1e-9 {
+		t.Errorf("first 502s: %+v", b.Points)
+	}
+	// web-1 misses a reading, then answers with 6 in all: 3 more over a
+	// minute, not 6 as if new.
+	f.mu.Lock()
+	f.values = map[string][]protocol.Sample{"web-2": requests(90, 0)}
+	f.mu.Unlock()
+	m.Round(ctx)
+	now = now.Add(30 * time.Second)
+	bad.Value = 6
+	st = read(map[string][]protocol.Sample{"web-1": append(requests(200, 0), bad), "web-2": requests(95, 0)})
+	if b := st["bad gateway"]; math.Abs(last(b)-0.05) > 1e-9 {
+		t.Errorf("after a missed reading: %+v", b.Points)
 	}
 }
