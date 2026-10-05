@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
@@ -595,17 +596,40 @@ func (m *Monitor) Where() string { return m.keeper.Where() }
 // LoadError is why the saved watches could not be read, if they could not.
 func (m *Monitor) LoadError() string { return m.keeper.LoadError() }
 
-// prepare checks a watch against the others of its namespace.
+// prepare checks a watch against the others of its namespace. Names are
+// kept apart, since an alert goes by the watch's name; one that another
+// watch there already has gets a number instead of being refused: watching
+// the same metric twice, with other labels, is common.
 func prepare(w *settings.Watch, others []settings.Watch) error {
 	if err := w.Normalize(); err != nil {
 		return &settings.InvalidError{Err: err}
 	}
-	for _, o := range others {
-		if o.ID != w.ID && o.Cluster == w.Cluster && o.Namespace == w.Namespace && strings.EqualFold(o.Name, w.Name) {
-			return &settings.InvalidError{Err: fmt.Errorf("namespace %s already has a watch named %q", w.Namespace, w.Name)}
+	taken := func(name string) bool {
+		for _, o := range others {
+			if o.ID != w.ID && o.Cluster == w.Cluster && o.Namespace == w.Namespace && strings.EqualFold(o.Name, name) {
+				return true
+			}
 		}
+		return false
+	}
+	base := w.Name
+	for i := 2; taken(w.Name); i++ {
+		suffix := fmt.Sprintf(" (%d)", i)
+		w.Name = cut(base, maxName-len(suffix)) + suffix
 	}
 	return nil
+}
+
+// maxName is the longest name a watch may have, in bytes.
+const maxName = 100
+
+// cut shortens s to at most n bytes, at a character's edge.
+func cut(s string, n int) string {
+	for len(s) > n {
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
+	}
+	return s
 }
 
 // Add saves a new watch; it is first read in the next round.

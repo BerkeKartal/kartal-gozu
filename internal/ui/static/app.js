@@ -2737,6 +2737,18 @@ function watchDialog({ watch: w, ns, owner, pod, family, port, path }) {
   const below = h('input', { type: 'number', step: 'any', value: w && w.below != null ? String(w.below) : '' });
   const portIn = h('input', { type: 'text', inputmode: 'numeric', value: w ? w.port : port });
   const pathIn = h('input', { type: 'text', class: 'mono', value: w ? w.path : path, spellcheck: 'false' });
+  // A new watch is named after what it reads, labels included, so that the
+  // same metric can be watched again with other labels; until the name is
+  // typed in, it follows the metric and labels.
+  let named = !!w;
+  const autoName = () => {
+    if (named) return;
+    const text = metric.value.trim() + labelsText(parseLabelsInput(labels.value) || {});
+    name.value = text.length > 100 ? text.slice(0, 97) + '…' : text;
+  };
+  name.addEventListener('input', () => { named = true; });
+  metric.addEventListener('input', autoName);
+  labels.addEventListener('input', autoName);
   // The family's series to choose from: all of each sample name, or one
   // set of labels. Choosing one fills in the fields below.
   let series = null;
@@ -2749,13 +2761,11 @@ function watchDialog({ watch: w, ns, owner, pod, family, port, path }) {
     for (const s of family.samples.slice(0, 50)) {
       if (Object.keys(s.labels || {}).length) choices.push({ name: s.name, labels: s.labels, text: s.name + labelsText(s.labels) });
     }
-    let named = false;
-    name.addEventListener('input', () => { named = true; });
     const pick = c => {
       metric.value = c.name;
       labels.value = labelsInput(c.labels);
       rate.checked = isCounter(family.type, c.name);
-      if (!named) name.value = c.name;
+      autoName();
     };
     series = h('select', { class: 'mono', onchange: () => pick(choices[Number(series.value)]) },
       choices.map((c, i) => h('option', { value: String(i) }, c.text)));

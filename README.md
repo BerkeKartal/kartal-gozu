@@ -589,7 +589,7 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/scrape?port=&path=` | viewer | The metrics a pod exposes, by name, with their samples |
 | GET | `/api/v1/clusters/{c}/metric-sources?namespace=` | viewer | Asks one running pod of each workload, at its likely ports (not those of databases and other servers that do not speak HTTP), whether it exposes metrics; returns where and how many, within 15 seconds |
 | GET | `/api/v1/clusters/{c}/watches?namespace=&hours=1..24` | viewer | The watched metrics with their values, averaged down to at most 360 points |
-| POST | `/api/v1/clusters/{c}/namespaces/{ns}/watches` | operator | Body: `{"name", "target", "port", "path", "metric", "labels", "rate", "aggregate", "above", "below"}`; `target` is `Deployment/web` (each of its running pods), a StatefulSet, a DaemonSet or `Pod/web-1`; `aggregate` is `sum`, `avg`, `max` or `min` |
+| POST | `/api/v1/clusters/{c}/namespaces/{ns}/watches` | operator | Body: `{"name", "target", "port", "path", "metric", "labels", "rate", "aggregate", "above", "below"}`; `target` is `Deployment/web` (each of its running pods), a StatefulSet, a DaemonSet or `Pod/web-1`; `aggregate` is `sum`, `avg`, `max` or `min`. A name that another watch of the namespace has gets a number, such as `requests (2)` |
 | PUT | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Same body; changes a watch of that namespace |
 | DELETE | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Removes a watch, its history and its alert |
 

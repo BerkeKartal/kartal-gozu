@@ -326,3 +326,38 @@ func TestAbsentSeriesAreZero(t *testing.T) {
 		t.Errorf("after a missed reading: %+v", b.Points)
 	}
 }
+
+// The same metric can be watched twice: a name that is taken gets a number,
+// within the length a name may have.
+func TestSameNameGetsANumber(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := New(settings.NewKeeper(ctx, settings.Memory{}, log), nil, log)
+	long := strings.Repeat("x", 100)
+	var names []string
+	for _, w := range []settings.Watch{
+		{Name: "requests", Metric: "http_requests_total"},
+		{Name: "Requests", Metric: "http_requests_total", Labels: map[string]string{"code": "502"}},
+		{Name: "requests", Metric: "http_requests_total", Labels: map[string]string{"code": "503"}},
+		{Name: long, Metric: "up"},
+		{Name: long, Metric: "up"},
+	} {
+		w.Cluster, w.Namespace, w.Target, w.Port = "prod", "a", "Deployment/web", "9100"
+		saved, err := m.Add(ctx, w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, saved.Name)
+	}
+	want := []string{"requests", "Requests (2)", "requests (3)", long, strings.Repeat("x", 96) + " (2)"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("watch %d named %q, want %q", i, names[i], want[i])
+		}
+	}
+	// Elsewhere the name is free.
+	other, err := m.Add(ctx, settings.Watch{Name: "requests", Cluster: "prod", Namespace: "b", Target: "Deployment/web", Port: "9100", Metric: "up"})
+	if err != nil || other.Name != "requests" {
+		t.Errorf("another namespace: %q %v", other.Name, err)
+	}
+}
