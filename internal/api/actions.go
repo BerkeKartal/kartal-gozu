@@ -159,12 +159,13 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		}
 		grants = append(grants, grantView{Role: g.Role.String(), Scopes: scopes})
 	}
-	// The levels at which the UI marks volumes and certificates, as the
-	// alerts do.
+	// The levels at which the UI marks volumes, node disks and
+	// certificates, as the alerts do.
 	volumeWarn, volumeCrit := s.cfg.Alerts.VolumeLevels()
+	diskWarn, diskCrit := s.cfg.Alerts.NodeDiskLevels()
 	certWarn, certCrit := s.cfg.Alerts.CertificateLevels()
 	writeJSON(w, http.StatusOK, map[string]any{"name": u.Name, "role": u.Role.String(), "everywhere": u.Everywhere().String(), "grants": grants,
-		"levels": map[string]any{"volumeWarning": volumeWarn, "volumeCritical": volumeCrit,
+		"levels": map[string]any{"volumeWarning": volumeWarn, "volumeCritical": volumeCrit, "nodeDiskWarning": diskWarn, "nodeDiskCritical": diskCrit,
 			"certificateWarningDays": certWarn.Hours() / 24, "certificateCriticalDays": certCrit.Hours() / 24}})
 }
 

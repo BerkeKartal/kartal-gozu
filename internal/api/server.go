@@ -123,7 +123,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/clusters", s.require(auth.Viewer, s.listClusters))
 	mux.HandleFunc(c, s.inCluster(auth.Viewer, anywhere, s.getCluster))
 	mux.HandleFunc(c+"/nodes", snapshotList(s, func(x *protocol.Snapshot) []protocol.Node { return x.Nodes }, nil,
-		func(n protocol.Node) bool { return !n.Ready || len(n.Pressure) > 0 }))
+		func(n protocol.Node) bool { return !n.Ready || len(n.Pressure) > 0 || s.levels().diskFilling(n) }))
 	mux.HandleFunc(c+"/namespaces", s.inCluster(auth.Viewer, anywhere, s.namespaces))
 	mux.HandleFunc(c+"/workloads", snapshotList(s, func(x *protocol.Snapshot) []protocol.Workload { return x.Workloads },
 		func(x protocol.Workload) string { return x.Namespace }, protocol.Workload.Degraded))

@@ -21,8 +21,9 @@ type Collector struct {
 	Namespaces []string
 	// IncludeSecrets adds Secret names (never their values) to the snapshot.
 	IncludeSecrets bool
-	// VolumeStats asks the kubelets how full the volumes are, through the
-	// API server's node proxy (rbac-volumes.yaml).
+	// VolumeStats asks the kubelets how full the volumes and the nodes' disks
+	// are, and how much disk the pods use, through the API server's node
+	// proxy (rbac-volumes.yaml).
 	VolumeStats bool
 	// TLSSecrets reads when the certificates of TLS Secrets expire
 	// (rbac-certificates.yaml); their keys are never read.
@@ -31,7 +32,7 @@ type Collector struct {
 	Version    string
 	Now        func() time.Time
 
-	volumes slowPart[map[string]volumeStat]
+	volumes slowPart[kubeletStats]
 	certs   slowPart[[]protocol.Certificate]
 }
 
@@ -365,7 +366,8 @@ func daemonSetWorkload(d kube.DaemonSet) protocol.Workload {
 }
 
 func resources(m map[string]string) protocol.Resources {
-	return protocol.Resources{CPUMilli: kube.MilliValue(m["cpu"]), MemoryBytes: kube.Value(m["memory"]), Pods: kube.Value(m["pods"])}
+	return protocol.Resources{CPUMilli: kube.MilliValue(m["cpu"]), MemoryBytes: kube.Value(m["memory"]), Pods: kube.Value(m["pods"]),
+		DiskBytes: kube.Value(m["ephemeral-storage"])}
 }
 
 // addTo adds r (if any) to the running total under key.
@@ -380,6 +382,7 @@ func addTo(totals map[string]*protocol.Resources, key string, r *protocol.Resour
 	}
 	t.CPUMilli += r.CPUMilli
 	t.MemoryBytes += r.MemoryBytes
+	t.DiskBytes += r.DiskBytes
 }
 
 // podResources gives a pod's effective requests and limits.
@@ -419,15 +422,15 @@ func effective(p kube.Pod, pick func(kube.Container) map[string]string) protocol
 }
 
 func quantities(m map[string]string) protocol.Resources {
-	return protocol.Resources{CPUMilli: kube.MilliValue(m["cpu"]), MemoryBytes: kube.Value(m["memory"])}
+	return protocol.Resources{CPUMilli: kube.MilliValue(m["cpu"]), MemoryBytes: kube.Value(m["memory"]), DiskBytes: kube.Value(m["ephemeral-storage"])}
 }
 
 func addResources(a, b protocol.Resources) protocol.Resources {
-	return protocol.Resources{CPUMilli: a.CPUMilli + b.CPUMilli, MemoryBytes: a.MemoryBytes + b.MemoryBytes}
+	return protocol.Resources{CPUMilli: a.CPUMilli + b.CPUMilli, MemoryBytes: a.MemoryBytes + b.MemoryBytes, DiskBytes: a.DiskBytes + b.DiskBytes}
 }
 
 func maxResources(a, b protocol.Resources) protocol.Resources {
-	return protocol.Resources{CPUMilli: max(a.CPUMilli, b.CPUMilli), MemoryBytes: max(a.MemoryBytes, b.MemoryBytes)}
+	return protocol.Resources{CPUMilli: max(a.CPUMilli, b.CPUMilli), MemoryBytes: max(a.MemoryBytes, b.MemoryBytes), DiskBytes: max(a.DiskBytes, b.DiskBytes)}
 }
 
 func toNode(n kube.Node) protocol.Node {

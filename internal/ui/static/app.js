@@ -107,12 +107,12 @@ const STRINGS = {
     cpu: 'CPU', memory: 'Memory', cores: 'cores', usedOf: '{0} of {1}', noMetrics: 'metrics-server not available',
     used: 'Used', requested: 'Requested', clusterUsage: 'Cluster usage, last hour',
     attention: 'Needs attention', allGood: 'Everything looks healthy.', recentWarnings: 'Recent warnings',
-    collectionErrors: 'Could not collect', nodeNotReady: 'Node {0} is not ready', nodePressure: 'Node {0} is short of resources', replaced: 'replaced',
+    collectionErrors: 'Could not collect', nodeNotReady: 'Node {0} is not ready', nodePressure: 'Node {0} is short of resources', nodeDiskFull: 'Node {0}’s disk is filling up', diskUsed: 'disk {0}% full', replaced: 'replaced',
     replacedPods: 'Old pods left behind: {0}', replacedHint: 'Evicted or failed pods that their Deployment, StatefulSet or DaemonSet already replaced. Kubernetes keeps them until someone deletes them.',
     readyOf: '{0} of {1} ready',
     nRestarts: '{0} restarts', andMore: 'and {0} more', yes: 'yes', no: 'no', none: 'none',
     'col.name': 'Name', 'col.kind': 'Kind', 'col.namespace': 'Namespace', 'col.status': 'Status',
-    'col.ready': 'Ready', 'col.restarts': 'Restarts', 'col.cpu': 'CPU', 'col.memory': 'Memory',
+    'col.ready': 'Ready', 'col.restarts': 'Restarts', 'col.cpu': 'CPU', 'col.memory': 'Memory', 'col.disk': 'Disk',
     'col.node': 'Node', 'col.age': 'Age', 'col.updated': 'Up to date', 'col.images': 'Images',
     'col.type': 'Type', 'col.clusterIP': 'Cluster IP', 'col.ports': 'Ports', 'col.class': 'Class',
     'col.rules': 'Rules', 'col.tls': 'TLS', 'col.capacity': 'Capacity', 'col.storageClass': 'Storage class',
@@ -205,7 +205,7 @@ const STRINGS = {
     notified: 'notified', waitingNotify: 'waiting', noAlerts: 'No active problems.',
     alertsAfter: 'A problem is notified once it has lasted {0}; problems that start or end together go out as one message.',
     deliveries: 'Last deliveries', resolvedAt: 'resolved', startedAt: 'started',
-    'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.NodePressure': 'Node under pressure', 'alert.PodFailing': 'Pod failing',
+    'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.NodePressure': 'Node under pressure', 'alert.NodeDiskFilling': 'Node disk filling up', 'alert.PodFailing': 'Pod failing',
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
     'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
     'alert.MetricLimit': 'Metric past its limit',
@@ -230,7 +230,8 @@ const STRINGS = {
     certificates: 'Certificates', uptime: 'URL checks', fromServer: 'Checked from the Kartal Gözü server',
     'col.subject': 'Subject', 'col.issuer': 'Issuer', 'col.expires': 'Expires', 'col.used': 'Used', 'col.check': 'Check',
     'col.last24h': 'Last 24 hours', 'col.uptime': 'Uptime', 'col.response': 'Response', 'col.certificate': 'Certificate',
-    expiresIn: 'in {0}', expiredAgo: 'expired {0} ago', inodesUsed: 'inodes: {0}% used',
+    expiresIn: 'in {0}', expiredAgo: 'expired {0} ago', inodesUsed: 'inodes: {0}% used', diskRoot: 'root', diskImages: 'images',
+    diskHint: 'Not known. The agent asks the kubelets when KARTAL_VOLUME_STATS is on (rbac-volumes.yaml).',
     volumeUseHint: 'Not known. The agent asks the kubelets when KARTAL_VOLUME_STATS is on (rbac-volumes.yaml), for volumes that a running pod mounts.',
     certificatesHint: 'From the tls.crt of kubernetes.io/tls Secrets, when KARTAL_TLS_SECRETS is on for the agent (rbac-certificates.yaml); keys are never read. Marked when they expire within {0} days.',
     checksHint: 'The server requests each address on its own and keeps 24 hours of results in memory. A failing check, or a certificate that expires soon, raises an alert.',
@@ -287,12 +288,12 @@ const STRINGS = {
     cpu: 'CPU', memory: 'Bellek', cores: 'çekirdek', usedOf: '{0} / {1}', noMetrics: 'metrics-server yok',
     used: 'Kullanılan', requested: 'Ayrılan', clusterUsage: 'Cluster kullanımı, son bir saat',
     attention: 'İlgilenilmesi gerekenler', allGood: 'Her şey sağlıklı görünüyor.', recentWarnings: 'Son uyarılar',
-    collectionErrors: 'Toplanamayanlar', nodeNotReady: '{0} node’u hazır değil', nodePressure: '{0} node’unda kaynak sıkıntısı', replaced: 'yenisi açıldı',
+    collectionErrors: 'Toplanamayanlar', nodeNotReady: '{0} node’u hazır değil', nodePressure: '{0} node’unda kaynak sıkıntısı', nodeDiskFull: '{0} node’unun diski doluyor', diskUsed: 'disk %{0} dolu', replaced: 'yenisi açıldı',
     replacedPods: 'Geride kalan eski pod: {0}', replacedHint: 'Deployment, StatefulSet ya da DaemonSet’in yerine yenisini açtığı, evict edilmiş ya da düşmüş podlar. Kubernetes bunları biri silene kadar tutar.',
     readyOf: '{1} replikadan {0} hazır',
     nRestarts: '{0} yeniden başlama', andMore: 've {0} tane daha', yes: 'evet', no: 'hayır', none: 'yok',
     'col.name': 'Ad', 'col.kind': 'Tür', 'col.namespace': 'Namespace', 'col.status': 'Durum',
-    'col.ready': 'Hazır', 'col.restarts': 'Yeniden başlama', 'col.cpu': 'CPU', 'col.memory': 'Bellek',
+    'col.ready': 'Hazır', 'col.restarts': 'Yeniden başlama', 'col.cpu': 'CPU', 'col.memory': 'Bellek', 'col.disk': 'Disk',
     'col.node': 'Node', 'col.age': 'Yaş', 'col.updated': 'Güncel', 'col.images': 'İmajlar', 'col.type': 'Tip',
     'col.clusterIP': 'Cluster IP', 'col.ports': 'Portlar', 'col.class': 'Sınıf', 'col.rules': 'Kurallar',
     'col.tls': 'TLS', 'col.capacity': 'Kapasite', 'col.storageClass': 'Storage class', 'col.access': 'Erişim',
@@ -387,7 +388,7 @@ const STRINGS = {
     notified: 'bildirildi', waitingNotify: 'bekliyor', noAlerts: 'Aktif sorun yok.',
     alertsAfter: 'Bir sorun {0} sürerse bildirilir; birlikte başlayan ya da biten sorunlar tek mesajda gider.',
     deliveries: 'Son gönderimler', resolvedAt: 'çözüldü', startedAt: 'başladı',
-    'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.NodePressure': 'Node’da kaynak sıkıntısı', 'alert.PodFailing': 'Pod hata veriyor',
+    'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.NodePressure': 'Node’da kaynak sıkıntısı', 'alert.NodeDiskFilling': 'Node diski doluyor', 'alert.PodFailing': 'Pod hata veriyor',
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
     'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
     'alert.MetricLimit': 'Metrik sınırı aştı',
@@ -412,7 +413,8 @@ const STRINGS = {
     certificates: 'Sertifikalar', uptime: 'URL kontrolleri', fromServer: 'Kartal Gözü sunucusundan denetlenir',
     'col.subject': 'Sertifika adı', 'col.issuer': 'Veren', 'col.expires': 'Bitiş', 'col.used': 'Doluluk', 'col.check': 'Kontrol',
     'col.last24h': 'Son 24 saat', 'col.uptime': 'Erişilebilirlik', 'col.response': 'Yanıt', 'col.certificate': 'Sertifika',
-    expiresIn: '{0} sonra', expiredAgo: '{0} önce doldu', inodesUsed: 'inode: %{0} dolu',
+    expiresIn: '{0} sonra', expiredAgo: '{0} önce doldu', inodesUsed: 'inode: %{0} dolu', diskRoot: 'kök', diskImages: 'imajlar',
+    diskHint: 'Bilinmiyor. Agent, KARTAL_VOLUME_STATS açıkken kubelet’lere sorar (rbac-volumes.yaml).',
     volumeUseHint: 'Bilinmiyor. Agent, KARTAL_VOLUME_STATS açıkken (rbac-volumes.yaml) çalışan bir pod’un bağladığı disklerin doluluğunu kubelet’lerden okur.',
     certificatesHint: 'kubernetes.io/tls Secret’larının tls.crt’sinden; agent’ta KARTAL_TLS_SECRETS açıkken (rbac-certificates.yaml). Anahtarlar hiç okunmaz. {0} gün içinde dolanlar işaretlenir.',
     checksHint: 'Sunucu her adresi kendisi sorar ve son 24 saatin sonuçlarını bellekte tutar. Cevap vermeyen bir adres ya da süresi yaklaşan bir sertifika uyarı oluşturur.',
@@ -1538,31 +1540,66 @@ function detailButton(kind, ns, name) {
   return gvr ? button(t('details'), () => openDetail({ gvr, ns, name })) : null;
 }
 
-// levels are where the server's alerts begin, for volumes and certificates.
+// levels are where the server's alerts begin, for volumes, node disks and
+// certificates.
 function levels() {
-  return Object.assign({ volumeWarning: 85, volumeCritical: 95, certificateWarningDays: 14, certificateCriticalDays: 3 },
-    state.me && state.me.levels);
+  return Object.assign({ volumeWarning: 85, volumeCritical: 95, nodeDiskWarning: 80, nodeDiskCritical: 90,
+    certificateWarningDays: 14, certificateCriticalDays: 3 }, state.me && state.me.levels);
 }
 
-// fillOf is how full a volume is, in percent, by space or by inodes,
-// whichever is fuller; null when the agent does not say.
+// fillOf is how full a volume or a disk is, in percent, by space or by
+// inodes, whichever is fuller; null when the agent does not say.
 function fillOf(v) {
+  if (!v) return null;
   const parts = [];
   if (v.capacityBytes) parts.push((100 * v.usedBytes) / v.capacityBytes);
   if (v.inodes) parts.push((100 * v.inodesUsed) / v.inodes);
   return parts.length ? Math.max(...parts) : null;
 }
 
-function volumeUse(v) {
-  const p = fillOf(v);
-  if (p == null) return h('span', { class: 'muted', title: t('volumeUseHint') }, '—');
-  const lv = levels();
-  const inodes = v.inodes ? Math.round((100 * v.inodesUsed) / v.inodes) : null;
-  const level = p >= lv.volumeCritical ? 'bad' : p >= lv.volumeWarning ? 'warn' : '';
+// fillCell shows how full a file system is, colored by where its alerts
+// begin; null when the agent does not say.
+function fillCell(d, warn, crit, label) {
+  const p = fillOf(d);
+  if (p == null) return null;
+  const inodes = d.inodes ? Math.round((100 * d.inodesUsed) / d.inodes) : null;
+  const level = p >= crit ? 'bad' : p >= warn ? 'warn' : '';
   return h('div', { class: 'bar-cell', title: inodes != null ? t('inodesUsed', inodes) : null },
+    label ? h('span', { class: 'muted' }, label + ' ') : null,
     h('span', { class: level ? 'status-' + level : null }, Math.round(p) + '%'),
-    v.capacityBytes ? h('span', { class: 'muted' }, ' · ' + bytes(v.usedBytes) + ' / ' + bytes(v.capacityBytes)) : null,
+    d.capacityBytes ? h('span', { class: 'muted' }, ' · ' + bytes(d.usedBytes) + ' / ' + bytes(d.capacityBytes)) : null,
     h('div', { class: 'bar' + (level === 'bad' ? ' full' : level ? ' hot' : '') }, h('span', { style: { width: Math.min(100, p) + '%' } })));
+}
+
+function volumeUse(v) {
+  const lv = levels();
+  return fillCell(v, lv.volumeWarning, lv.volumeCritical) || h('span', { class: 'muted', title: t('volumeUseHint') }, '—');
+}
+
+// nodeDisk shows a node's root file system and, when they have one of
+// their own, its images'.
+function nodeDisk(n) {
+  const lv = levels();
+  const root = fillCell(n.disk, lv.nodeDiskWarning, lv.nodeDiskCritical, n.imageDisk ? t('diskRoot') : null);
+  const images = fillCell(n.imageDisk, lv.nodeDiskWarning, lv.nodeDiskCritical, t('diskImages'));
+  return root || images ? [root, images] : h('span', { class: 'muted', title: t('diskHint') }, '—');
+}
+// nodeDiskFill is the fuller of a node's disks, in percent; null when not
+// known.
+function nodeDiskFill(n) {
+  const fills = [fillOf(n.disk), fillOf(n.imageDisk)].filter(p => p != null);
+  return fills.length ? Math.max(...fills) : null;
+}
+// nodeTroubled: not ready, short of resources, or its disk filling up.
+function nodeTroubled(n) {
+  const fill = nodeDiskFill(n);
+  return !n.ready || (n.pressure || []).length > 0 || (fill != null && fill >= levels().nodeDiskWarning);
+}
+// podDisk is a pod's ephemeral storage use, against its request and limit.
+function podDisk(p) {
+  const cell = usageWithRequest(p.diskBytes, p.requests && p.requests.diskBytes, p.limits && p.limits.diskBytes, bytes);
+  if (p.diskBytes == null) cell.title = t('diskHint');
+  return cell;
 }
 
 // certLevel is ok, warn or bad, by how soon a certificate expires.
@@ -1639,6 +1676,7 @@ const TABLES = {
         p => (p.usage ? p.usage.cpuMilli : null)],
       ['memory', p => usageWithRequest(p.usage && p.usage.memoryBytes, p.requests && p.requests.memoryBytes, p.limits && p.limits.memoryBytes, bytes),
         p => (p.usage ? p.usage.memoryBytes : null)],
+      ['disk', podDisk, p => p.diskBytes],
       ['node', p => nodeLink(p.node), p => p.node],
       ['age', p => age(p.startedAt), p => ageOf(p.startedAt)],
     ],
@@ -1759,7 +1797,7 @@ const TABLES = {
   },
   nodes: {
     key: n => 'Node//' + n.name,
-    problem: n => !n.ready || (n.pressure || []).length > 0,
+    problem: nodeTroubled,
     order: (a, b) => cmp(a.name, b.name),
     text: n => [n.name, n.internalIP, n.kubeletVersion, ...(n.roles || [])],
     columns: [
@@ -1770,6 +1808,7 @@ const TABLES = {
         n => pct(n.requests ? n.requests.cpuMilli : 0, n.allocatable.cpuMilli)],
       ['memory', n => capacityCell(n.usage && n.usage.memoryBytes, n.requests && n.requests.memoryBytes, n.allocatable.memoryBytes, bytes),
         n => pct(n.requests ? n.requests.memoryBytes : 0, n.allocatable.memoryBytes)],
+      ['disk', nodeDisk, nodeDiskFill],
       ['pods', n => h('span', { class: 'nowrap' }, n.podCount + ' / ' + (n.allocatable.pods || '—')), n => n.podCount],
       ['version', n => n.kubeletVersion || '—'],
       ['ip', n => mono(n.internalIP || '—')],
@@ -1888,8 +1927,10 @@ function matches(words, parts) {
   return words.every(w => text.includes(w));
 }
 
-function renderTable(view, items, { filtered = true, sortable = true } = {}) {
+// omit leaves columns out, where the table is a summary.
+function renderTable(view, items, { filtered = true, sortable = true, omit = [] } = {}) {
   const spec = TABLES[view];
+  const columns = spec.columns.filter(([k]) => !omit.includes(k));
   let rows = items;
   if (filtered) {
     const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -1906,7 +1947,7 @@ function renderTable(view, items, { filtered = true, sortable = true } = {}) {
     h('table', null,
       h('thead', null, h('tr', null,
         starred ? h('th', { class: 'fav' }) : null,
-        spec.columns.map(([k, , sortBy]) => (sortable && sortBy
+        columns.map(([k, , sortBy]) => (sortable && sortBy
           ? h('th', { class: 'sortable', title: t('col.' + k), onclick: () => toggleSort(view, k) },
             t('col.' + k), h('span', { class: 'sort-mark' }, s && s.key === k ? (s.dir === 1 ? ' ▲' : ' ▼') : ''))
           : h('th', null, t('col.' + k)))),
@@ -1915,7 +1956,7 @@ function renderTable(view, items, { filtered = true, sortable = true } = {}) {
         const f = favOf(spec, it);
         return h('tr', { class: spec.problem && spec.problem(it) ? 'problem' : null },
           f ? h('td', { class: 'fav' }, starButton(isFav(f), () => toggleFav(f[0], f[1]))) : null,
-          spec.columns.map(([, cell]) => h('td', null, cell(it))),
+          columns.map(([, cell]) => h('td', null, cell(it))),
           spec.actions ? h('td', { class: 'actions-cell' }, h('div', { class: 'actions' }, spec.actions(it))) : null);
       }))),
     rows.length > shown.length ? h('div', { class: 'more-note' }, t('showing', shown.length, rows.length), ' ',
@@ -1972,7 +2013,7 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
       card(t('warnings'), events.length, t('warningEvents'), false, routeHash({ view: 'events' })),
       whole ? capacityCard(t('cpu'), use && use.cpuMilli, req.cpuMilli, cap.cpuMilli, cores, ' ' + t('cores')) : null,
       whole ? capacityCard(t('memory'), use && use.memoryBytes, req.memoryBytes, cap.memoryBytes, bytes) : null),
-    attentionPanel(nodes.filter(n => !n.ready || (n.pressure || []).length), degraded, unhealthy, total.podsReplaced || 0),
+    attentionPanel(nodes.filter(nodeTroubled), degraded, unhealthy, total.podsReplaced || 0),
     usage && usage.points && usage.points.length > 1 ? panel(t('clusterUsage'), h('div', { class: 'charts' },
       lineChart({ title: t('cpu'), points: usage.points, value: p => p.cpu, format: cpuUnit, guides: [
         { label: upper(t('allocatable')), value: cap.cpuMilli }, { label: upper(t('requested')), value: req.cpuMilli }] }),
@@ -1982,7 +2023,7 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
     summary.errors && summary.errors.length
       ? panel('⚠ ' + t('collectionErrors'), h('ul', null, summary.errors.map(e => h('li', { class: 'mono' }, e))), 'errors')
       : null,
-    whole ? panel(t('nodes'), renderTable('nodes', nodes, { filtered: false, sortable: false })) : null,
+    whole ? panel(t('nodes'), renderTable('nodes', nodes, { filtered: false, sortable: false, omit: ['version', 'ip', 'age'] })) : null,
   ];
 }
 
@@ -1990,10 +2031,18 @@ function renderOverview({ summary, nodes, workloads: degraded, pods: unhealthy, 
 // their controllers, which only want cleaning up.
 function attentionPanel(troubledNodes, degraded, unhealthy, replaced) {
   const items = [
-    ...troubledNodes.map(n => ({
-      rank: 2, level: n.ready ? 'warn' : 'bad', title: t(n.ready ? 'nodePressure' : 'nodeNotReady', n.name),
-      detail: (n.pressure || []).join(', '), actions: [detailButton('Node', '', n.name)],
-    })),
+    ...troubledNodes.map(n => {
+      const lv = levels();
+      const short = (n.pressure || []).length > 0;
+      const fill = nodeDiskFill(n);
+      const full = fill != null && fill >= lv.nodeDiskWarning;
+      return {
+        rank: 2, level: !n.ready || (full && fill >= lv.nodeDiskCritical) ? 'bad' : 'warn',
+        title: t(!n.ready ? 'nodeNotReady' : short || !full ? 'nodePressure' : 'nodeDiskFull', n.name),
+        detail: [(n.pressure || []).join(', '), full ? t('diskUsed', Math.round(fill)) : ''].filter(Boolean).join(' · '),
+        actions: [detailButton('Node', '', n.name)],
+      };
+    }),
     ...degraded.map(w => ({
       rank: favRank(w.kind + '/' + w.namespace + '/' + w.name, w.namespace),
       title: w.kind + ' ' + w.namespace + '/' + w.name, detail: t('readyOf', w.ready, w.desired),
@@ -2141,12 +2190,14 @@ function alertObject(a) {
   // A watched metric's alert leads to its chart.
   if (a.kind === 'MetricLimit') return h('a', { class: 'ns-link', href: routeHash({ view: 'appmetrics', ns: a.namespace, q: a.object }) }, a.object);
   const kinds = {
-    NodeNotReady: 'Node', NodePressure: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim',
+    NodeNotReady: 'Node', NodePressure: 'Node', NodeDiskFilling: 'Node', PodFailing: 'Pod', JobFailed: 'Job', VolumeClaimUnbound: 'PersistentVolumeClaim',
     VolumeFilling: 'PersistentVolumeClaim', CertificateExpiring: 'Secret',
   };
   let kind = kinds[a.kind];
   let name = a.object;
   if (a.kind === 'WorkloadDegraded') [kind, name] = a.object.split('/');
+  // An image disk's alert names its node with " (images)".
+  if (a.kind === 'NodeDiskFilling') name = name.replace(/ \(images\)$/, '');
   const gvr = KIND_API[kind];
   if (!gvr) return a.object;
   return h('button', { type: 'button', class: 'link-button', onclick: () => openDetail({ gvr, ns: kind === 'Node' ? '' : a.namespace, name }) }, a.object);
@@ -3324,6 +3375,7 @@ function renderSummary() {
         [t('f.node'), nodeLink(spec.nodeName)], [t('f.podIP'), mono(st.podIP || '—')], [t('f.qos'), st.qosClass],
         [t('f.serviceAccount'), spec.serviceAccountName], [t('f.restartPolicy'), spec.restartPolicy],
         [t('f.priority'), spec.priorityClassName], [t('f.started'), age(st.startTime)],
+        [t('col.disk'), podDiskOf(detail.ref.ns, detail.ref.name)],
       ];
       extra = [
         section(t('f.containers'), containersTable(spec.containers, st.containerStatuses || [])),
@@ -3351,6 +3403,7 @@ function renderSummary() {
         [t('f.addresses'), (st.addresses || []).map(a => a.type + ': ' + a.address).join(' · ')],
         [t('f.os'), info.osImage], [t('f.kernel'), info.kernelVersion], [t('f.runtime'), info.containerRuntimeVersion],
         [t('f.kubelet'), info.kubeletVersion], [t('f.unschedulable'), spec.unschedulable ? t('yes') : t('no')],
+        [t('col.disk'), snap ? nodeDisk(snap) : null],
       ];
       // Requests, limits and usage are summed over the node's pods, and
       // shown against what the node can hand out.
@@ -3364,6 +3417,7 @@ function renderSummary() {
           h('tbody', null,
             row('cpu', [of('requests', 'cpuMilli', cpu), of('limits', 'cpuMilli', cpu), of('usage', 'cpuMilli', cpu)]),
             row('memory', [of('requests', 'memoryBytes', bytes), of('limits', 'memoryBytes', bytes), of('usage', 'memoryBytes', bytes)]),
+            row('ephemeral-storage', [of('requests', 'diskBytes', bytes), of('limits', 'diskBytes', bytes), '—']),
             row('pods', [snap ? share(snap.podCount, snap.allocatable.pods, String) : '—', '—', '—'])))),
         section(t('f.taints'), (spec.taints || []).length ? h('table', { class: 'compact' },
           h('thead', null, h('tr', null, ['key', 'value', 'effect'].map(k => h('th', null, t('col.' + k))))),
@@ -3755,6 +3809,14 @@ function claimUse(ns, name) {
   const list = detail.cache.claims.value;
   const v = list && list.find(x => x.name === name);
   return v ? volumeUse(v) : null;
+}
+
+// podDiskOf is a pod's ephemeral storage use as the agent last saw it.
+function podDiskOf(ns, name) {
+  if (!detail.cache.ownPods) fetchInto('ownPods', () => api(clusterPath() + '/pods?namespace=' + enc(ns)));
+  const list = detail.cache.ownPods.value;
+  const p = list && list.find(x => x.name === name);
+  return p ? podDisk(p) : null;
 }
 
 function snapshotNode(name) {

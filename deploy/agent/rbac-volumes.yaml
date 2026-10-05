@@ -1,7 +1,8 @@
 # Optional: lets the agent ask each node's kubelet, through the API server,
-# how full the volumes are (also set KARTAL_VOLUME_STATS to "true").
+# how full the volumes and its disks are, and how much disk the pods use
+# (also set KARTAL_VOLUME_STATS to "true").
 # Note that get on nodes/proxy reaches every read-only kubelet endpoint
-# (pod lists, logs, metrics), not only the volume statistics; Kubernetes
+# (pod lists, logs, metrics), not only the disk statistics; Kubernetes
 # treats it as a powerful permission. Include it only if you accept that for
 # the agent's service account.
 apiVersion: rbac.authorization.k8s.io/v1

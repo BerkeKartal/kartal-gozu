@@ -78,10 +78,12 @@ spec:
             #   value: kartal
             # - name: KARTAL_SMTP_PASSWORD_FILE
             #   value: /etc/kartal/smtp-password
-            # When a volume (in percent full) or a certificate (in days before
-            # it expires) needs attention; these are the defaults.
+            # When a volume or a node's disk (in percent full) or a certificate
+            # (in days before it expires) needs attention; these are the defaults.
             # - name: KARTAL_ALERT_VOLUME_WARNING
             #   value: "85"
+            # - name: KARTAL_ALERT_NODE_DISK_WARNING
+            #   value: "80"
             # - name: KARTAL_ALERT_CERT_WARNING_DAYS
             #   value: "14"
           ports:

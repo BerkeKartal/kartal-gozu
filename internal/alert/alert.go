@@ -59,6 +59,7 @@ var titles = map[string]string{
 	"JobFailed":           "Job failed",
 	"VolumeClaimUnbound":  "Volume claim unbound",
 	"VolumeFilling":       "Volume filling up",
+	"NodeDiskFilling":     "Node disk filling up",
 	"CertificateExpiring": "Certificate expiring",
 	"URLDown":             "Address not answering",
 	"MetricLimit":         "Metric past its limit",
@@ -172,6 +173,9 @@ type Manager struct {
 	// VolumeWarning and VolumeCritical are how full a volume may get, in
 	// percent; zero means 85 and 95.
 	VolumeWarning, VolumeCritical float64
+	// NodeDiskWarning and NodeDiskCritical are how full a node's disk may
+	// get, in percent; zero means 80 and 90.
+	NodeDiskWarning, NodeDiskCritical float64
 	// CertificateWarning and CertificateCritical are how close a
 	// certificate's expiry may come; zero means 14 days and 3 days.
 	CertificateWarning, CertificateCritical time.Duration
@@ -221,6 +225,14 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 		} else if len(n.Pressure) > 0 {
 			// A ready node short of disk or memory evicts pods to cope.
 			add(Alert{Kind: "NodePressure", Severity: warning, Object: n.Name, Detail: strings.Join(n.Pressure, ", ")})
+		}
+		// A disk filling up, before the kubelet starts evicting pods.
+		warn, crit := m.NodeDiskLevels()
+		if sev, detail := filling(n.Disk, warn, crit); sev != "" {
+			add(Alert{Kind: "NodeDiskFilling", Severity: sev, Object: n.Name, Detail: detail})
+		}
+		if sev, detail := filling(n.ImageDisk, warn, crit); sev != "" {
+			add(Alert{Kind: "NodeDiskFilling", Severity: sev, Object: n.Name + " (images)", Detail: detail})
 		}
 	}
 	for _, p := range snap.Pods {
@@ -307,18 +319,41 @@ func (m *Manager) CertificateLevels() (warn, crit time.Duration) {
 	return warn, crit
 }
 
-// volumeFilling tells how bad a volume's fill level is: by space or, when
-// that is worse, by inodes (many small files fill a disk too).
+// NodeDiskLevels are how full a node's disk may get, in percent, before it
+// is a warning and before it is critical. By default the kubelet starts
+// evicting pods when the images' file system is 85% full and the root one
+// 90%, so the warning comes first. A nil manager has the defaults.
+func (m *Manager) NodeDiskLevels() (warn, crit float64) {
+	warn, crit = 80, 90
+	if m != nil && m.NodeDiskWarning > 0 {
+		warn = m.NodeDiskWarning
+	}
+	if m != nil && m.NodeDiskCritical > 0 {
+		crit = m.NodeDiskCritical
+	}
+	return warn, crit
+}
+
+// volumeFilling tells how bad a volume's fill level is.
 func (m *Manager) volumeFilling(v protocol.VolumeClaim) (severity, detail string) {
 	warn, crit := m.VolumeLevels()
-	var p float64
-	if v.CapacityBytes > 0 {
-		p = 100 * float64(v.UsedBytes) / float64(v.CapacityBytes)
-		detail = fmt.Sprintf("%.0f%% full (%s of %s)", p, size(v.UsedBytes), size(v.CapacityBytes))
+	return filling(&protocol.Disk{UsedBytes: v.UsedBytes, CapacityBytes: v.CapacityBytes, InodesUsed: v.InodesUsed, Inodes: v.Inodes}, warn, crit)
+}
+
+// filling tells how bad a file system's fill level is: by space or, when
+// that is worse, by inodes (many small files fill a disk too).
+func filling(d *protocol.Disk, warn, crit float64) (severity, detail string) {
+	if d == nil {
+		return "", ""
 	}
-	if v.Inodes > 0 {
-		if q := 100 * float64(v.InodesUsed) / float64(v.Inodes); q > p {
-			p, detail = q, fmt.Sprintf("%.0f%% of inodes used (%d of %d files)", q, v.InodesUsed, v.Inodes)
+	var p float64
+	if d.CapacityBytes > 0 {
+		p = 100 * float64(d.UsedBytes) / float64(d.CapacityBytes)
+		detail = fmt.Sprintf("%.0f%% full (%s of %s)", p, size(d.UsedBytes), size(d.CapacityBytes))
+	}
+	if d.Inodes > 0 {
+		if q := 100 * float64(d.InodesUsed) / float64(d.Inodes); q > p {
+			p, detail = q, fmt.Sprintf("%.0f%% of inodes used (%d of %d files)", q, d.InodesUsed, d.Inodes)
 		}
 	}
 	switch {

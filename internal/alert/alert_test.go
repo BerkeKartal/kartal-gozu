@@ -247,6 +247,44 @@ func TestVolumesAndCertificates(t *testing.T) {
 	}
 }
 
+func TestNodeDisks(t *testing.T) {
+	gib := int64(1 << 30)
+	snap := &protocol.Snapshot{Nodes: []protocol.Node{
+		{Name: "ok", Ready: true, Disk: &protocol.Disk{UsedBytes: 50 * gib, CapacityBytes: 100 * gib}},
+		{Name: "filling", Ready: true, Disk: &protocol.Disk{UsedBytes: 82 * gib, CapacityBytes: 100 * gib}},
+		{Name: "images", Ready: true, Disk: &protocol.Disk{UsedBytes: 10 * gib, CapacityBytes: 100 * gib},
+			ImageDisk: &protocol.Disk{UsedBytes: 46 * gib, CapacityBytes: 50 * gib}},
+		{Name: "files", Ready: true, Disk: &protocol.Disk{UsedBytes: gib, CapacityBytes: 100 * gib, InodesUsed: 85, Inodes: 100}},
+		{Name: "unknown", Ready: true},
+	}}
+	got := func(m *Manager) string {
+		m.Observe("prod", snap, time.Now())
+		var out []string
+		for _, a := range m.State().Active {
+			if a.Kind != "NodeDiskFilling" {
+				t.Errorf("unexpected alert %+v", a)
+			}
+			out = append(out, a.Severity+" "+a.Object+": "+a.Detail)
+		}
+		sort.Strings(out)
+		return strings.Join(out, "\n")
+	}
+	want := strings.Join([]string{
+		"critical images (images): 92% full (46 GiB of 50 GiB)",
+		"warning files: 85% of inodes used (85 of 100 files)",
+		"warning filling: 82% full (82 GiB of 100 GiB)",
+	}, "\n")
+	if s := got(NewManager(0, nil)); s != want {
+		t.Errorf("alerts:\n%s\nwant:\n%s", s, want)
+	}
+	// The levels can be moved.
+	m := NewManager(0, nil)
+	m.NodeDiskWarning, m.NodeDiskCritical = 90, 95
+	if s := got(m); s != "warning images (images): 92% full (46 GiB of 50 GiB)" {
+		t.Errorf("with levels 90 and 95:\n%s", s)
+	}
+}
+
 func TestChecksBelongToNoCluster(t *testing.T) {
 	rec := &recorder{}
 	m := NewManager(0, nil, rec)

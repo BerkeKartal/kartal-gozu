@@ -53,11 +53,39 @@ const (
 	CapabilityScrape = "scrape"
 )
 
-// Resources is an amount of CPU (millicores), memory (bytes) and pod slots.
+// Resources is an amount of CPU (millicores), memory (bytes), pod slots and
+// ephemeral storage: the local disk that containers write to (their
+// writable layer, logs and emptyDir volumes), in bytes.
 type Resources struct {
 	CPUMilli    int64 `json:"cpuMilli"`
 	MemoryBytes int64 `json:"memoryBytes"`
 	Pods        int64 `json:"pods,omitempty"`
+	DiskBytes   int64 `json:"diskBytes,omitempty"`
+}
+
+// Disk is how full a file system is, as its node's kubelet sees it. Used
+// is what is no longer available: on ext4, blocks kept for root count.
+type Disk struct {
+	UsedBytes     int64 `json:"usedBytes"`
+	CapacityBytes int64 `json:"capacityBytes"`
+	InodesUsed    int64 `json:"inodesUsed,omitempty"`
+	Inodes        int64 `json:"inodes,omitempty"`
+}
+
+// Fill is how full the file system is, in percent, by space or by inodes,
+// whichever is fuller; -1 when nothing is known.
+func (d *Disk) Fill() float64 {
+	p := -1.0
+	if d == nil {
+		return p
+	}
+	if d.CapacityBytes > 0 {
+		p = 100 * float64(d.UsedBytes) / float64(d.CapacityBytes)
+	}
+	if d.Inodes > 0 {
+		p = max(p, 100*float64(d.InodesUsed)/float64(d.Inodes))
+	}
+	return p
 }
 
 type Node struct {
@@ -80,6 +108,11 @@ type Node struct {
 	Taints    []string   `json:"taints,omitempty"`
 	PodCount  int        `json:"podCount"`
 	CreatedAt time.Time  `json:"createdAt"`
+	// Disk is the node's root file system, where the kubelet keeps pods'
+	// logs and writable layers; ImageDisk the container images', when they
+	// are on a file system of their own. They need KARTAL_VOLUME_STATS.
+	Disk      *Disk `json:"disk,omitempty"`
+	ImageDisk *Disk `json:"imageDisk,omitempty"`
 }
 
 type Namespace struct {
@@ -124,6 +157,9 @@ type Pod struct {
 	Requests  *Resources `json:"requests,omitempty"`
 	Limits    *Resources `json:"limits,omitempty"`
 	StartedAt time.Time  `json:"startedAt"`
+	// DiskBytes is the ephemeral storage the pod uses (writable layers,
+	// logs, emptyDir), as its kubelet reports; it needs KARTAL_VOLUME_STATS.
+	DiskBytes *int64 `json:"diskBytes,omitempty"`
 }
 
 // Healthy reports whether the pod is running with all containers ready, or

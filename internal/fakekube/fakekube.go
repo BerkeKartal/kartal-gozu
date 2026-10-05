@@ -62,12 +62,12 @@ const (
 	nsKubeSystem = `{"metadata":{"name":"kube-system"},"status":{"phase":"Active"}}`
 	nodeCP       = `{"metadata":{"name":"cp1","labels":{"node-role.kubernetes.io/control-plane":""}},
 		"spec":{"taints":[{"key":"node-role.kubernetes.io/control-plane","effect":"NoSchedule"}]},
-		"status":{"capacity":{"cpu":"4","memory":"8Gi","pods":"110"},"allocatable":{"cpu":"3800m","memory":"7Gi","pods":"110"},
+		"status":{"capacity":{"cpu":"4","memory":"8Gi","pods":"110","ephemeral-storage":"98Gi"},"allocatable":{"cpu":"3800m","memory":"7Gi","pods":"110","ephemeral-storage":"88Gi"},
 			"conditions":[{"type":"MemoryPressure","status":"False"},{"type":"Ready","status":"True"}],
 			"addresses":[{"type":"Hostname","address":"cp1"},{"type":"InternalIP","address":"10.0.0.1"}],
 			"nodeInfo":{"kubeletVersion":"v1.30.14","osImage":"Ubuntu 22.04","containerRuntimeVersion":"containerd://1.7"}}}`
 	nodeWorker = `{"metadata":{"name":"worker1"},"spec":{},
-		"status":{"capacity":{"cpu":"8","memory":"16Gi","pods":"110"},"allocatable":{"cpu":"8","memory":"15Gi","pods":"110"},
+		"status":{"capacity":{"cpu":"8","memory":"16Gi","pods":"110","ephemeral-storage":"196Gi"},"allocatable":{"cpu":"8","memory":"15Gi","pods":"110","ephemeral-storage":"176Gi"},
 			"conditions":[{"type":"MemoryPressure","status":"True"},{"type":"Ready","status":"False"}]}}`
 	deployAPI = `{"metadata":{"name":"api","namespace":"demo","uid":"uid-deploy-api","creationTimestamp":"2026-09-01T10:00:00Z",
 			"annotations":{"deployment.kubernetes.io/revision":"2",
@@ -195,7 +195,7 @@ func (f *Server) extra() extra {
 				"annotations":{"prometheus.io/scrape":"true","prometheus.io/port":"9100"},
 				"ownerReferences":[{"kind":"ReplicaSet","name":"web-5d8c","controller":true}]},
 				"spec":{"nodeName":%q,"containers":[
-					{"name":"web","image":"x","ports":[{"name":"http","containerPort":8080},{"name":"metrics","containerPort":9100}],"resources":{"requests":{"cpu":"50m","memory":"64Mi"},"limits":{"cpu":"250m","memory":"256Mi"}}},
+					{"name":"web","image":"x","ports":[{"name":"http","containerPort":8080},{"name":"metrics","containerPort":9100}],"resources":{"requests":{"cpu":"50m","memory":"64Mi","ephemeral-storage":"100Mi"},"limits":{"cpu":"250m","memory":"256Mi","ephemeral-storage":"1Gi"}}},
 					{"name":"proxy","image":"y","resources":{"requests":{"cpu":"10m","memory":"32Mi"}}}]},
 				"status":{"phase":"Running","podIP":"10.1.%d.%d","startTime":"2026-09-2%dT08:00:00Z",
 				"containerStatuses":[{"name":"web","ready":%t,"restartCount":%d,"state":%s},{"name":"proxy","ready":true,"restartCount":0,"state":{"running":{}}}]}}`,

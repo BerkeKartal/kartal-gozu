@@ -148,7 +148,35 @@ func TestCertificatesAndVolumes(t *testing.T) {
 	}
 	var me map[string]any
 	json.Unmarshal(do(s, "GET", "/api/v1/me", teamTok, "").Body.Bytes(), &me)
-	if lv, _ := me["levels"].(map[string]any); lv["volumeWarning"] != 85.0 || lv["volumeCritical"] != 95.0 || lv["certificateWarningDays"] != 14.0 || lv["certificateCriticalDays"] != 3.0 {
+	if lv, _ := me["levels"].(map[string]any); lv["volumeWarning"] != 85.0 || lv["volumeCritical"] != 95.0 || lv["certificateWarningDays"] != 14.0 || lv["certificateCriticalDays"] != 3.0 ||
+		lv["nodeDiskWarning"] != 80.0 || lv["nodeDiskCritical"] != 90.0 {
 		t.Errorf("levels: %v", me["levels"])
+	}
+}
+
+func TestNodeDiskProblems(t *testing.T) {
+	s := New(Config{
+		AgentTokens: map[string]string{agentTok: "prod"},
+		AdminToken:  adminTok,
+		StaleAfter:  time.Minute, MaxPollWait: time.Second, CommandTimeout: time.Second,
+	}, store.New("prod"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	snap := protocol.Snapshot{Nodes: []protocol.Node{
+		{Name: "fine", Ready: true, Disk: &protocol.Disk{UsedBytes: 50, CapacityBytes: 100}},
+		{Name: "full", Ready: true, Disk: &protocol.Disk{UsedBytes: 81, CapacityBytes: 100}},
+		{Name: "images", Ready: true, Disk: &protocol.Disk{UsedBytes: 10, CapacityBytes: 100}, ImageDisk: &protocol.Disk{UsedBytes: 85, CapacityBytes: 100}},
+		{Name: "unknown", Ready: true},
+	}}
+	b, _ := json.Marshal(snap)
+	if rec := do(s, "POST", "/agent/v1/report", agentTok, string(b)); rec.Code != 204 {
+		t.Fatalf("report: %d", rec.Code)
+	}
+	var items []protocol.Node
+	json.Unmarshal(do(s, "GET", "/api/v1/clusters/prod/nodes?problems=true", adminTok, "").Body.Bytes(), &items)
+	var names []string
+	for _, n := range items {
+		names = append(names, n.Name)
+	}
+	if strings.Join(names, ",") != "full,images" {
+		t.Errorf("nodes with problems: %v", names)
 	}
 }

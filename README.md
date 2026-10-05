@@ -275,7 +275,7 @@ kind of action, set its variable to `"true"` and enable its RBAC file in
 | `rbac-write.yaml` | `KARTAL_ALLOW_WRITE` | Restart, scale, rollback, deleting pods, cordoning nodes, running and suspending CronJobs |
 | `rbac-exec.yaml` | `KARTAL_ALLOW_EXEC` | The pod console |
 | `rbac-edit.yaml` | `KARTAL_ALLOW_EDIT` | Saving objects edited as YAML (common kinds; widen it in the file) |
-| `rbac-volumes.yaml` | `KARTAL_VOLUME_STATS` | How full volume claims are, asked from each node's kubelet once a minute |
+| `rbac-volumes.yaml` | `KARTAL_VOLUME_STATS` | How full volume claims and the nodes' disks are, and how much disk each pod uses (ephemeral storage: writable layers, logs, `emptyDir`), asked from each node's kubelet once a minute |
 | `rbac-certificates.yaml` | `KARTAL_TLS_SECRETS` | When the certificates of `kubernetes.io/tls` Secrets expire, read every five minutes |
 | `rbac-pod-metrics.yaml` | `KARTAL_POD_METRICS` | The metrics that pods expose, read through the API server: a pod's page on request, and the watched metrics every 30 seconds |
 
@@ -284,7 +284,7 @@ cannot grant less: `rbac-volumes.yaml` gives `get` on `nodes/proxy`, which
 reaches every read-only kubelet endpoint; `rbac-pod-metrics.yaml` gives `get`
 on `pods/proxy`, which reaches every pod's HTTP endpoints; and
 `rbac-certificates.yaml` lets the agent list all Secrets. The agent itself
-reads only volume statistics; only pages in the Prometheus text format, whose
+reads only disk and volume statistics; only pages in the Prometheus text format, whose
 metrics are all it passes on (never another page, nor an error page a pod
 answers with); and only the `tls.crt` of TLS Secrets, never their keys.
 
@@ -407,14 +407,16 @@ on are sent as soon as one is.
 | Job failed | a Job gave up (its `Failed` condition); one still retrying is not a problem yet |
 | Volume claim unbound | a claim is not bound |
 | Volume filling up | a volume is 85% full (a warning) or 95% (critical), by space or by inodes; needs `KARTAL_VOLUME_STATS` on the agent |
+| Node disk filling up | a node's root disk, or its images' disk when they have one of their own, is 80% full (a warning) or 90% (critical), by space or by inodes: before the kubelet starts evicting pods (85% for images, 90% for the root disk by default); needs `KARTAL_VOLUME_STATS` on the agent |
 | Certificate expiring | a TLS Secret's certificate, or that of an address a URL check asks, expires within 14 days (a warning) or 3 days (critical), or has expired |
 | Address not answering | a URL check fails: no answer, an error status, the wrong status or text, or a certificate that cannot be trusted |
 | Metric past its limit | a watched metric's latest value is above or below the limit set for it |
 
 The levels can be changed with `KARTAL_ALERT_VOLUME_WARNING` and
-`KARTAL_ALERT_VOLUME_CRITICAL` (percent), and
+`KARTAL_ALERT_VOLUME_CRITICAL` (percent), `KARTAL_ALERT_NODE_DISK_WARNING`
+and `KARTAL_ALERT_NODE_DISK_CRITICAL` (percent), and
 `KARTAL_ALERT_CERT_WARNING_DAYS` and `KARTAL_ALERT_CERT_CRITICAL_DAYS`. The
-lists in the UI mark volumes and certificates at the same levels.
+lists in the UI mark volumes, nodes and certificates at the same levels.
 
 Channels, any number of them together:
 
@@ -510,6 +512,7 @@ at a time.
 | `KARTAL_ALERT_TEAMS_URL` | — | Microsoft Teams workflow URL |
 | `KARTAL_ALERT_WEBHOOK_URL` | — | Any URL that accepts a JSON POST |
 | `KARTAL_ALERT_VOLUME_WARNING`, `_CRITICAL` | `85`, `95` | How full a volume may get, in percent |
+| `KARTAL_ALERT_NODE_DISK_WARNING`, `_CRITICAL` | `80`, `90` | How full a node's disk may get, in percent |
 | `KARTAL_ALERT_CERT_WARNING_DAYS`, `_CRITICAL_DAYS` | `14`, `3` | How close a certificate's expiry may come |
 | `KARTAL_SMTP_ADDR`, `_FROM`, `_TO`, `_USERNAME`, `_PASSWORD` / `_PASSWORD_FILE` | — | E-mail notifications; when set, the UI cannot change them |
 | `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI (e-mail, URL checks) |
@@ -529,7 +532,7 @@ at a time.
 | `KARTAL_ALLOW_EXEC` | `false` | Allow the pod console (with `rbac-exec.yaml`) |
 | `KARTAL_ALLOW_EDIT` | `false` | Allow saving edited YAML (with `rbac-edit.yaml`) |
 | `KARTAL_INCLUDE_SECRETS` | `false` | Add Secret names to the snapshot (values are never sent) |
-| `KARTAL_VOLUME_STATS` | `false` | Report how full volume claims are (with `rbac-volumes.yaml`) |
+| `KARTAL_VOLUME_STATS` | `false` | Report how full volume claims and node disks are, and the pods' disk use (with `rbac-volumes.yaml`) |
 | `KARTAL_TLS_SECRETS` | `false` | Report when the certificates of TLS Secrets expire (with `rbac-certificates.yaml`) |
 | `KARTAL_POD_METRICS` | `false` | Read the metrics that pods expose (with `rbac-pod-metrics.yaml`) |
 | `KARTAL_CA_FILE` | — | Extra CA file, if the server uses a private CA |

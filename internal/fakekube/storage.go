@@ -38,7 +38,8 @@ func (f *Server) volumes(x extra) []volumeUse {
 	return append([]volumeUse{{ns: "demo", claim: "data", node: "cp1", used: 62 * gib / 10, capacity: 10 * gib, inodesUsed: 41_000, inodes: 655_360}}, x.volumes...)
 }
 
-// statsSummary is the kubelet's /stats/summary for a node, volumes only.
+// statsSummary is the kubelet's /stats/summary for a node: its file
+// systems, and its pods' ephemeral storage and volumes.
 func (f *Server) statsSummary(node string, x extra) string {
 	type ref struct {
 		Name      string `json:"name"`
@@ -54,10 +55,22 @@ func (f *Server) statsSummary(node string, x extra) string {
 		Inodes         int64  `json:"inodes"`
 	}
 	type pod struct {
-		PodRef ref      `json:"podRef"`
-		Volume []volume `json:"volume"`
+		PodRef    ref      `json:"podRef"`
+		Ephemeral *volume  `json:"ephemeral-storage,omitempty"`
+		Volume    []volume `json:"volume"`
 	}
+	// The node's root file system, which also holds the images, is 82%
+	// full: past the warning level, short of the kubelet's evictions.
+	const diskCapacity = 98 * gib
+	root := volume{UsedBytes: diskCapacity * 80 / 100, CapacityBytes: diskCapacity, AvailableBytes: diskCapacity * 18 / 100,
+		InodesUsed: 1_200_000, Inodes: 6_400_000}
 	var pods []pod
+	// The teams' second web pod runs here; each writes a little to its disk.
+	for i := 1; i <= f.Extra; i++ {
+		used := int64(i) * 9 << 20
+		pods = append(pods, pod{PodRef: ref{Name: fmt.Sprintf("web-5d8c-%02d2", i), Namespace: fmt.Sprintf("team-%02d", i)},
+			Ephemeral: &volume{UsedBytes: used, CapacityBytes: diskCapacity, AvailableBytes: root.AvailableBytes}})
+	}
 	for _, v := range f.volumes(x) {
 		if v.node != node {
 			continue
@@ -70,7 +83,10 @@ func (f *Server) statsSummary(node string, x extra) string {
 			{Name: "kube-api-access", UsedBytes: 4096, CapacityBytes: 1 << 20, AvailableBytes: 1<<20 - 4096},
 		}})
 	}
-	b, _ := json.Marshal(map[string]any{"node": map[string]any{"nodeName": node}, "pods": pods})
+	b, _ := json.Marshal(map[string]any{
+		"node": map[string]any{"nodeName": node, "fs": root, "runtime": map[string]any{"imageFs": root}},
+		"pods": pods,
+	})
 	return string(b)
 }
 

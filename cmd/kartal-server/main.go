@@ -203,6 +203,12 @@ func notifications(log *slog.Logger) (alerting, error) {
 	if m.VolumeCritical, err = config.Number("KARTAL_ALERT_VOLUME_CRITICAL", 95, 1, 100); err != nil {
 		return alerting{}, err
 	}
+	if m.NodeDiskWarning, err = config.Number("KARTAL_ALERT_NODE_DISK_WARNING", 80, 1, 100); err != nil {
+		return alerting{}, err
+	}
+	if m.NodeDiskCritical, err = config.Number("KARTAL_ALERT_NODE_DISK_CRITICAL", 90, 1, 100); err != nil {
+		return alerting{}, err
+	}
 	warnDays, err := config.Number("KARTAL_ALERT_CERT_WARNING_DAYS", 14, 1, 365)
 	if err != nil {
 		return alerting{}, err
@@ -211,7 +217,7 @@ func notifications(log *slog.Logger) (alerting, error) {
 	if err != nil {
 		return alerting{}, err
 	}
-	if m.VolumeWarning > m.VolumeCritical || warnDays < critDays {
+	if m.VolumeWarning > m.VolumeCritical || m.NodeDiskWarning > m.NodeDiskCritical || warnDays < critDays {
 		return alerting{}, errors.New("KARTAL_ALERT_*: a warning must come before the critical level")
 	}
 	day := float64(24 * time.Hour)

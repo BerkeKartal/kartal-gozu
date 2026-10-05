@@ -41,7 +41,8 @@ spec:
               value: "false"
             - name: KARTAL_ALLOW_EDIT
               value: "false"
-            # How full volumes are, asked from the kubelets (needs rbac-volumes.yaml).
+            # How full volumes and node disks are, and the pods' disk use, asked
+            # from the kubelets (needs rbac-volumes.yaml).
             - name: KARTAL_VOLUME_STATS
               value: "false"
             # When the certificates of TLS Secrets expire (needs rbac-certificates.yaml);

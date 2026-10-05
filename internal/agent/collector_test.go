@@ -236,3 +236,41 @@ func TestVolumeStatsAndCertificates(t *testing.T) {
 		t.Errorf("stale figures kept: %+v", snap.VolumeClaims[0])
 	}
 }
+
+func TestNodeAndPodDisks(t *testing.T) {
+	f, kc := NewFakeKube(t)
+	f.Extra = 2
+	snap := (&Collector{Kube: kc, Version: "test", VolumeStats: true}).Collect(context.Background())
+	if len(snap.Errors) != 0 {
+		t.Fatalf("errors: %v", snap.Errors)
+	}
+	nodes := map[string]protocol.Node{}
+	for _, n := range snap.Nodes {
+		nodes[n.Name] = n
+	}
+	// The images share the root file system, so they are not counted twice;
+	// the node that does not answer has no figures.
+	const capacity = 98 << 30
+	if d := nodes["cp1"].Disk; d == nil || d.CapacityBytes != capacity || d.UsedBytes != capacity-capacity*18/100 ||
+		d.Inodes != 6_400_000 || nodes["cp1"].ImageDisk != nil {
+		t.Errorf("cp1: %+v, images %+v", d, nodes["cp1"].ImageDisk)
+	}
+	if n := nodes["worker1"]; n.Disk != nil || n.ImageDisk != nil {
+		t.Errorf("worker1: %+v", n.Disk)
+	}
+	if a := nodes["cp1"].Allocatable; a.DiskBytes != 88<<30 {
+		t.Errorf("allocatable ephemeral storage: %+v", a)
+	}
+	disks := map[string]int64{}
+	for _, p := range snap.Pods {
+		if p.DiskBytes != nil {
+			disks[p.Namespace+"/"+p.Name] = *p.DiskBytes
+		}
+		if p.Name == "web-5d8c-012" && (p.Requests == nil || p.Requests.DiskBytes != 100<<20 || p.Limits == nil || p.Limits.DiskBytes != 1<<30) {
+			t.Errorf("ephemeral storage: requests %+v, limits %+v", p.Requests, p.Limits)
+		}
+	}
+	if want := map[string]int64{"team-01/web-5d8c-012": 9 << 20, "team-02/web-5d8c-022": 18 << 20}; !reflect.DeepEqual(disks, want) {
+		t.Errorf("pod disks: %v", disks)
+	}
+}

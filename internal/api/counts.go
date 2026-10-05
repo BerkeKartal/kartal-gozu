@@ -142,17 +142,24 @@ func tally(snap *protocol.Snapshot, lv levels) (objectCounts, map[string]*object
 // the alerts' warning levels.
 type levels struct {
 	volume      float64
+	nodeDisk    float64
 	certificate time.Duration
 	now         time.Time
 }
 
 func (s *Server) levels() levels {
 	volume, _ := s.cfg.Alerts.VolumeLevels()
+	nodeDisk, _ := s.cfg.Alerts.NodeDiskLevels()
 	certificate, _ := s.cfg.Alerts.CertificateLevels()
-	return levels{volume: volume, certificate: certificate, now: s.now()}
+	return levels{volume: volume, nodeDisk: nodeDisk, certificate: certificate, now: s.now()}
 }
 
 func (lv levels) filling(v protocol.VolumeClaim) bool { return v.Fill() >= lv.volume }
+
+// diskFilling tells whether a node's disk is past the warning level.
+func (lv levels) diskFilling(n protocol.Node) bool {
+	return n.Disk.Fill() >= lv.nodeDisk || n.ImageDisk.Fill() >= lv.nodeDisk
+}
 
 // expiring includes a certificate that cannot be read: nobody knows when
 // it expires.
