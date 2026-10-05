@@ -43,14 +43,14 @@ const VIEW_KIND = { deployments: 'Deployment', statefulsets: 'StatefulSet', daem
 // cluster's (or the selected namespace's) counts: [total, needs attention],
 // where what needs attention may add up several counts.
 const NAV = [
-  { items: ['overview'] },
+  { items: ['overview', 'appmetrics'] },
   { group: 'workloads', items: ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'] },
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
   { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
   { group: 'grpStorage', items: ['volumeclaims'] },
   { group: 'grpApps', items: ['helm', 'releases'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events'] },
-  { group: 'grpOps', items: ['alerts', 'appmetrics', 'uptime', 'changes', 'audit'] },
+  { group: 'grpOps', items: ['alerts', 'uptime', 'changes', 'audit'] },
   { items: ['resources'] },
 ];
 const NAV_COUNT = {
@@ -209,7 +209,7 @@ const STRINGS = {
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
     'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
     'alert.MetricLimit': 'Metric past its limit',
-    appmetrics: 'App metrics', 'tab.scrape': 'App metrics', 'capMissing.scrape': 'This cluster’s agent does not read the metrics of pods (KARTAL_POD_METRICS=false).',
+    appmetrics: 'Metrics', 'tab.scrape': 'App metrics', 'capMissing.scrape': 'This cluster’s agent does not read the metrics of pods (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Applications often expose metrics of their own, such as requests, errors or queue lengths, at an address like :9100/metrics. Choose the port and read them.',
     readMetrics: 'Read', port: 'Port', path: 'Path', metricsFilter: 'Filter metrics', nSeries: '{0} series', moreSeries: '… and {0} more series',
     truncatedMetrics: 'The pod exposes more than is shown here.', noMetricsHere: 'The pod exposed no metrics.', moreMetrics: 'Show {0} more metrics',
@@ -218,10 +218,10 @@ const STRINGS = {
     watchLabelsHelp: 'Only the series with these labels, such as code=500. Empty: all of them.', watchRate: 'How fast it grows, per second (for counters)',
     watchAggregate: 'Joined over the pods as', 'agg.sum': 'sum', 'agg.avg': 'average', 'agg.max': 'maximum', 'agg.min': 'minimum',
     watchAbove: 'Alert above', watchBelow: 'Alert below', watchLimitHelp: 'Optional: an alert is raised while the value is past it.',
-    watchSaved: 'Watch saved; its chart is under App metrics.', watchRemoved: 'Watch removed.', removeWatch: 'Remove',
+    watchSaved: 'Watch saved; its chart is under Metrics.', watchRemoved: 'Watch removed.', removeWatch: 'Remove',
     removeWatchTitle: 'Remove watch', removeWatchConfirm: 'Stop watching {0}? Its history is lost.', badLabels: 'Write labels as name=value, separated by commas.',
-    watchesHint: 'The server reads these metrics from the pods every 30 seconds and keeps a day of them in memory. To add one, open a pod and choose its App metrics tab.',
-    noWatches: 'Nothing is watched yet. Open a pod, choose its App metrics tab and press Watch next to a metric.', noPointsYet: 'Waiting for the first readings.',
+    watchesHint: 'The server reads these metrics from the pods every 30 seconds and keeps a day of them in memory. To add one, open a pod or a workload and choose its App metrics tab.',
+    noWatches: 'Nothing is watched yet. Open a pod or a workload (a Deployment, StatefulSet or DaemonSet), choose its App metrics tab and press Watch next to a metric.', noRunningPod: 'None of its pods is running, so there is nothing to read.', noPointsYet: 'Waiting for the first readings.',
     last24h: '24 hours', perSecond: 'per second', limitAbove: 'Limit', limitBelow: 'Lower limit', podsRead: '{0} pods',
     certificates: 'Certificates', uptime: 'URL checks', fromServer: 'Checked from the Kartal Gözü server',
     'col.subject': 'Subject', 'col.issuer': 'Issuer', 'col.expires': 'Expires', 'col.used': 'Used', 'col.check': 'Check',
@@ -387,7 +387,7 @@ const STRINGS = {
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
     'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
     'alert.MetricLimit': 'Metrik sınırı aştı',
-    appmetrics: 'Uygulama metrikleri', 'tab.scrape': 'Metrikler', 'capMissing.scrape': 'Bu cluster’ın agent’ı podların metriklerini okumuyor (KARTAL_POD_METRICS=false).',
+    appmetrics: 'Metrikler', 'tab.scrape': 'Metrikler', 'capMissing.scrape': 'Bu cluster’ın agent’ı podların metriklerini okumuyor (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Uygulamalar çoğu zaman istek, hata ya da kuyruk uzunluğu gibi kendi metriklerini :9100/metrics gibi bir adreste yayınlar. Portu seçip okuyun.',
     readMetrics: 'Oku', port: 'Port', path: 'Yol', metricsFilter: 'Metriklerde ara', nSeries: '{0} seri', moreSeries: '… ve {0} seri daha',
     truncatedMetrics: 'Pod burada gösterilenden fazlasını yayınlıyor.', noMetricsHere: 'Pod hiç metrik yayınlamadı.', moreMetrics: '{0} metrik daha göster',
@@ -396,10 +396,10 @@ const STRINGS = {
     watchLabelsHelp: 'Yalnızca bu etiketlere sahip seriler, örneğin code=500. Boş bırakılırsa hepsi.', watchRate: 'Saniyedeki artışı göster (sayaçlar için)',
     watchAggregate: 'Podlar üzerinden birleştirme', 'agg.sum': 'toplam', 'agg.avg': 'ortalama', 'agg.max': 'en yüksek', 'agg.min': 'en düşük',
     watchAbove: 'Şunun üstünde uyar', watchBelow: 'Şunun altında uyar', watchLimitHelp: 'İsteğe bağlı: değer bu sınırı geçtiği sürece uyarı verilir.',
-    watchSaved: 'İzleme kaydedildi; grafiği Uygulama metrikleri sayfasında.', watchRemoved: 'İzleme kaldırıldı.', removeWatch: 'Kaldır',
+    watchSaved: 'İzleme kaydedildi; grafiği Metrikler sayfasında.', watchRemoved: 'İzleme kaldırıldı.', removeWatch: 'Kaldır',
     removeWatchTitle: 'İzlemeyi kaldır', removeWatchConfirm: '{0} artık izlenmesin mi? Geçmişi silinir.', badLabels: 'Etiketleri virgülle ayrılmış ad=değer olarak yazın.',
-    watchesHint: 'Sunucu bu metrikleri 30 saniyede bir podlardan okur ve bir günlüğünü bellekte tutar. Eklemek için bir pod açıp Metrikler sekmesine geçin.',
-    noWatches: 'Henüz izlenen metrik yok. Bir pod açın, Metrikler sekmesine geçin ve bir metriğin yanındaki İzle’ye basın.', noPointsYet: 'İlk ölçümler bekleniyor.',
+    watchesHint: 'Sunucu bu metrikleri 30 saniyede bir podlardan okur ve bir günlüğünü bellekte tutar. Eklemek için bir pod ya da iş yükü açıp Metrikler sekmesine geçin.',
+    noWatches: 'Henüz izlenen metrik yok. Bir pod ya da iş yükü (Deployment, StatefulSet, DaemonSet) açın, Metrikler sekmesine geçin ve bir metriğin yanındaki İzle’ye basın.', noRunningPod: 'Çalışan podu yok; okunacak bir şey yok.', noPointsYet: 'İlk ölçümler bekleniyor.',
     last24h: '24 saat', perSecond: 'saniyede', limitAbove: 'Sınır', limitBelow: 'Alt sınır', podsRead: '{0} pod',
     certificates: 'Sertifikalar', uptime: 'URL kontrolleri', fromServer: 'Kartal Gözü sunucusundan denetlenir',
     'col.subject': 'Sertifika adı', 'col.issuer': 'Veren', 'col.expires': 'Bitiş', 'col.used': 'Doluluk', 'col.check': 'Kontrol',
@@ -2654,13 +2654,13 @@ function isCounter(type, name) {
     (type === 'untyped' && /_total$/.test(name));
 }
 
-// watchDialog changes a watch, or watches a metric of a pod's page.
-function watchDialog({ watch: w, pod, family, port, path }) {
+// watchDialog changes a watch w, or watches a metric of the page that pod
+// (whose workload is owner, if any) exposes in namespace ns.
+function watchDialog({ watch: w, ns, owner, pod, family, port, path }) {
   const field = (label, input, help) => h('label', { class: 'field' }, h('span', null, label), input,
     help ? h('span', { class: 'muted small-text' }, help) : null);
-  const ns = w ? w.namespace : pod.metadata.namespace;
-  const owner = pod ? podOwner(pod) : '';
-  const targets = w ? [w.target] : [owner, 'Pod/' + pod.metadata.name].filter(Boolean);
+  if (w) ns = w.namespace;
+  const targets = w ? [w.target] : [owner, 'Pod/' + pod].filter(Boolean);
   const target = h('select', { disabled: !!w }, targets.map(x => h('option', { value: x },
     x.startsWith('Pod/') ? t('onlyThisPod', x.slice(4)) : t('allPodsOf', x))));
   const name = h('input', { type: 'text', value: w ? w.name : '', maxlength: '100', autocomplete: 'off', spellcheck: 'false' });
@@ -2901,7 +2901,7 @@ function tabsFor(kind) {
   if (kind === 'Deployment') tabs.push('history');
   const c = currentCluster();
   if ((kind === 'Pod' || kind === 'Node') && c && c.metricsAvailable) tabs.push('metrics');
-  if (kind === 'Pod') tabs.push('scrape');
+  if (['Pod', 'Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)) tabs.push('scrape');
   if (kind === 'Pod' && canIn('admin', detail.ref ? detail.ref.ns : '')) tabs.push('console');
   return tabs;
 }
@@ -3749,29 +3749,63 @@ function metricPorts(pod) {
   return out;
 }
 
-// renderScrapeTab reads the metrics a pod exposes, through its agent. A pod
-// that says where they are is read at once; otherwise the port is chosen
-// first. The page is read again only on request: its numbers change all
-// the time, and redrawing would take away the filter as it is typed into.
+// renderScrapeTab reads the metrics a pod exposes, through its agent; for a
+// workload, those of one of its running pods, which can be switched. With
+// a port known (an annotation or a declared port) the page is read at once;
+// otherwise the port is typed in first. The page is read again only on
+// request: its numbers change all the time, and redrawing would take away
+// the filter as it is typed into.
 function renderScrapeTab() {
-  const { ref, obj } = detail;
+  const { ref, obj, kind } = detail;
   if (!agentAllows('scrape')) {
     fill(els.detailBody, h('div', { class: 'empty-note' }, t('capMissing.scrape')));
     return;
   }
-  const ann = (obj.metadata && obj.metadata.annotations) || {};
-  const ports = metricPorts(obj);
+  // A workload is read through one of its running pods, whose own object
+  // says which ports it has; the workload's template if that cannot be read.
+  let source = obj;
+  let pods = null;
+  if (kind !== 'Pod') {
+    const waiting = c => {
+      fill(els.detailBody, c.error ? errorPanel(c.error) : h('div', { class: 'empty-note' }, t('loading')));
+    };
+    if (!detail.cache.ownPods) fetchInto('ownPods', () => api(clusterPath() + '/pods?namespace=' + enc(ref.ns)));
+    const c = detail.cache.ownPods;
+    if (c.value === undefined) return waiting(c);
+    pods = c.value.filter(p => p.owner === kind + '/' + ref.name && p.phase === 'Running').map(p => p.name).sort();
+    if (!pods.length) {
+      fill(els.detailBody, h('div', { class: 'empty-note' }, t('noRunningPod')));
+      return;
+    }
+    // The pod read before may have been replaced since.
+    if (detail.scrape && !pods.includes(detail.scrape.pod)) detail.scrape.pod = pods[0];
+    const first = detail.scrape ? detail.scrape.pod : pods[0];
+    const key = 'podObject ' + first;
+    if (!detail.cache[key]) fetchInto(key, () => api(objectPath({ gvr: KIND_API.Pod, ns: ref.ns, name: first })));
+    const p = detail.cache[key];
+    if (p.value === undefined && !p.error) return waiting(p);
+    source = p.value || (obj.spec && obj.spec.template) || {};
+  }
+  const ann = (source.metadata && source.metadata.annotations) || {};
+  const ports = metricPorts(source);
   const s = detail.scrape || (detail.scrape = {
     port: ports.length ? ports[0].port : '', path: ann['prometheus.io/path'] || '/metrics', q: '', shown: 30,
-    asked: ann['prometheus.io/scrape'] === 'true' || ports.some(p => /metric|prom/i.test(p.name)),
+    asked: ports.length > 0, pod: pods ? pods[0] : ref.name,
   });
+  const podPick = pods ? h('select', {
+    'aria-label': t('pods'),
+    onchange: e => {
+      s.pod = e.target.value;
+      renderDetail();
+    },
+  }, pods.map(p => h('option', { value: p, selected: p === s.pod }, p))) : null;
   const portIn = h('input', { type: 'text', inputmode: 'numeric', class: 'port-input', value: s.port, list: 'scrape-ports', placeholder: t('port'), 'aria-label': t('port') });
   const pathIn = h('input', { type: 'text', class: 'mono path-input', value: s.path, placeholder: '/metrics', 'aria-label': t('path') });
   const read = () => {
     s.port = portIn.value.trim();
     s.path = pathIn.value.trim() || '/metrics';
     s.asked = true;
-    delete detail.cache['scrape ' + s.port + ' ' + s.path];
+    delete detail.cache['scrape ' + s.pod + ' ' + s.port + ' ' + s.path];
     renderDetail();
   };
   const onEnter = e => {
@@ -3781,7 +3815,7 @@ function renderScrapeTab() {
   pathIn.addEventListener('keydown', onEnter);
   const list = h('div');
   const toolbar = h('div', { class: 'detail-toolbar' },
-    portIn, h('datalist', { id: 'scrape-ports' }, ports.map(p => h('option', { value: p.port }, p.name))), pathIn,
+    podPick, portIn, h('datalist', { id: 'scrape-ports' }, ports.map(p => h('option', { value: p.port }, p.name))), pathIn,
     button(t('readMetrics'), read),
     s.asked ? h('input', {
       type: 'text', class: 'filter', value: s.q, placeholder: t('metricsFilter'), 'aria-label': t('metricsFilter'),
@@ -3795,10 +3829,10 @@ function renderScrapeTab() {
     fill(els.detailBody, toolbar, h('p', { class: 'muted' }, t('scrapeHint')));
     return;
   }
-  const key = 'scrape ' + s.port + ' ' + s.path;
+  const key = 'scrape ' + s.pod + ' ' + s.port + ' ' + s.path;
   if (!detail.cache[key]) {
     const q = new URLSearchParams({ port: s.port, path: s.path });
-    fetchInto(key, () => api(clusterPath() + '/namespaces/' + enc(ref.ns) + '/pods/' + enc(ref.name) + '/scrape?' + q));
+    fetchInto(key, () => api(clusterPath() + '/namespaces/' + enc(ref.ns) + '/pods/' + enc(s.pod) + '/scrape?' + q));
   }
   const c = detail.cache[key];
   const drawList = () => {
@@ -3809,7 +3843,10 @@ function renderScrapeTab() {
     const page = c.value;
     const words = s.q.toLowerCase().split(/\s+/).filter(Boolean);
     const fams = page.families.filter(f => matches(words, [f.name, f.help, f.type])).sort((a, b) => cmp(a.name, b.name));
-    const onWatch = canIn('operator', ref.ns) ? f => () => watchDialog({ pod: obj, family: f, port: s.port, path: s.path }) : null;
+    const owner = kind === 'Pod' ? podOwner(obj) : kind + '/' + ref.name;
+    const onWatch = canIn('operator', ref.ns)
+      ? f => () => watchDialog({ ns: ref.ns, owner, pod: s.pod, family: f, port: s.port, path: s.path })
+      : null;
     fill(list,
       page.truncated ? h('div', { class: 'more-note' }, t('truncatedMetrics')) : null,
       fams.length ? null : h('div', { class: 'empty-note' }, page.families.length ? t('noMatch') : t('noMetricsHere')),

@@ -154,7 +154,7 @@ minutes, a new build of one app in production. Options:
   | Changes | Deployments, StatefulSets, DaemonSets, CronJobs and nodes: that object's timeline |
   | History | Deployments: revisions with images and change cause, and rollback |
   | Metrics | pods and nodes, 1 or 6 hours |
-  | App metrics | pods: the metrics they expose at a port and path (from the `prometheus.io/port` and `prometheus.io/path` annotations, or chosen), and Watch for any of them |
+  | App metrics | pods, and Deployments, StatefulSets and DaemonSets through one of their running pods: the metrics they expose at a port and path (from the `prometheus.io/port` and `prometheus.io/path` annotations, or chosen), and Watch for any of them |
   | Console | pods, for admins |
 
   The panel follows the object while it is open. Buttons for actions you may
