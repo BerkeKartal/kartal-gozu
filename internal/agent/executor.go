@@ -197,6 +197,11 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 			return "", errEditDisabled
 		}
 		return e.apply(ctx, cmd)
+	case protocol.CommandFindMetrics:
+		if !e.AllowScrape {
+			return "", errScrapeDisabled
+		}
+		return e.findMetrics(ctx, cmd)
 	case protocol.CommandScrape, protocol.CommandSample:
 		if cmd.Path == "" {
 			cmd.Path = "/metrics"

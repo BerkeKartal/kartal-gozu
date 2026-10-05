@@ -97,3 +97,48 @@ func TestScrapeIsChecked(t *testing.T) {
 		}
 	}
 }
+
+func TestFindMetrics(t *testing.T) {
+	e := &Executor{Kube: teamsKube(t), AllowScrape: true}
+	res := e.Run(context.Background(), protocol.Command{Type: protocol.CommandFindMetrics})
+	if !res.OK {
+		t.Fatalf("find: %+v", res)
+	}
+	var got protocol.MetricsSources
+	if err := json.Unmarshal([]byte(res.Output), &got); err != nil {
+		t.Fatal(err)
+	}
+	// Each team's web pods answer on 9100; their port 8080 does not, and
+	// pods without ports are not asked at all.
+	var where []string
+	for _, s := range got.Sources {
+		where = append(where, s.Namespace+" "+s.Workload+" :"+s.Port+s.Path)
+		if s.Metrics != 5 || !strings.HasPrefix(s.Pod, "web-5d8c-") {
+			t.Errorf("source: %+v", s)
+		}
+	}
+	if strings.Join(where, ",") != "team-01 Deployment/web :9100/metrics,team-02 Deployment/web :9100/metrics,team-03 Deployment/web :9100/metrics" ||
+		got.Tried != 3 || got.Unfinished {
+		t.Errorf("found: %v (tried %d, unfinished %v)", where, got.Tried, got.Unfinished)
+	}
+	one := e.Run(context.Background(), protocol.Command{Type: protocol.CommandFindMetrics, Namespace: "team-02"})
+	if !one.OK || strings.Count(one.Output, `"workload"`) != 1 {
+		t.Errorf("one namespace: %+v", one)
+	}
+	if res := (&Executor{Kube: e.Kube}).Run(context.Background(), protocol.Command{Type: protocol.CommandFindMetrics}); res.OK {
+		t.Error("found metrics without KARTAL_POD_METRICS")
+	}
+}
+
+func TestMetricsPorts(t *testing.T) {
+	var p metricsPod
+	p.Metadata.Annotations = map[string]string{"prometheus.io/port": "9102"}
+	if err := json.Unmarshal([]byte(`{"containers":[
+		{"ports":[{"name":"http","containerPort":8080},{"name":"postgres","containerPort":5433},{"containerPort":6379}]},
+		{"ports":[{"name":"dns","containerPort":53,"protocol":"UDP"},{"name":"http-metrics","containerPort":9100},{"name":"grpc","containerPort":9090}]}]}`), &p.Spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(metricsPorts(p), ","); got != "9102,9100,8080" {
+		t.Errorf("ports: %s", got)
+	}
+}

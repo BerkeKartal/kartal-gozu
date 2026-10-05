@@ -479,6 +479,7 @@ table.metric-samples { margin-top: 6px; background: none; border: 0; }
 .watch-card .chart-title { text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .watch-meta { font-size: 13px; display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .watch-card .actions { justify-content: flex-start; }
+.panel.sources table { border: 0; border-radius: 0; }
 
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; grid-template-areas: "top" "main"; }

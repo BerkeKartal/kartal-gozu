@@ -45,7 +45,8 @@ tunnel), and the server works under any URL path without configuration.
   exposes at `/metrics` (the Prometheus text format), searchable. Watch any of
   it, for one pod or every pod of a workload: requests per second from a
   counter, a queue's length, memory. The server reads it every 30 seconds,
-  charts the last day, and raises an alert past a limit you set. No
+  charts the last day, and raises an alert past a limit you set. Not sure
+  what exposes metrics? One button asks a pod of every workload. No
   Prometheus needed.
 - **What changed, and what runs where.** A timeline of what changed in each
   cluster (new images, scaling, restarts, nodes going away), with who did it
@@ -586,6 +587,7 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | DELETE | `/api/v1/checks/{id}` | admin | Removes a check and its results |
 | POST | `/api/v1/checks/try` | admin | Same body; asks the address once, without saving anything |
 | GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/scrape?port=&path=` | viewer | The metrics a pod exposes, by name, with their samples |
+| GET | `/api/v1/clusters/{c}/metric-sources?namespace=` | viewer | Asks one running pod of each workload, at its likely ports (not those of databases and other servers that do not speak HTTP), whether it exposes metrics; returns where and how many, within 15 seconds |
 | GET | `/api/v1/clusters/{c}/watches?namespace=&hours=1..24` | viewer | The watched metrics with their values, averaged down to at most 360 points |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/watches` | operator | Body: `{"name", "target", "port", "path", "metric", "labels", "rate", "aggregate", "above", "below"}`; `target` is `Deployment/web` (each of its running pods), a StatefulSet, a DaemonSet or `Pod/web-1`; `aggregate` is `sum`, `avg`, `max` or `min` |
 | PUT | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Same body; changes a watch of that namespace |

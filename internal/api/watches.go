@@ -20,6 +20,7 @@ import (
 func (s *Server) routeWatches(mux *http.ServeMux) {
 	const c = "/api/v1/clusters/{cluster}"
 	mux.HandleFunc("GET "+c+"/namespaces/{ns}/pods/{pod}/scrape", s.inCluster(auth.Viewer, pathNamespace, s.scrapePod))
+	mux.HandleFunc("GET "+c+"/metric-sources", s.inCluster(auth.Viewer, queryNamespace, s.metricSources))
 	mux.HandleFunc("GET "+c+"/watches", s.inCluster(auth.Viewer, anywhere, s.watchList))
 	mux.HandleFunc("POST "+c+"/namespaces/{ns}/watches", s.inCluster(auth.Operator, pathNamespace, s.addWatch))
 	mux.HandleFunc("PUT "+c+"/namespaces/{ns}/watches/{id}", s.inCluster(auth.Operator, pathNamespace, s.changeWatch))
@@ -34,6 +35,15 @@ func (s *Server) scrapePod(w http.ResponseWriter, r *http.Request) {
 		Type: protocol.CommandScrape, Namespace: r.PathValue("ns"), Name: r.PathValue("pod"),
 		Port: q.Get("port"), Path: q.Get("path"),
 	})
+	if ok {
+		writeRawJSON(w, r, res.Output)
+	}
+}
+
+// metricSources asks one running pod of each workload, in the namespace
+// asked for or everywhere, whether it exposes metrics, and where.
+func (s *Server) metricSources(w http.ResponseWriter, r *http.Request) {
+	res, ok := s.dispatch(w, r, protocol.Command{Type: protocol.CommandFindMetrics, Namespace: r.URL.Query().Get("namespace")})
 	if ok {
 		writeRawJSON(w, r, res.Output)
 	}

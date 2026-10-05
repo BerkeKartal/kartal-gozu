@@ -85,3 +85,23 @@ func appMetrics(team, replica int, t float64) string {
 	fmt.Fprintf(&b, "go_goroutines %d\n", 30+team+replica)
 	return b.String()
 }
+
+// serveTeamPods lists the pods of one generated team's namespace.
+func serveTeamPods(w http.ResponseWriter, p string, x extra) bool {
+	ns, ok := strings.CutPrefix(p, "/api/v1/namespaces/")
+	if !ok {
+		return false
+	}
+	ns, ok = strings.CutSuffix(ns, "/pods")
+	if !ok || !strings.HasPrefix(ns, "team-") || strings.Contains(ns, "/") {
+		return false
+	}
+	var items []string
+	for _, pod := range x.pods {
+		if strings.Contains(pod, `"namespace":"`+ns+`"`) {
+			items = append(items, pod)
+		}
+	}
+	io.WriteString(w, list(items...))
+	return true
+}

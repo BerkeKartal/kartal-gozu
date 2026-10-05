@@ -256,7 +256,7 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	x := f.extra()
 
-	if f.serveMore(w, r, x, metaOnly) || f.serveStorage(w, r, x, metaOnly) || f.servePodMetrics(w, r) {
+	if f.serveMore(w, r, x, metaOnly) || f.serveStorage(w, r, x, metaOnly) || f.servePodMetrics(w, r) || serveTeamPods(w, p, x) {
 		return
 	}
 	if ns, pod, ok := logPath(p); ok {

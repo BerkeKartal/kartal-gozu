@@ -137,9 +137,10 @@ func TestMonitor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "both checks' first results", func() bool {
+	// A result is listed a moment before the alerts hear of it.
+	waitFor(t, "both checks' first results and their alerts", func() bool {
 		l := m.List()
-		return len(l) == 2 && l[0].Last != nil && l[1].Last != nil
+		return len(l) == 2 && l[0].Last != nil && l[1].Last != nil && len(alerts.State().Active) == 2
 	})
 	l := m.List()
 	if l[0].Name != "API" || l[0].Last.OK || *l[0].Uptime != 0 || l[1].Name != "Web" || *l[1].Uptime != 100 || l[1].AvgMillis != 40 {

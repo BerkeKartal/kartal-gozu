@@ -366,7 +366,33 @@ const (
 	// CommandSample reads the samples named in Metrics from each of Pods
 	// (in Namespace) at Port and Path, and returns []PodSamples.
 	CommandSample = "sample"
+	// CommandFindMetrics looks for the workloads that expose metrics, in
+	// Namespace or everywhere, by asking one running pod of each at its
+	// ports, and returns MetricsSources.
+	CommandFindMetrics = "find-metrics"
 )
+
+// MetricsSources are the workloads found to expose metrics.
+type MetricsSources struct {
+	Sources []MetricsSource `json:"sources"`
+	// Tried is how many workloads had a port to ask; Unfinished says that
+	// time ran out before every one was asked.
+	Tried      int  `json:"tried"`
+	Unfinished bool `json:"unfinished,omitempty"`
+}
+
+// MetricsSource is a workload whose pod answered with metrics: where, and
+// how many metrics it exposes. What they say is not part of it.
+type MetricsSource struct {
+	Namespace string `json:"namespace"`
+	// Workload is the pod's controller, such as Deployment/web, or
+	// Pod/<name> for a pod of its own.
+	Workload string `json:"workload"`
+	Pod      string `json:"pod"`
+	Port     string `json:"port"`
+	Path     string `json:"path"`
+	Metrics  int    `json:"metrics"`
+}
 
 // Scrape is what a pod exposes: its metrics, by name.
 type Scrape struct {

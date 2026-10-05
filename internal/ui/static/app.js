@@ -221,8 +221,12 @@ const STRINGS = {
     watchSaved: 'Watch saved; its chart is under Metrics.', watchRemoved: 'Watch removed.', removeWatch: 'Remove',
     removeWatchTitle: 'Remove watch', removeWatchConfirm: 'Stop watching {0}? Its history is lost.', badLabels: 'Write labels as name=value, separated by commas.',
     watchesHint: 'The server reads these metrics from the pods every 30 seconds and keeps a day of them in memory. To add one, open a pod or a workload and choose its App metrics tab.',
-    noWatches: 'Nothing is watched yet. Open a pod or a workload (a Deployment, StatefulSet or DaemonSet), choose its App metrics tab and press Watch next to a metric.', noRunningPod: 'None of its pods is running, so there is nothing to read.', noPointsYet: 'Waiting for the first readings.',
+    noWatches: 'Nothing is watched yet. Start with “Find what exposes metrics” above, or open a workload and choose its App metrics tab; what you Watch shows here.', noRunningPod: 'None of its pods is running, so there is nothing to read.', noPointsYet: 'Waiting for the first readings.',
     last24h: '24 hours', perSecond: 'per second', limitAbove: 'Limit', limitBelow: 'Lower limit', podsRead: '{0} pods',
+    findSources: 'Find what exposes metrics', findingSources: 'Asking one pod of each workload for its metrics…', sourcesTitle: 'Exposing metrics: {0}',
+    sourcesHint: 'One running pod of each workload was asked at its likely ports, leaving out those of databases and other servers that do not speak HTTP. Open one to see its metrics, and Watch any of them to chart it here.',
+    noSources: 'None of the {0} workloads asked answered with metrics.', sourcesUnfinished: 'Time ran out before every workload was asked; choose a namespace to look closer.',
+    openMetrics: 'Show metrics', 'col.address': 'Address', 'col.metrics': 'Metrics', 'col.workload': 'Workload',
     certificates: 'Certificates', uptime: 'URL checks', fromServer: 'Checked from the Kartal Gözü server',
     'col.subject': 'Subject', 'col.issuer': 'Issuer', 'col.expires': 'Expires', 'col.used': 'Used', 'col.check': 'Check',
     'col.last24h': 'Last 24 hours', 'col.uptime': 'Uptime', 'col.response': 'Response', 'col.certificate': 'Certificate',
@@ -399,8 +403,12 @@ const STRINGS = {
     watchSaved: 'İzleme kaydedildi; grafiği Metrikler sayfasında.', watchRemoved: 'İzleme kaldırıldı.', removeWatch: 'Kaldır',
     removeWatchTitle: 'İzlemeyi kaldır', removeWatchConfirm: '{0} artık izlenmesin mi? Geçmişi silinir.', badLabels: 'Etiketleri virgülle ayrılmış ad=değer olarak yazın.',
     watchesHint: 'Sunucu bu metrikleri 30 saniyede bir podlardan okur ve bir günlüğünü bellekte tutar. Eklemek için bir pod ya da iş yükü açıp Metrikler sekmesine geçin.',
-    noWatches: 'Henüz izlenen metrik yok. Bir pod ya da iş yükü (Deployment, StatefulSet, DaemonSet) açın, Metrikler sekmesine geçin ve bir metriğin yanındaki İzle’ye basın.', noRunningPod: 'Çalışan podu yok; okunacak bir şey yok.', noPointsYet: 'İlk ölçümler bekleniyor.',
+    noWatches: 'Henüz izlenen metrik yok. Yukarıdaki “Metrik yayınlayanları bul” ile başlayın ya da bir iş yükü açıp Metrikler sekmesine geçin; İzle ile eklediğiniz metrikler burada görünür.', noRunningPod: 'Çalışan podu yok; okunacak bir şey yok.', noPointsYet: 'İlk ölçümler bekleniyor.',
     last24h: '24 saat', perSecond: 'saniyede', limitAbove: 'Sınır', limitBelow: 'Alt sınır', podsRead: '{0} pod',
+    findSources: 'Metrik yayınlayanları bul', findingSources: 'Her iş yükünün bir podunda metrikler deneniyor…', sourcesTitle: 'Metrik yayınlayanlar: {0}',
+    sourcesHint: 'Her iş yükünün çalışan bir podu, olası portlarından soruldu; veritabanı gibi HTTP konuşmayan sunucuların portları atlandı. Birini açıp metriklerini görün; İzle ile eklediğiniz metriğin grafiği burada çıkar.',
+    noSources: 'Sorulan {0} iş yükünden hiçbiri metrik döndürmedi.', sourcesUnfinished: 'Hepsine sormaya süre yetmedi; daha yakından bakmak için bir namespace seçin.',
+    openMetrics: 'Metrikleri göster', 'col.address': 'Adres', 'col.metrics': 'Metrik', 'col.workload': 'İş yükü',
     certificates: 'Sertifikalar', uptime: 'URL kontrolleri', fromServer: 'Kartal Gözü sunucusundan denetlenir',
     'col.subject': 'Sertifika adı', 'col.issuer': 'Veren', 'col.expires': 'Bitiş', 'col.used': 'Doluluk', 'col.check': 'Kontrol',
     'col.last24h': 'Son 24 saat', 'col.uptime': 'Erişilebilirlik', 'col.response': 'Yanıt', 'col.certificate': 'Sertifika',
@@ -2594,20 +2602,77 @@ function renderAppMetrics({ watches, where, loadError }) {
       h('div', { class: 'detail' }, t('watchesHint')),
       canIn('operator', state.ns) ? h('div', { class: where ? 'detail' : 'detail status-warn' }, where ? t('mailWhere', where) : t('mailNotKept')) : null,
       loadError ? h('div', { class: 'detail status-bad' }, t('mailLoadError', loadError)) : null),
-    h('div', { class: 'actions' }, [1, 6, 24].map(n => h('button', {
-      type: 'button', class: n === hours ? 'chip active' : 'chip',
-      onclick: () => {
-        state.watchHours = n;
-        state.data = null;
-        renderContent();
-        refresh();
-      },
-    }, n === 1 ? t('last1h') : n === 6 ? t('last6h') : t('last24h'))))));
-  if (!watches.length) return [head, emptyState(t('noWatches'))];
+    h('div', { class: 'actions' },
+      agentAllows('scrape') ? button(t('findSources'), findSources, 'primary') : null,
+      [1, 6, 24].map(n => h('button', {
+        type: 'button', class: n === hours ? 'chip active' : 'chip',
+        onclick: () => {
+          state.watchHours = n;
+          state.data = null;
+          renderContent();
+          refresh();
+        },
+      }, n === 1 ? t('last1h') : n === 6 ? t('last6h') : t('last24h'))))));
+  const found = sourcesPanel();
+  if (!watches.length) return [head, found, found ? null : emptyState(t('noWatches'))];
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
   const rows = watches.filter(w => matches(words, [w.name, w.metric, w.target, w.namespace, labelsText(w.labels)]));
-  if (!rows.length) return [head, emptyState(t('noMatch'))];
-  return [head, h('div', { class: 'watch-grid' }, rows.map(watchCard))];
+  return [head, found, rows.length ? h('div', { class: 'watch-grid' }, rows.map(watchCard)) : emptyState(t('noMatch'))];
+}
+
+// Sources are the workloads found to expose metrics, kept while the page
+// shows the same cluster and namespace. Finding them asks a pod of every
+// workload, so it is done only on request.
+function sourcesKey() { return state.cluster + '|' + state.ns; }
+
+async function findSources() {
+  const key = sourcesKey();
+  state.sources = { key, loading: true };
+  renderContent();
+  try {
+    const value = await api(clusterPath() + '/metric-sources' + (state.ns ? '?namespace=' + enc(state.ns) : ''));
+    if (state.sources && state.sources.key === key) state.sources = { key, value };
+  } catch (e) {
+    if (e.status === 401) return;
+    if (state.sources && state.sources.key === key) state.sources = { key, error: e };
+  }
+  if (state.view === 'appmetrics') renderContent();
+}
+
+function sourcesPanel() {
+  const s = state.sources;
+  if (!s || s.key !== sourcesKey()) return null;
+  if (s.loading) return panel(t('findSources'), h('div', { class: 'empty-note' }, t('findingSources')));
+  if (s.error) return errorPanel(s.error);
+  const { sources, tried, unfinished } = s.value;
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = sources.filter(x => matches(words, [x.namespace, x.workload, x.pod]));
+  return panel(t('sourcesTitle', sources.length), [
+    h('div', { class: 'issue' }, h('div', { class: 'what' },
+      h('div', { class: 'detail' }, sources.length ? t('sourcesHint') : t('noSources', tried)),
+      unfinished ? h('div', { class: 'detail status-warn' }, t('sourcesUnfinished')) : null)),
+    rows.length ? h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, ['namespace', 'workload', 'address', 'metrics'].map(k => h('th', null, t('col.' + k))), h('th'))),
+      h('tbody', null, rows.map(x => h('tr', null,
+        h('td', null, nsLink(x.namespace)),
+        h('td', null, h('strong', null, x.workload)),
+        h('td', { class: 'mono' }, ':' + x.port + x.path),
+        h('td', null, x.metrics),
+        h('td', { class: 'actions-cell' }, button(t('openMetrics'), () => openSource(x))))))) : null,
+  ], 'sources');
+}
+
+// pendingScrape is where the next Metrics tab opened from a source reads,
+// instead of the port it would pick itself.
+let pendingScrape = null;
+
+function openSource(x) {
+  let [kind, name] = x.workload.split('/');
+  // Only these kinds have the tab; for the others, such as a Job's pod or a
+  // node's static pod, the pod itself is opened.
+  if (!['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)) [kind, name] = ['Pod', x.pod];
+  pendingScrape = { ns: x.namespace, name, pod: x.pod, port: x.port, path: x.path };
+  openDetail({ gvr: KIND_API[kind], ns: x.namespace, name }, 'scrape');
 }
 
 function watchCard(w) {
@@ -3765,6 +3830,8 @@ function renderScrapeTab() {
   // says which ports it has; the workload's template if that cannot be read.
   let source = obj;
   let pods = null;
+  // Opened from a found source: read where it answered.
+  const pend = pendingScrape && pendingScrape.ns === ref.ns && pendingScrape.name === ref.name ? pendingScrape : null;
   if (kind !== 'Pod') {
     const waiting = c => {
       fill(els.detailBody, c.error ? errorPanel(c.error) : h('div', { class: 'empty-note' }, t('loading')));
@@ -3779,7 +3846,7 @@ function renderScrapeTab() {
     }
     // The pod read before may have been replaced since.
     if (detail.scrape && !pods.includes(detail.scrape.pod)) detail.scrape.pod = pods[0];
-    const first = detail.scrape ? detail.scrape.pod : pods[0];
+    const first = detail.scrape ? detail.scrape.pod : pend && pods.includes(pend.pod) ? pend.pod : pods[0];
     const key = 'podObject ' + first;
     if (!detail.cache[key]) fetchInto(key, () => api(objectPath({ gvr: KIND_API.Pod, ns: ref.ns, name: first })));
     const p = detail.cache[key];
@@ -3788,10 +3855,16 @@ function renderScrapeTab() {
   }
   const ann = (source.metadata && source.metadata.annotations) || {};
   const ports = metricPorts(source);
-  const s = detail.scrape || (detail.scrape = {
-    port: ports.length ? ports[0].port : '', path: ann['prometheus.io/path'] || '/metrics', q: '', shown: 30,
-    asked: ports.length > 0, pod: pods ? pods[0] : ref.name,
-  });
+  if (!detail.scrape) {
+    detail.scrape = pend
+      ? { port: pend.port, path: pend.path, q: '', shown: 30, asked: true, pod: pods && !pods.includes(pend.pod) ? pods[0] : pend.pod }
+      : {
+        port: ports.length ? ports[0].port : '', path: ann['prometheus.io/path'] || '/metrics', q: '', shown: 30,
+        asked: ports.length > 0, pod: pods ? pods[0] : ref.name,
+      };
+    pendingScrape = null;
+  }
+  const s = detail.scrape;
   const podPick = pods ? h('select', {
     'aria-label': t('pods'),
     onchange: e => {
