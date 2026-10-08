@@ -138,5 +138,6 @@ func (s Settings) clone() Settings {
 	for i, w := range s.Watches {
 		s.Watches[i] = w.clone()
 	}
+	s.Collect.Targets = slices.Clone(s.Collect.Targets)
 	return s
 }

@@ -4,6 +4,7 @@
 
 import { toYAML, diffLines } from './yaml.js';
 import { lineChart } from './chart.js';
+import { plot } from './plot.js';
 
 const REFRESH_MS = 10000;
 const FOLLOW_MS = 3000;
@@ -13,15 +14,15 @@ const TOKEN_KEY = 'kartal.token';
 
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
-  'alerts', 'appmetrics', 'uptime', 'changes', 'releases', 'audit', 'resources'];
+  'alerts', 'appmetrics', 'explore', 'uptime', 'changes', 'releases', 'audit', 'resources'];
 // Views that are not about one namespace.
-const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit']);
+const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore']);
 // Views that show every cluster at once.
-const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit']);
+const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore']);
 // Views of the server itself, which checks addresses on its own.
 const SERVER_VIEWS = new Set(['uptime']);
 // Views whose data the agent fetches live; they reload on demand only.
-const LIVE_VIEWS = new Set(['resources', 'helm']);
+const LIVE_VIEWS = new Set(['resources', 'helm', 'explore']);
 const WORKLOAD_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet']);
 const KIND_VIEW = {
   Pod: 'pods', Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets',
@@ -43,7 +44,7 @@ const VIEW_KIND = { deployments: 'Deployment', statefulsets: 'StatefulSet', daem
 // cluster's (or the selected namespace's) counts: [total, needs attention],
 // where what needs attention may add up several counts.
 const NAV = [
-  { items: ['overview', 'appmetrics'] },
+  { items: ['overview', 'appmetrics', 'explore'] },
   { group: 'workloads', items: ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'] },
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
   { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
@@ -247,6 +248,40 @@ const STRINGS = {
     critical: 'critical', warning: 'warning',
     auditEmpty: 'Nothing has been changed through Kartal Gözü yet.',
     auditHint: 'The last 1000 changes, kept in memory; the server log keeps all of them.', ok: 'ok',
+    storeTitle: 'Metric store', storeDays: '{0} days', storeSeries: '{0} series today', storeEvery: 'every {0}',
+    keptForever: 'kept until deleted', keptDays: 'kept {0} days', storeSettings: 'Settings', storeDelete: 'Delete a range',
+    storeHint: 'Every metric of these workloads is read on a schedule and kept on the server’s disk. To add one, open a workload’s App metrics tab and choose Collect always, or use the sources found above.',
+    noTargets: 'Nothing is collected yet.', collectAlways: 'Collect always', collectTitle: 'Collect every metric',
+    collectHelp: 'Every metric the target’s running pods expose at this address is stored each round, labelled with cluster, namespace, pod and workload, until it is deleted.',
+    collectInclude: 'Only metrics matching', collectExclude: 'Leave out metrics matching',
+    collectPatternHelp: 'A regular expression for the metric’s name, such as http_.*|process_.*; empty keeps them all.',
+    collectSaved: 'Collecting; the first reading comes within seconds.', collectRemove: 'Stop', collectRemoveTitle: 'Stop collecting',
+    collectRemoveConfirm: 'Stop collecting {0}? What was stored stays until it is deleted.', collectRemoved: 'No longer collected.',
+    notReadYet: 'Not read yet', podsFailed: '{0} failed', 'col.samples': 'Samples', 'col.lastRead': 'Last read',
+    storeSettingsTitle: 'Metric store settings', storeDir: 'Kept in {0} on the server.', storeInterval: 'Read every',
+    storeRetention: 'Keep (days)', storeRetentionHelp: '0 keeps everything until you delete it.', storeSaved: 'Saved.',
+    storeDeleteTitle: 'Delete stored metrics', storeFrom: 'From', storeTo: 'To', storeOlder: 'Older than {0} days', storeAll: 'Everything',
+    storeDeleteHelp: 'Every sample between these two moments is deleted, of every cluster. Whole days go at once; the days at the ends are rewritten.',
+    storeDeleteConfirm: 'Delete every stored sample from {0} to {1}? This cannot be undone.', storeDeleted: 'Deleted; {0} freed.',
+    storeThisDay: 'This day', storeBadRange: 'Choose a start before the end.',
+    explore: 'Explore', exStoreOff: 'The metric store is off on this server; give it a directory (KARTAL_DATA_DIR).',
+    exHelp: 'Shift+Enter runs the queries. Drag across the chart to zoom in. Click a series in the legend to show only it, Ctrl+click to hide it. $__rate_interval is a window that always holds a few samples.',
+    'unitShort.m': 'm', 'unitShort.h': 'h', 'unitShort.d': 'd', exApply: 'Apply', exStep: 'Step', exAuto: 'auto',
+    exRefresh: 'Run again every', exOff: 'off', exCustom: 'Custom', exZoomOut: 'Zoom out', exBack: 'Back',
+    exBrowse: 'Browse metrics', exRunning: 'Running…', exRun: 'Run', exAddQuery: 'Add query', exQuery: 'Query',
+    exPlaceholder: 'A query, such as sum by (pod) (rate(http_requests_total[$__rate_interval]))', exLegend: 'Legend, such as {{pod}}',
+    exBuilder: 'Builder', exShow: 'Show', exHide: 'Hide', exRemove: 'Remove', exLabel: 'label', exFunction: 'function',
+    exNone: 'none', exPercentile: '{0}th percentile', exMetric: 'Metric', exFn: 'Function', exAgg: 'Aggregate', exAny: 'any',
+    exBy: 'Group by', exSearch: 'Search metrics', 'col.series': 'Series', exNoMetrics: 'Nothing is stored in this time range yet.',
+    exBrowseTitle: 'Stored metrics', exBrowseHint: 'Choose one to chart it: a counter as its rate, a histogram as its 95th percentile.',
+    exSeries: '{0} series', exGraph: 'Graph', exTable: 'Table', exRangeInfo: '{0} – {1} · step {2}', exMode: 'Draw',
+    exLines: 'lines', exArea: 'areas', exStacked: 'stacked', exUnit: 'Unit', 'unit.auto': 'auto', 'unit.none': 'number',
+    'unit.bytes': 'bytes', 'unit.bytesSec': 'bytes/s', 'unit.seconds': 'seconds', 'unit.ms': 'milliseconds',
+    'unit.percentUnit': 'percent (0–1)', 'unit.percent': 'percent (0–100)', 'unit.perSec': 'per second', exCSV: 'CSV',
+    exEmpty: 'Write a query above, use the builder, or browse the stored metrics.', exFailed: 'The queries failed; see the errors above.',
+    exNoData: 'Nothing in this time range. The store holds the metrics of the workloads collected with Collect always (Metrics page).',
+    exAllHidden: 'Every series is hidden; click one in the legend.', exMean: 'Mean', exMax: 'Max', exMin: 'Min', exLast: 'Last',
+    exLegendHelp: 'Click: only this series. Ctrl+click: hide or show it.', exMore: '{0} more series are not listed',
   },
   tr: {
     overview: 'Genel bakış', workloads: 'İş yükleri', pods: 'Podlar', services: 'Servisler',
@@ -431,6 +466,40 @@ const STRINGS = {
     critical: 'kritik', warning: 'uyarı',
     auditEmpty: 'Kartal Gözü üzerinden henüz bir değişiklik yapılmadı.',
     auditHint: 'Son 1000 değişiklik bellekte tutulur; sunucu logu hepsini saklar.', ok: 'tamam',
+    storeTitle: 'Metrik deposu', storeDays: '{0} gün', storeSeries: 'bugün {0} seri', storeEvery: '{0} arayla',
+    keptForever: 'silinene kadar saklanır', keptDays: '{0} gün saklanır', storeSettings: 'Ayarlar', storeDelete: 'Aralık sil',
+    storeHint: 'Bu iş yüklerinin tüm metrikleri düzenli aralıklarla okunur ve sunucunun diskinde saklanır. Eklemek için bir iş yükünün Metrikler sekmesinde Sürekli topla’yı seçin ya da yukarıda bulunan kaynakları kullanın.',
+    noTargets: 'Henüz toplanan bir şey yok.', collectAlways: 'Sürekli topla', collectTitle: 'Tüm metrikleri sürekli topla',
+    collectHelp: 'Hedefin çalışan podlarının bu adreste yayınladığı tüm metrikler her turda cluster, namespace, pod ve workload etiketleriyle saklanır; siz silene kadar kalır.',
+    collectInclude: 'Yalnızca eşleşen metrikler', collectExclude: 'Hariç tutulan metrikler',
+    collectPatternHelp: 'Metrik adına uyan bir düzenli ifade, örneğin http_.*|process_.*; boşsa hepsi alınır.',
+    collectSaved: 'Toplanıyor; ilk okuma birkaç saniye içinde gelir.', collectRemove: 'Durdur', collectRemoveTitle: 'Toplamayı durdur',
+    collectRemoveConfirm: '{0} artık toplanmasın mı? Saklananlar siz silene kadar kalır.', collectRemoved: 'Artık toplanmıyor.',
+    notReadYet: 'Henüz okunmadı', podsFailed: '{0} hatalı', 'col.samples': 'Örnek', 'col.lastRead': 'Son okuma',
+    storeSettingsTitle: 'Metrik deposu ayarları', storeDir: 'Sunucuda {0} içinde saklanır.', storeInterval: 'Okuma aralığı',
+    storeRetention: 'Saklama (gün)', storeRetentionHelp: '0: siz silene kadar hepsi saklanır.', storeSaved: 'Kaydedildi.',
+    storeDeleteTitle: 'Saklanan metrikleri sil', storeFrom: 'Başlangıç', storeTo: 'Bitiş', storeOlder: '{0} günden eski', storeAll: 'Hepsi',
+    storeDeleteHelp: 'Bu iki an arasındaki tüm örnekler, tüm cluster’larınki silinir. Tam günler doğrudan gider; uçlardaki günler yeniden yazılır.',
+    storeDeleteConfirm: '{0} – {1} arasındaki tüm saklanan örnekler silinsin mi? Geri alınamaz.', storeDeleted: 'Silindi; {0} boşaldı.',
+    storeThisDay: 'Bu gün', storeBadRange: 'Başlangıcı bitişten önce seçin.',
+    explore: 'Keşfet', exStoreOff: 'Bu sunucuda metrik deposu kapalı; bir dizin verin (KARTAL_DATA_DIR).',
+    exHelp: 'Shift+Enter sorguları çalıştırır. Yakınlaştırmak için grafikte sürükleyin. Lejantta bir seriye tıklamak yalnızca onu gösterir, Ctrl+tıklama gizler. $__rate_interval her zaman birkaç örnek içeren bir penceredir.',
+    'unitShort.m': 'dk', 'unitShort.h': 'sa', 'unitShort.d': 'g', exApply: 'Uygula', exStep: 'Adım', exAuto: 'otomatik',
+    exRefresh: 'Şu aralıkla yeniden çalıştır', exOff: 'kapalı', exCustom: 'Özel', exZoomOut: 'Uzaklaş', exBack: 'Geri',
+    exBrowse: 'Metriklere göz at', exRunning: 'Çalışıyor…', exRun: 'Çalıştır', exAddQuery: 'Sorgu ekle', exQuery: 'Sorgu',
+    exPlaceholder: 'Bir sorgu, örneğin sum by (pod) (rate(http_requests_total[$__rate_interval]))', exLegend: 'Lejant, örneğin {{pod}}',
+    exBuilder: 'Oluşturucu', exShow: 'Göster', exHide: 'Gizle', exRemove: 'Kaldır', exLabel: 'etiket', exFunction: 'işlev',
+    exNone: 'yok', exPercentile: '{0}. yüzdelik', exMetric: 'Metrik', exFn: 'İşlev', exAgg: 'Topla', exAny: 'hepsi',
+    exBy: 'Grupla', exSearch: 'Metriklerde ara', 'col.series': 'Seri', exNoMetrics: 'Bu zaman aralığında henüz saklanan bir şey yok.',
+    exBrowseTitle: 'Saklanan metrikler', exBrowseHint: 'Grafiğini çizmek için birini seçin: sayaçlar hızıyla, histogramlar 95. yüzdelikleriyle çizilir.',
+    exSeries: '{0} seri', exGraph: 'Grafik', exTable: 'Tablo', exRangeInfo: '{0} – {1} · adım {2}', exMode: 'Çizim',
+    exLines: 'çizgi', exArea: 'alan', exStacked: 'yığılmış', exUnit: 'Birim', 'unit.auto': 'otomatik', 'unit.none': 'sayı',
+    'unit.bytes': 'bayt', 'unit.bytesSec': 'bayt/sn', 'unit.seconds': 'saniye', 'unit.ms': 'milisaniye',
+    'unit.percentUnit': 'yüzde (0–1)', 'unit.percent': 'yüzde (0–100)', 'unit.perSec': 'saniyede', exCSV: 'CSV',
+    exEmpty: 'Yukarıya bir sorgu yazın, oluşturucuyu kullanın ya da saklanan metriklere göz atın.', exFailed: 'Sorgular başarısız oldu; yukarıdaki hatalara bakın.',
+    exNoData: 'Bu zaman aralığında veri yok. Depoda yalnızca Sürekli topla ile toplanan iş yüklerinin metrikleri bulunur (Metrikler sayfası).',
+    exAllHidden: 'Tüm seriler gizli; lejanttan birine tıklayın.', exMean: 'Ort.', exMax: 'Maks.', exMin: 'Min.', exLast: 'Son',
+    exLegendHelp: 'Tıklama: yalnızca bu seri. Ctrl+tıklama: gizle ya da göster.', exMore: '{0} seri daha listelenmedi',
   },
 };
 
@@ -639,6 +708,7 @@ const state = {
   rest: [], // extra route segments: group/version/resource in the resource browser
   obj: '', // the object open in the detail panel, see objParam
   tab: '',
+  x: '', // what Explore shows, see exploreParam
   namespaces: null,
   nsError: '',
   nsFilter: '',
@@ -759,6 +829,7 @@ function parseRoute() {
   const r = {
     cluster: '', view: 'overview', rest: [], ns: params.get('ns') || '', q: params.get('q') || '',
     problems: params.get('p') === '1', obj: params.get('o') || '', tab: params.get('t') || '',
+    x: params.get('x') || '',
   };
   if (parts[0] === 'c') {
     r.cluster = parts[1] || '';
@@ -767,18 +838,20 @@ function parseRoute() {
   }
   return r;
 }
-function routeHash({ cluster = state.cluster, view = state.view, ns = state.ns, q = '', problems = false, rest = [], obj = '', tab = '' } = {}) {
+function routeHash({ cluster = state.cluster, view = state.view, ns = state.ns, q = '', problems = false, rest = [], obj = '', tab = '', x = '' } = {}) {
   const params = new URLSearchParams();
   if (ns) params.set('ns', ns);
   if (q) params.set('q', q);
   if (problems) params.set('p', '1');
   if (obj) params.set('o', obj);
   if (obj && tab) params.set('t', tab);
+  // What Explore shows, to share or reload it.
+  if (x && view === 'explore') params.set('x', x);
   const qs = params.toString();
   return '#/c/' + [cluster, view, ...rest].map(enc).join('/') + (qs ? '?' + qs : '');
 }
 function currentHash(extra) {
-  return routeHash(Object.assign({ q: state.q, problems: state.problems, rest: state.rest, obj: state.obj, tab: state.tab }, extra));
+  return routeHash(Object.assign({ q: state.q, problems: state.problems, rest: state.rest, obj: state.obj, tab: state.tab, x: state.x }, extra));
 }
 function go(target) {
   const next = routeHash(target);
@@ -806,6 +879,10 @@ function onRoute() {
     state.obj = r.obj;
     state.tab = r.tab;
     renderDetail();
+    if (r.view === 'explore' && r.x !== state.x) {
+      state.x = r.x;
+      renderContent();
+    }
     return;
   }
   listKey = key;
@@ -1050,10 +1127,17 @@ async function loadView(signal) {
     case 'appmetrics': {
       const q = new URLSearchParams({ hours: String(state.watchHours || 1) });
       if (state.ns) q.set('namespace', state.ns);
-      return { watches: await api(c + '/watches?' + q, { signal }) };
+      const [watches, store] = await Promise.all([api(c + '/watches?' + q, { signal }), loadStore(signal)]);
+      return { watches, store };
     }
     case 'releases':
       return { items: await api('releases', { signal }) };
+    case 'explore':
+      // Explore runs its own queries; refreshing runs them again, after
+      // reading how often the store reads, which its windows go by.
+      await exploreStore();
+      if (ex.el && state.x === ex.appliedX) runExplore();
+      return { explore: true };
     default: {
       const kind = VIEW_KIND[state.view];
       if (kind) return { items: ofKind(await api(c + '/workloads' + nsq, { signal }), kind) };
@@ -1642,7 +1726,8 @@ function renderContent() {
     case 'changes': body = renderChanges(state.data.items); break;
     case 'releases': body = renderReleases(state.data.items); break;
     case 'uptime': body = renderUptime(state.data.checks); break;
-    case 'appmetrics': body = renderAppMetrics(state.data.watches); break;
+    case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
+    case 'explore': body = renderExplore(); break;
     case 'certificates':
       body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays))];
       break;
@@ -2837,7 +2922,7 @@ function targetLink(ns, target) {
   return gvr ? h('button', { type: 'button', class: 'link-button', onclick: () => openDetail({ gvr, ns, name }) }, target) : target;
 }
 
-function renderAppMetrics({ watches, where, loadError }) {
+function renderAppMetrics({ watches, where, loadError }, store) {
   const hours = state.watchHours || 1;
   const head = panel(null, h('div', { class: 'issue' },
     h('div', { class: 'what' },
@@ -2856,10 +2941,11 @@ function renderAppMetrics({ watches, where, loadError }) {
         },
       }, n === 1 ? t('last1h') : n === 6 ? t('last6h') : t('last24h'))))));
   const found = sourcesPanel();
-  if (!watches.length) return [head, found, found ? null : emptyState(t('noWatches'))];
+  const kept = storePanel(store);
+  if (!watches.length) return [head, found, kept, found ? null : emptyState(t('noWatches'))];
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
   const rows = watches.filter(w => matches(words, [w.name, w.metric, w.target, w.namespace, labelsText(w.labels)]));
-  return [head, found, rows.length ? h('div', { class: 'watch-grid' }, rows.map(watchCard)) : emptyState(t('noMatch'))];
+  return [head, found, kept, rows.length ? h('div', { class: 'watch-grid' }, rows.map(watchCard)) : emptyState(t('noMatch'))];
 }
 
 // Sources are the workloads found to expose metrics, kept while the page
@@ -2900,7 +2986,10 @@ function sourcesPanel() {
         h('td', null, h('strong', null, x.workload)),
         h('td', { class: 'mono' }, ':' + x.port + x.path),
         h('td', null, x.metrics),
-        h('td', { class: 'actions-cell' }, button(t('openMetrics'), () => openSource(x))))))) : null,
+        h('td', { class: 'actions-cell' }, button(t('openMetrics'), () => openSource(x)),
+          state.storeOn && canIn('operator', x.namespace)
+            ? button(t('collectAlways'), () => collectDialog({ ns: x.namespace, owner: x.workload, pod: x.pod, port: x.port, path: x.path }))
+            : null))))) : null,
   ], 'sources');
 }
 
@@ -2928,9 +3017,11 @@ function watchCard(w) {
       h('div', null, nsLink(w.namespace), ' · ', targetLink(w.namespace, w.target), w.pods ? h('span', { class: 'muted' }, ' · ' + t('podsRead', w.pods)) : null),
       h('div', { class: 'mono muted small-text', title: ':' + w.port + w.path }, what)),
     w.error ? h('div', { class: 'status-bad small-text' }, w.error) : null,
-    canIn('operator', w.namespace) ? h('div', { class: 'actions' },
-      button(t('edit'), () => watchDialog({ watch: w })),
-      button(t('removeWatch'), () => removeWatch(w), 'danger')) : null);
+    state.storeOn || canIn('operator', w.namespace) ? h('div', { class: 'actions' },
+      state.storeOn ? button(t('explore'), () => exploreWatch(w)) : null,
+      canIn('operator', w.namespace) ? [
+        button(t('edit'), () => watchDialog({ watch: w })),
+        button(t('removeWatch'), () => removeWatch(w), 'danger')] : null) : null);
 }
 
 async function removeWatch(w) {
@@ -2945,6 +3036,1051 @@ async function removeWatch(w) {
   }
 }
 
+
+// ---------------------------------------------------------------- metric store
+
+// loadStore reads the metric store and the targets it collects here; null
+// when the server keeps no store.
+async function loadStore(signal) {
+  const q = new URLSearchParams({ cluster: state.cluster });
+  if (state.ns) q.set('namespace', state.ns);
+  try {
+    const [stats, targets] = await Promise.all([api('store', { signal }), api('store/targets?' + q, { signal })]);
+    state.storeOn = true;
+    return { stats, targets };
+  } catch (e) {
+    if (e.status !== 404) throw e;
+    state.storeOn = false;
+    return null;
+  }
+}
+
+// storeKnown finds out once whether the server keeps a store, for the
+// pages that offer to collect.
+function storeKnown(then) {
+  if (state.storeOn !== undefined || state.storeAsked) return;
+  state.storeAsked = true;
+  api('store').then(() => { state.storeOn = true; }, e => { state.storeOn = e.status === 404 ? false : undefined; })
+    .finally(() => { state.storeAsked = false; then(); });
+}
+
+function collectPath(ns, id) {
+  return clusterPath() + '/namespaces/' + enc(ns) + '/collect' + (id ? '/' + enc(id) : '');
+}
+
+function storePanel(store) {
+  if (!store) return null;
+  const { stats, targets } = store;
+  const admin = canEverywhere('admin');
+  const summary = [bytes(stats.bytes), t('storeDays', stats.days.length), t('storeSeries', stats.series),
+    t('storeEvery', span(stats.interval * 1000)), stats.retentionDays ? t('keptDays', stats.retentionDays) : t('keptForever')].join(' · ');
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = targets.filter(x => matches(words, [x.namespace, x.target, x.include, x.exclude]));
+  return panel(t('storeTitle'), [
+    h('div', { class: 'issue' },
+      h('div', { class: 'what' },
+        h('div', null, h('strong', null, summary)),
+        h('div', { class: 'detail' }, t('storeHint')),
+        stats.loadError ? h('div', { class: 'detail status-bad' }, t('mailLoadError', stats.loadError)) : null),
+      admin ? h('div', { class: 'actions' },
+        button(t('storeSettings'), () => storeSettingsDialog(stats)),
+        button(t('storeDelete'), () => storeDeleteDialog(stats), 'danger')) : null),
+    rows.length ? h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, ['namespace', 'target', 'address', 'pods', 'samples', 'lastRead', 'status'].map(k => h('th', null, t('col.' + k))), h('th'))),
+      h('tbody', null, rows.map(x => h('tr', null,
+        h('td', null, nsLink(x.namespace)),
+        h('td', null, targetLink(x.namespace, x.target)),
+        h('td', { class: 'mono', title: [x.include && '+ ' + x.include, x.exclude && '− ' + x.exclude].filter(Boolean).join('\n') || null },
+          ':' + x.port + x.path, x.include || x.exclude ? h('span', { class: 'muted' }, ' ⧩') : null),
+        h('td', null, x.last ? String(x.pods) : '—', x.failed ? h('span', { class: 'status-bad' }, ' · ' + t('podsFailed', x.failed)) : null),
+        h('td', null, x.last ? compact(x.samples) : '—'),
+        h('td', null, x.last ? age(x.last) : '—'),
+        h('td', { class: 'small-text' }, x.error ? h('span', { class: 'status-bad' }, x.error) : x.last ? pill('✓', 'ok') : h('span', { class: 'muted' }, t('notReadYet'))),
+        h('td', { class: 'actions-cell' }, button(t('explore'), () => exploreTarget(x)), canIn('operator', x.namespace) ? [
+          button(t('edit'), () => collectDialog({ target: x })),
+          button(t('collectRemove'), () => removeCollect(x), 'danger')] : null))))) : h('div', { class: 'empty-note' }, targets.length ? t('noMatch') : t('noTargets')),
+  ], 'store');
+}
+
+async function removeCollect(x) {
+  const ok = await ask({ title: t('collectRemoveTitle'), message: t('collectRemoveConfirm', x.target), confirm: t('collectRemove'), danger: true });
+  if (!ok) return;
+  try {
+    await api(collectPath(x.namespace, x.id), { method: 'DELETE' });
+    toast(t('collectRemoved'));
+    refresh();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+  }
+}
+
+function dialogField(label, input, help) {
+  return h('label', { class: 'field' }, h('span', null, label), input, help ? h('span', { class: 'muted small-text' }, help) : null);
+}
+function formNote() {
+  const note = h('div', { class: 'form-status', role: 'status' });
+  note.say = (text, kind) => {
+    note.className = kind ? 'form-status ' + kind : 'form-status';
+    note.textContent = text;
+  };
+  return note;
+}
+
+// collectDialog collects every metric of a workload or pod, or changes
+// what target collects.
+function collectDialog({ target: x, ns, owner, pod, port, path }) {
+  if (x) ns = x.namespace;
+  // Only these kinds are collected whole; any other pod is collected by itself.
+  if (!/^(Deployment|StatefulSet|DaemonSet)\//.test(owner || '')) owner = null;
+  const targets = x ? [x.target] : [...new Set([owner, pod && 'Pod/' + pod].filter(Boolean))];
+  const pick = h('select', { disabled: !!x }, targets.map(v => h('option', { value: v }, v)));
+  const portIn = h('input', { type: 'text', inputmode: 'numeric', value: x ? x.port : port || '', autocomplete: 'off' });
+  const pathIn = h('input', { type: 'text', class: 'mono', value: x ? x.path : path || '/metrics', autocomplete: 'off', spellcheck: 'false' });
+  const include = h('input', { type: 'text', class: 'mono', value: (x && x.include) || '', maxlength: '500', placeholder: 'http_.*|process_.*', spellcheck: 'false' });
+  const exclude = h('input', { type: 'text', class: 'mono', value: (x && x.exclude) || '', maxlength: '500', placeholder: 'go_gc_.*', spellcheck: 'false' });
+  const note = formNote();
+  const save = h('button', { type: 'submit', class: 'btn primary' }, t('save'));
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      save.disabled = true;
+      try {
+        await api(collectPath(ns, x && x.id), {
+          method: x ? 'PUT' : 'POST',
+          body: { target: pick.value, port: portIn.value.trim(), path: pathIn.value.trim(), include: include.value.trim(), exclude: exclude.value.trim() },
+        });
+        close();
+        toast(t('collectSaved'));
+        if (state.view === 'appmetrics') refresh();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        save.disabled = false;
+      }
+    },
+  },
+  h('h2', null, t('collectTitle')),
+  h('p', { class: 'muted' }, t('collectHelp')),
+  dialogField(t('col.target'), pick),
+  h('div', { class: 'field-row' }, dialogField(t('port'), portIn), dialogField(t('path'), pathIn)),
+  dialogField(t('collectInclude'), include, t('collectPatternHelp')),
+  dialogField(t('collectExclude'), exclude),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), save));
+  const close = modal(form);
+  (x ? include : portIn.value ? save : portIn).focus();
+}
+
+function storeSettingsDialog(stats) {
+  const every = stats.interval;
+  const intervals = [...new Set([10, 15, 30, 60, 120, 300, 600, 1800, 3600, every])].sort((a, b) => a - b);
+  const interval = h('select', null, intervals.map(s => h('option', { value: String(s), selected: s === every }, span(s * 1000))));
+  const days = h('input', { type: 'number', min: '0', max: '36500', step: '1', value: String(stats.retentionDays || 0) });
+  const note = formNote();
+  const save = h('button', { type: 'submit', class: 'btn primary' }, t('save'));
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      save.disabled = true;
+      try {
+        await api('store/config', { method: 'PUT', body: { interval: Number(interval.value), retentionDays: Number(days.value) || 0 } });
+        close();
+        toast(t('storeSaved'));
+        refresh();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        save.disabled = false;
+      }
+    },
+  },
+  h('h2', null, t('storeSettingsTitle')),
+  stats.dir ? h('p', { class: 'muted small-text' }, t('storeDir', stats.dir)) : null,
+  h('div', { class: 'field-row' }, dialogField(t('storeInterval'), interval), dialogField(t('storeRetention'), days, t('storeRetentionHelp'))),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), save));
+  const close = modal(form);
+  interval.focus();
+}
+
+// localInput writes a moment for a datetime-local field, and fromLocal reads
+// one back.
+function localInput(ms) {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+function fromLocal(v) {
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function storeDeleteDialog(stats) {
+  const first = stats.days.length ? Date.parse(stats.days[0].day + 'T00:00:00Z') : Date.now() - 86400000;
+  const fromIn = h('input', { type: 'datetime-local', value: localInput(first) });
+  const toIn = h('input', { type: 'datetime-local', value: localInput(Date.now()) });
+  const set = (from, to) => {
+    fromIn.value = localInput(from);
+    toIn.value = localInput(to);
+  };
+  const day = 86400000;
+  const chips = h('div', { class: 'chips' },
+    [7, 30, 90].map(n => h('button', { type: 'button', class: 'chip', onclick: () => set(first, Date.now() - n * day) }, t('storeOlder', n))),
+    h('button', { type: 'button', class: 'chip', onclick: () => set(first, Date.now()) }, t('storeAll')));
+  const list = stats.days.length ? h('div', { class: 'day-list' }, h('table', { class: 'flat' },
+    h('tbody', null, stats.days.slice().reverse().map(d => h('tr', null, h('td', { class: 'mono' }, d.day), h('td', null, bytes(d.bytes)),
+      h('td', { class: 'actions-cell' }, h('button', {
+        type: 'button', class: 'chip', onclick: () => {
+          const start = Date.parse(d.day + 'T00:00:00Z');
+          set(start, start + day - 1);
+        },
+      }, t('storeThisDay')))))))) : null;
+  const note = formNote();
+  const del = h('button', { type: 'submit', class: 'btn primary danger-primary' }, t('storeDelete'));
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      const from = fromLocal(fromIn.value);
+      const to = fromLocal(toIn.value);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) {
+        note.say(t('storeBadRange'), 'bad');
+        return;
+      }
+      const sure = await ask({ title: t('storeDeleteTitle'), message: t('storeDeleteConfirm', new Date(from).toLocaleString(), new Date(to).toLocaleString()), confirm: t('storeDelete'), danger: true });
+      if (!sure) return;
+      del.disabled = true;
+      try {
+        const res = await api('store/delete', { method: 'POST', body: { from: Math.max(0, from), to } });
+        close();
+        toast(t('storeDeleted', bytes(Math.max(0, res.freed))));
+        refresh();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        del.disabled = false;
+      }
+    },
+  },
+  h('h2', null, t('storeDeleteTitle')),
+  h('p', { class: 'muted' }, t('storeDeleteHelp')),
+  h('div', { class: 'field-row' }, dialogField(t('storeFrom'), fromIn), dialogField(t('storeTo'), toIn)),
+  chips,
+  list,
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), del));
+  const close = modal(form);
+  fromIn.focus();
+}
+
+// ---------------------------------------------------------------- explore
+
+// Explore charts queries over the metric store, as Grafana's Explore does:
+// several queries at once, any range of time, zooming by dragging across
+// the chart, a legend to pick series, a table of their values and a CSV.
+
+const PALETTE = ['#5794f2', '#73bf69', '#f2cc0c', '#ff9830', '#f2495c', '#b877d9', '#8ab8ff', '#56a64b', '#e0b400',
+  '#fa6400', '#c4162a', '#8f3bb8', '#3274d9', '#96d98d', '#ffcb7d', '#ff7383', '#ca95e5', '#37872d'];
+const EX_RANGES = ['5m', '15m', '1h', '3h', '6h', '12h', '24h', '2d', '7d', '30d'];
+const EX_STEPS = [0, 15, 30, 60, 300, 900, 3600];
+const EX_REFRESH = [0, 10, 30, 60, 300];
+const EX_UNITS = ['auto', 'none', 'bytes', 'bytesSec', 'seconds', 'ms', 'percentUnit', 'percent', 'perSec'];
+const NICE_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(s => s * 1000);
+// For completion; the server knows them all the same.
+const EX_FUNCS = ['abs', 'absent', 'absent_over_time', 'avg', 'avg_over_time', 'bottomk', 'ceil', 'changes', 'clamp',
+  'clamp_max', 'clamp_min', 'count', 'count_over_time', 'day_of_month', 'day_of_week', 'days_in_month', 'delta', 'deriv',
+  'exp', 'floor', 'group', 'histogram_quantile', 'hour', 'idelta', 'increase', 'irate', 'label_join', 'label_replace',
+  'last_over_time', 'ln', 'log10', 'log2', 'max', 'max_over_time', 'min', 'min_over_time', 'minute', 'month',
+  'predict_linear', 'present_over_time', 'quantile', 'quantile_over_time', 'rate', 'resets', 'round', 'scalar', 'sgn',
+  'sort', 'sort_desc', 'sqrt', 'stddev', 'stddev_over_time', 'stdvar', 'stdvar_over_time', 'sum', 'sum_over_time',
+  'time', 'topk', 'vector', 'year'];
+const EX_WORDS = ['by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'bool', 'offset', 'and', 'or', 'unless',
+  '$__rate_interval', '$__interval', '$__range'];
+
+const ex = {
+  el: null, queries: [], range: '1h', from: 0, to: 0, step: 0, unit: 'auto', mode: 'lines', tab: 'graph',
+  hidden: new Set(), auto: 0, timer: 0, interval: 30, seq: 0, ctl: null, zooms: [], last: null, running: false,
+  appliedX: null, cache: new Map(),
+};
+let exQueryID = 0;
+
+function newQuery(expr = '', legend = '', hidden = false) {
+  return { id: ++exQueryID, expr, legend, hidden, builder: false, b: null, res: null, error: '' };
+}
+
+function rangeMs(r) {
+  const m = /^(\d+)([mhd])$/.exec(r);
+  return m ? Number(m[1]) * { m: 60000, h: 3600000, d: 86400000 }[m[2]] : 3600000;
+}
+function rangeLabel(r) {
+  const m = /^(\d+)([mhd])$/.exec(r);
+  return m ? m[1] + t('unitShort.' + m[2]) : r;
+}
+// durText writes milliseconds the way queries do: 90s, 5m, 2h.
+function durText(ms) {
+  const s = Math.max(1, Math.ceil(ms / 1000));
+  if (s % 86400 === 0) return s / 86400 + 'd';
+  if (s % 3600 === 0) return s / 3600 + 'h';
+  if (s % 60 === 0) return s / 60 + 'm';
+  return s + 's';
+}
+
+// exploreParam is what the address keeps of the page, to share or reload.
+function exploreParam() {
+  const x = { r: ex.range || [ex.from, ex.to], q: ex.queries.map(q => (q.legend || q.hidden ? [q.expr, q.legend, q.hidden ? 1 : 0] : [q.expr])) };
+  if (ex.step) x.s = ex.step;
+  if (ex.unit !== 'auto') x.u = ex.unit;
+  if (ex.mode !== 'lines') x.m = ex.mode;
+  return JSON.stringify(x);
+}
+function applyExploreParam(raw) {
+  let x = null;
+  try { x = JSON.parse(raw || 'null'); } catch { x = null; }
+  if (!x || typeof x !== 'object') x = {};
+  if (Array.isArray(x.r) && x.r.length === 2 && x.r.every(Number.isFinite) && x.r[0] < x.r[1]) {
+    ex.range = '';
+    [ex.from, ex.to] = x.r;
+  } else {
+    ex.range = EX_RANGES.includes(x.r) ? x.r : ex.range || '1h';
+  }
+  ex.step = Number.isFinite(x.s) && x.s >= 1000 ? x.s : 0;
+  ex.unit = EX_UNITS.includes(x.u) ? x.u : 'auto';
+  ex.mode = ['lines', 'area', 'stacked'].includes(x.m) ? x.m : 'lines';
+  const qs = Array.isArray(x.q) ? x.q.filter(Array.isArray).slice(0, 10) : [];
+  ex.queries = qs.length ? qs.map(([e, l, hd]) => newQuery(String(e || ''), String(l || ''), !!hd)) : [newQuery()];
+  ex.hidden.clear();
+  ex.zooms = [];
+}
+
+// openExplore charts queries, from anywhere in the UI: each one a query,
+// or a query and its legend.
+function openExplore(queries, range) {
+  const x = JSON.stringify({ r: range || ex.range || '1h', q: queries.map(q => (Array.isArray(q) ? q : [q])) });
+  go({ view: 'explore', ns: state.ns, x });
+}
+
+// targetLabels are the labels the collector gave a target's series.
+function targetLabels(cluster, ns, target) {
+  const [kind, name] = target.split('/');
+  return kind === 'Pod' ? { cluster, namespace: ns, pod: name } : { cluster, namespace: ns, workload: target };
+}
+
+// exploreFamily charts a metric that a workload's (or a lone pod's) page
+// shows.
+function exploreFamily(f, ns, owner, pod) {
+  const labels = owner ? targetLabels(state.cluster, ns, owner) : targetLabels(state.cluster, ns, 'Pod/' + pod);
+  const name = f.type === 'histogram' ? f.name + '_bucket' : f.name;
+  openExplore([[queryFor(name, f.type, labels), f.type === 'histogram' ? 'p95' : '']]);
+}
+
+// exploreWatch charts a watched metric over any time: as the watch
+// joins it, and pod by pod.
+function exploreWatch(w) {
+  // The pod's own labels named as the collector's are kept as exported_*.
+  const own = {};
+  for (const [k, v] of Object.entries(w.labels || {})) own[['cluster', 'namespace', 'pod', 'workload'].includes(k) ? 'exported_' + k : k] = v;
+  let q = selectorText(w.metric, Object.assign(targetLabels(w.cluster, w.namespace, w.target), own));
+  if (w.rate) q = 'rate(' + q + '[$__rate_interval])';
+  openExplore([[(w.aggregate || 'sum') + ' (' + q + ')', w.name], ['sum by (pod) (' + q + ')', '{{pod}}']]);
+}
+
+// exploreTarget charts whether a collected target's pods answer.
+function exploreTarget(x) {
+  openExplore([[selectorText('up', targetLabels(x.cluster, x.namespace, x.target)), '{{pod}}']]);
+}
+
+// selectorText writes a selector of a metric with labels.
+function selectorText(name, labels) {
+  const parts = Object.entries(labels).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '="' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
+  return name + (parts.length ? '{' + parts.join(', ') + '}' : '');
+}
+
+// queryFor is a good first query of a metric: the rate of a counter, the
+// 95th percentile of a histogram, a gauge as it is.
+function queryFor(name, type, labels = {}) {
+  if (type === 'histogram' && /_bucket$/.test(name)) {
+    return 'histogram_quantile(0.95, sum by (le) (rate(' + selectorText(name, labels) + '[$__rate_interval])))';
+  }
+  if (type === 'counter' || /_total$/.test(name) || (['histogram', 'summary'].includes(type) && /_(sum|count)$/.test(name))) {
+    return 'rate(' + selectorText(name, labels) + '[$__rate_interval])';
+  }
+  return selectorText(name, labels);
+}
+
+function currentRange() {
+  if (ex.range) {
+    const to = Date.now();
+    return [to - rangeMs(ex.range), to];
+  }
+  return [ex.from, ex.to];
+}
+function stepFor(from, to) {
+  // A step chosen by hand grows if the range would hold more steps than
+  // the server gives (11 000).
+  if (ex.step) return Math.max(ex.step, Math.ceil((to - from) / 10000 / 1000) * 1000);
+  const want = Math.max(ex.interval * 1000, (to - from) / 500);
+  return NICE_STEPS.find(s => s >= want) || Math.ceil(want / 86400000) * 86400000;
+}
+// substitute fills in Grafana's variables: $__interval is the step,
+// $__rate_interval a window that always holds a few samples, $__range the
+// whole range.
+function substitute(expr, step, from, to) {
+  const rate = Math.max(4 * ex.interval * 1000, step + ex.interval * 1000);
+  return expr.replace(/\$__rate_interval\b/g, durText(rate)).replace(/\$__interval\b/g, durText(step)).replace(/\$__range\b/g, durText(to - from));
+}
+
+function renderExplore() {
+  if (state.storeOn === false) return emptyState(t('exStoreOff'));
+  if (!ex.el) buildExplore();
+  if (state.x !== ex.appliedX) {
+    if (state.x || !ex.queries.length) applyExploreParam(state.x);
+    ex.appliedX = state.x;
+    drawExploreToolbar();
+    drawQueries();
+    runExplore();
+  }
+  drawResults();
+  return ex.el;
+}
+
+function buildExplore() {
+  ex.toolbar = h('div', { class: 'ex-toolbar' });
+  ex.queriesEl = h('div', { class: 'ex-queries' });
+  ex.resultsEl = h('div', { class: 'ex-results' });
+  ex.el = h('div', { class: 'explore' }, h('section', { class: 'panel' }, ex.toolbar, ex.queriesEl,
+    h('div', { class: 'muted small-text ex-help' }, t('exHelp'))), ex.resultsEl);
+}
+
+// exploreStore learns how often the store reads, for steps and windows.
+async function exploreStore() {
+  try {
+    const st = await api('store');
+    state.storeOn = true;
+    if (st.interval > 0) ex.interval = st.interval;
+  } catch (e) {
+    if (e.status === 404) {
+      state.storeOn = false;
+      if (state.view === 'explore') renderContent();
+    }
+  }
+}
+
+function setRange(r) {
+  if (ex.range || ex.from) ex.zooms.push({ range: ex.range, from: ex.from, to: ex.to });
+  ex.range = r;
+  drawExploreToolbar();
+  runExplore();
+}
+function setAbsolute(from, to) {
+  ex.zooms.push({ range: ex.range, from: ex.from, to: ex.to });
+  ex.range = '';
+  ex.from = Math.round(from);
+  ex.to = Math.round(to);
+  drawExploreToolbar();
+  runExplore();
+}
+
+function drawExploreToolbar() {
+  const chip = (label, active, onclick, title) => h('button', { type: 'button', class: active ? 'chip active' : 'chip', onclick, title }, label);
+  const sep = () => h('span', { class: 'ex-sep' });
+  const [from, to] = currentRange();
+  let custom = null;
+  if (!ex.range) {
+    const fromIn = h('input', { type: 'datetime-local', value: localInput(from), 'aria-label': t('storeFrom') });
+    const toIn = h('input', { type: 'datetime-local', value: localInput(to), 'aria-label': t('storeTo') });
+    const apply = () => {
+      const a = fromLocal(fromIn.value);
+      const b = fromLocal(toIn.value);
+      if (Number.isFinite(a) && Number.isFinite(b) && a < b) setAbsolute(a, b);
+      else toast(t('storeBadRange'), true);
+    };
+    custom = h('span', { class: 'ex-custom' }, fromIn, '–', toIn, button(t('exApply'), apply));
+  }
+  const stepSel = h('select', { 'aria-label': t('exStep'), onchange: e => { ex.step = Number(e.target.value) * 1000; runExplore(); } },
+    EX_STEPS.map(s => h('option', { value: String(s), selected: s * 1000 === ex.step }, s ? durText(s * 1000) : t('exAuto'))));
+  if (ex.step && !EX_STEPS.includes(ex.step / 1000)) stepSel.append(h('option', { value: String(ex.step / 1000), selected: true }, durText(ex.step)));
+  const autoSel = h('select', {
+    'aria-label': t('exRefresh'), title: t('exRefresh'),
+    onchange: e => { ex.auto = Number(e.target.value); scheduleExplore(); },
+  }, EX_REFRESH.map(s => h('option', { value: String(s), selected: s === ex.auto }, s ? '↻ ' + durText(s * 1000) : '↻ ' + t('exOff'))));
+  fill(ex.toolbar,
+    EX_RANGES.map(r => chip(rangeLabel(r), ex.range === r, () => setRange(r))),
+    chip(t('exCustom'), !ex.range, () => { if (ex.range) setAbsolute(from, to); }),
+    custom,
+    sep(),
+    h('button', { type: 'button', class: 'chip', title: t('exZoomOut'), onclick: () => {
+      const c = (from + to) / 2;
+      const half = to - from;
+      setAbsolute(c - half, Math.min(Date.now(), c + half));
+    } }, '⊖ ' + t('exZoomOut')),
+    ex.zooms.length ? h('button', { type: 'button', class: 'chip', title: t('exBack'), onclick: () => {
+      const z = ex.zooms.pop();
+      Object.assign(ex, { range: z.range, from: z.from, to: z.to });
+      drawExploreToolbar();
+      runExplore();
+    } }, '↶ ' + t('exBack')) : null,
+    sep(),
+    h('label', { class: 'ex-inline' }, t('exStep'), stepSel),
+    autoSel,
+    h('span', { class: 'grow' }),
+    button(ex.running ? t('exRunning') : t('exRun'), () => runExplore(), 'primary'));
+}
+
+function drawQueries() {
+  fill(ex.queriesEl, ex.queries.map((q, i) => queryRow(q, i)),
+    h('div', { class: 'actions' }, button('+ ' + t('exAddQuery'), () => {
+      ex.queries.push(newQuery());
+      drawQueries();
+      const last = ex.queries[ex.queries.length - 1];
+      if (last.ta) last.ta.focus();
+    }), button(t('exBrowse'), () => metricBrowser())));
+}
+
+function queryColor(i) {
+  return PALETTE[i % PALETTE.length];
+}
+
+function queryRow(q, i) {
+  const ta = h('textarea', { class: 'mono ex-expr', rows: '1', spellcheck: 'false', autocomplete: 'off', placeholder: t('exPlaceholder'), 'aria-label': t('exQuery') });
+  ta.value = q.expr;
+  q.ta = ta;
+  const size = () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(220, ta.scrollHeight + 2) + 'px';
+  };
+  const sugg = h('div', { class: 'ex-suggest', hidden: true });
+  const complete = autoComplete(ta, sugg, () => { q.expr = ta.value; size(); });
+  ta.addEventListener('input', () => {
+    q.expr = ta.value;
+    size();
+    complete.update();
+  });
+  ta.addEventListener('keydown', e => {
+    if (complete.key(e)) return;
+    if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      runExplore();
+    }
+  });
+  ta.addEventListener('blur', () => setTimeout(() => complete.close(), 150));
+  requestAnimationFrame(size);
+  const legend = h('input', {
+    type: 'text', class: 'mono ex-legend', value: q.legend, placeholder: t('exLegend'), 'aria-label': t('exLegend'),
+    oninput: e => { q.legend = e.target.value; drawResults(); },
+  });
+  q.statusEl = h('div', { class: 'ex-status' });
+  q.builderEl = h('div', { class: 'ex-builder' });
+  q.builderEl.hidden = !q.builder;
+  if (q.builder) drawBuilder(q);
+  const letter = h('span', { class: 'ex-letter' }, String.fromCharCode(65 + i));
+  return h('div', { class: q.hidden ? 'ex-query off' : 'ex-query' },
+    h('div', { class: 'ex-qhead' }, letter,
+      h('div', { class: 'ex-expr-box' }, ta, sugg),
+      legend,
+      h('button', { type: 'button', class: q.builder ? 'chip active' : 'chip', title: t('exBuilder'), onclick: () => {
+        q.builder = !q.builder;
+        q.builderEl.hidden = !q.builder;
+        if (q.builder) drawBuilder(q);
+      } }, t('exBuilder')),
+      h('button', { type: 'button', class: 'icon-btn', title: q.hidden ? t('exShow') : t('exHide'), onclick: () => {
+        q.hidden = !q.hidden;
+        drawQueries();
+        drawResults();
+      } }, q.hidden ? '◌' : '●'),
+      h('button', { type: 'button', class: 'icon-btn', title: t('exRemove'), onclick: () => {
+        ex.queries = ex.queries.filter(x => x !== q);
+        if (!ex.queries.length) ex.queries.push(newQuery());
+        drawQueries();
+        drawResults();
+      } }, '✕')),
+    q.builderEl, q.statusEl);
+}
+
+// rangeQuery is the time part of the store's listing calls, to the minute,
+// so that what completion asks for stays cached while the range moves on.
+function rangeQuery(atLeast = 0) {
+  const minute = 60000;
+  const [from, to] = currentRange();
+  return 'from=' + Math.floor(Math.min(from, to - atLeast) / minute) * minute + '&to=' + Math.ceil(to / minute) * minute;
+}
+
+// cached fetches what completion and the builder need, once a minute: a
+// request on its way is shared, one that failed is forgotten.
+function cached(path) {
+  const now = Date.now();
+  const hit = ex.cache.get(path);
+  if (hit && now - hit.at < 60000) return hit.value;
+  for (const [k, v] of ex.cache) if (now - v.at >= 60000) ex.cache.delete(k);
+  const value = api(path);
+  ex.cache.set(path, { at: now, value });
+  value.catch(() => ex.cache.delete(path));
+  return value;
+}
+function storeMetrics() {
+  // At least the last day's, so that a short range still offers them all.
+  return cached('store/metrics?' + rangeQuery(86400000));
+}
+function storeLabelNames(match) {
+  return cached('store/labels?' + rangeQuery() + (match ? '&match=' + enc(match) : ''));
+}
+function storeLabelValues(name, match) {
+  return cached('store/labels/' + enc(name) + '/values?' + rangeQuery() + (match ? '&match=' + enc(match) : ''));
+}
+
+// autoComplete offers metric names, functions, label names and values as
+// the query is typed.
+function autoComplete(ta, box, changed) {
+  let items = [];
+  let active = 0;
+  let replace = [0, 0];
+  let after = '';
+  let ask = 0;
+  const close = () => {
+    box.hidden = true;
+    items = [];
+  };
+  const pick = i => {
+    const it = items[i];
+    if (!it) return;
+    const v = ta.value;
+    ta.value = v.slice(0, replace[0]) + it.text + it.after + v.slice(replace[1]);
+    const at = replace[0] + it.text.length + it.after.length;
+    ta.setSelectionRange(at, at);
+    close();
+    changed();
+    ta.focus();
+  };
+  const draw = () => {
+    if (!items.length) return close();
+    fill(box, items.map((it, i) => h('div', {
+      class: i === active ? 'active' : null,
+      onmousedown: e => { e.preventDefault(); pick(i); },
+    }, h('span', null, it.text), it.hint ? h('span', { class: 'muted' }, it.hint) : null)));
+    box.hidden = false;
+  };
+  const update = async () => {
+    const my = ++ask;
+    const pos = ta.selectionStart;
+    const before = ta.value.slice(0, pos);
+    const end = pos + (/^[a-zA-Z0-9_:]*/.exec(ta.value.slice(pos)) || [''])[0].length;
+    // The metric a selector is about: the name just before its brace.
+    const metricOf = () => {
+      const brace = before.lastIndexOf('{');
+      const m = /([a-zA-Z_:][a-zA-Z0-9_:]*)\s*$/.exec(before.slice(0, brace));
+      return m ? m[1] : '';
+    };
+    const inBraces = before.lastIndexOf('{') > before.lastIndexOf('}');
+    let list = [];
+    let prefix = '';
+    try {
+      let m;
+      if (inBraces && (m = /([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|!=|=)\s*"([^"]*)$/.exec(before))) {
+        prefix = m[3];
+        replace = [pos - prefix.length, pos + (/^[^"]*/.exec(ta.value.slice(pos)) || [''])[0].length];
+        after = ta.value[replace[1]] === '"' ? '' : '"';
+        const values = await storeLabelValues(m[1], metricOf());
+        list = values.map(v => ({ text: v.replace(/\\/g, '\\\\').replace(/"/g, '\\"'), after, hint: m[1] }));
+      } else if (inBraces && (m = /[{,]\s*([a-zA-Z_][a-zA-Z0-9_]*)?$/.exec(before))) {
+        prefix = m[1] || '';
+        replace = [pos - prefix.length, end];
+        const names = await storeLabelNames(metricOf());
+        list = names.map(n => ({ text: n, after: '="', hint: t('exLabel') }));
+      } else if ((m = /\b(by|without|on|ignoring|group_left|group_right)\s*\(([^)]*,\s*)?([a-zA-Z_][a-zA-Z0-9_]*)?$/.exec(before))) {
+        prefix = m[3] || '';
+        replace = [pos - prefix.length, end];
+        const names = await storeLabelNames('');
+        list = names.map(n => ({ text: n, after: '', hint: t('exLabel') }));
+      } else if ((m = /([a-zA-Z_:$][a-zA-Z0-9_:]*)$/.exec(before)) && m[1].length >= 2) {
+        prefix = m[1];
+        replace = [pos - prefix.length, end];
+        const metrics = await storeMetrics();
+        list = metrics.map(x => ({ text: x.name, after: '', hint: x.type }))
+          .concat(EX_FUNCS.map(f => ({ text: f, after: '(', hint: t('exFunction') })))
+          .concat(EX_WORDS.map(w => ({ text: w, after: '', hint: '' })));
+      }
+    } catch {
+      list = [];
+    }
+    if (my !== ask) return;
+    const p = prefix.toLowerCase();
+    items = list.filter(x => x.text.toLowerCase().includes(p) && x.text !== prefix)
+      .sort((a, b) => (b.text.toLowerCase().startsWith(p) - a.text.toLowerCase().startsWith(p)) || cmp(a.text, b.text))
+      .slice(0, 50);
+    active = 0;
+    draw();
+  };
+  const key = e => {
+    if (box.hidden || !items.length) return false;
+    switch (e.key) {
+      case 'ArrowDown':
+        active = (active + 1) % items.length;
+        break;
+      case 'ArrowUp':
+        active = (active - 1 + items.length) % items.length;
+        break;
+      case 'Enter':
+        if (e.shiftKey || e.ctrlKey || e.metaKey) return false;
+        pick(active);
+        break;
+      case 'Tab':
+        pick(active);
+        break;
+      case 'Escape':
+        close();
+        break;
+      default:
+        return false;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (!box.hidden) draw();
+    const el = box.children[active];
+    if (el) el.scrollIntoView({ block: 'nearest' });
+    return true;
+  };
+  return { update, key, close };
+}
+
+// The builder writes a query from choices: a metric, a function, an
+// aggregation, labels to group by and to filter on.
+const BUILDER_FNS = ['', 'rate', 'increase', 'irate', 'delta', 'avg_over_time', 'max_over_time', 'min_over_time', 'p50', 'p90', 'p95', 'p99'];
+const BUILDER_AGGS = ['', 'sum', 'avg', 'max', 'min', 'count'];
+const BUILDER_FILTERS = ['cluster', 'namespace', 'workload', 'pod'];
+
+function builderQuery(b) {
+  if (!b.metric) return '';
+  const sel = selectorText(b.metric, b.filters);
+  const pct = /^p(\d\d)$/.exec(b.fn);
+  if (pct) {
+    const by = ['le', ...b.by.filter(x => x !== 'le')];
+    return 'histogram_quantile(0.' + pct[1] + ', sum by (' + by.join(', ') + ') (rate(' + sel + '[$__rate_interval])))';
+  }
+  let q = b.fn ? b.fn + '(' + sel + '[$__rate_interval])' : sel;
+  if (b.agg) q = b.agg + (b.by.length ? ' by (' + b.by.join(', ') + ')' : '') + ' (' + q + ')';
+  return q;
+}
+
+async function drawBuilder(q) {
+  if (!q.b) q.b = { metric: '', type: '', fn: '', agg: '', by: [], filters: { cluster: state.cluster } };
+  const b = q.b;
+  const apply = () => {
+    const text = builderQuery(b);
+    if (!text) return;
+    q.expr = text;
+    q.ta.value = text;
+    q.ta.dispatchEvent(new Event('input'));
+    runExplore();
+  };
+  const field = (label, input) => h('label', null, h('span', null, label), input);
+  let metrics = [];
+  try { metrics = await storeMetrics(); } catch { metrics = []; }
+  const listId = 'ex-metrics-' + q.id;
+  const metric = h('input', { type: 'text', class: 'mono', value: b.metric, list: listId, placeholder: 'http_requests_total', spellcheck: 'false' });
+  metric.addEventListener('change', () => {
+    b.metric = metric.value.trim();
+    const m = metrics.find(x => x.name === b.metric);
+    b.type = m ? m.type : '';
+    if (b.type === 'histogram' && /_bucket$/.test(b.metric)) { b.fn = 'p95'; b.agg = ''; } else if (b.type === 'counter' || /_total$/.test(b.metric)) { b.fn = 'rate'; b.agg = 'sum'; } else { b.fn = ''; }
+    drawBuilder(q);
+    apply();
+  });
+  const fn = h('select', { onchange: e => { b.fn = e.target.value; apply(); } },
+    BUILDER_FNS.map(f => h('option', { value: f, selected: f === b.fn }, f ? (f[0] === 'p' && f.length === 3 ? t('exPercentile', f.slice(1)) : f) : t('exNone'))));
+  const agg = h('select', { onchange: e => { b.agg = e.target.value; apply(); } },
+    BUILDER_AGGS.map(a => h('option', { value: a, selected: a === b.agg }, a || t('exNone'))));
+  let names = [];
+  if (b.metric) {
+    try { names = await storeLabelNames(b.metric); } catch { names = []; }
+  }
+  const by = h('div', { class: 'chips' }, names.filter(n => n !== 'le').map(n => h('button', {
+    type: 'button', class: b.by.includes(n) ? 'chip active' : 'chip',
+    onclick: e => {
+      b.by = b.by.includes(n) ? b.by.filter(x => x !== n) : [...b.by, n];
+      e.target.className = b.by.includes(n) ? 'chip active' : 'chip';
+      apply();
+    },
+  }, n)));
+  const filters = await Promise.all(BUILDER_FILTERS.map(async l => {
+    let values = [];
+    if (b.metric) {
+      try { values = await storeLabelValues(l, b.metric); } catch { values = []; }
+    }
+    const cur = b.filters[l] || '';
+    if (cur && !values.includes(cur)) values = [cur, ...values];
+    return field(l, h('select', { onchange: e => { b.filters[l] = e.target.value; apply(); } },
+      h('option', { value: '' }, t('exAny')), values.map(v => h('option', { value: v, selected: v === cur }, v))));
+  }));
+  fill(q.builderEl,
+    field(t('exMetric'), metric), h('datalist', { id: listId }, metrics.map(m => h('option', { value: m.name }, m.type))),
+    field(t('exFn'), fn), field(t('exAgg'), agg), filters,
+    names.length ? field(t('exBy'), by) : null);
+}
+
+async function metricBrowser() {
+  let list;
+  try {
+    list = await storeMetrics();
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  const search = h('input', { type: 'text', class: 'filter', placeholder: t('exSearch'), 'aria-label': t('exSearch') });
+  const body = h('div', { class: 'ex-browse' });
+  const draw = () => {
+    const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = list.filter(m => matches(words, [m.name, m.type]));
+    fill(body, rows.length ? h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, h('th', null, t('exMetric')), h('th', null, t('col.type')), h('th', null, t('col.series')))),
+      h('tbody', null, rows.slice(0, 500).map(m => h('tr', { class: 'clickable', onclick: () => {
+        const text = queryFor(m.name, m.type);
+        const empty = ex.queries.find(q => !q.expr.trim());
+        if (empty) empty.expr = text;
+        else ex.queries.push(newQuery(text));
+        close();
+        drawQueries();
+        runExplore();
+      } }, h('td', { class: 'mono' }, m.name), h('td', { class: 'muted' }, m.type), h('td', null, String(m.series))))))
+      : h('div', { class: 'empty-note' }, list.length ? t('noMatch') : t('exNoMetrics')));
+  };
+  search.addEventListener('input', draw);
+  draw();
+  const close = modal(h('div', { class: 'dialog wide ex-browser' },
+    h('h2', null, t('exBrowseTitle')), h('p', { class: 'muted small-text' }, t('exBrowseHint')), search, body,
+    h('div', { class: 'dialog-actions' }, button(t('close'), () => close()))));
+  search.focus();
+}
+
+function scheduleExplore() {
+  clearTimeout(ex.timer);
+  if (!ex.auto || !ex.range) return;
+  ex.timer = setTimeout(() => {
+    if (state.view !== 'explore') return;
+    if (document.hidden) scheduleExplore();
+    else runExplore();
+  }, ex.auto * 1000);
+}
+
+async function runExplore() {
+  const my = ++ex.seq;
+  if (ex.ctl) ex.ctl.abort();
+  const ctl = new AbortController();
+  ex.ctl = ctl;
+  clearTimeout(ex.timer);
+  if (state.storeOn === false) {
+    ex.running = false;
+    return;
+  }
+  let [from, to] = currentRange();
+  const step = stepFor(from, to);
+  // Steps on round times keep the points still from one run to the next.
+  from = Math.floor(from / step) * step;
+  to = Math.floor(to / step) * step;
+  ex.running = true;
+  drawExploreToolbar();
+  await Promise.all(ex.queries.map(async q => {
+    q.error = '';
+    if (!q.expr.trim()) {
+      q.res = null;
+      return;
+    }
+    const p = new URLSearchParams({ query: substitute(q.expr, step, from, to), start: String(from), end: String(to), step: String(step) });
+    try {
+      q.res = await api('store/query_range?' + p, { signal: ctl.signal });
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      q.res = null;
+      q.error = e.message;
+    }
+  }));
+  if (my !== ex.seq) return;
+  ex.running = false;
+  ex.last = { from, to, step };
+  if (state.view === 'explore') {
+    state.x = exploreParam();
+    ex.appliedX = state.x;
+    replaceRoute();
+  }
+  drawExploreToolbar();
+  drawResults();
+  scheduleExplore();
+}
+
+// legendName writes a series' name: the legend format with {{label}}
+// filled in, or its labels the way Prometheus writes them.
+function legendName(q, labels) {
+  if (q.legend) return q.legend.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_, k) => labels[k] || '');
+  const { __name__: name = '', ...rest } = labels;
+  const text = name + labelsText(rest);
+  return text || q.expr.trim();
+}
+
+function exploreSeries() {
+  const out = [];
+  ex.queries.forEach((q, qi) => {
+    if (q.hidden || !q.res) return;
+    for (const s of q.res.series) {
+      out.push({ key: q.id + '|' + JSON.stringify(s.labels), q, qi, labels: s.labels, name: legendName(q, s.labels), values: s.values });
+    }
+  });
+  out.forEach((s, i) => { s.color = queryColor(i); });
+  return out;
+}
+
+function fmtSeconds(v) {
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a < 1e-3) return +(v * 1e6).toPrecision(3) + ' µs';
+  if (a < 1) return +(v * 1000).toPrecision(3) + ' ms';
+  if (a < 60) return +v.toPrecision(3) + ' s';
+  if (a < 3600) return +(v / 60).toPrecision(3) + ' min';
+  if (a < 86400) return +(v / 3600).toPrecision(3) + ' h';
+  return +(v / 86400).toPrecision(3) + ' d';
+}
+function signedBytes(v) {
+  return v < 0 ? '-' + bytes(-v) : bytes(v);
+}
+
+// unitFormat writes values of the chosen unit; auto goes by what the
+// queries are about.
+function unitFormat() {
+  let unit = ex.unit;
+  if (unit === 'auto') {
+    const exprs = ex.queries.filter(q => !q.hidden && q.expr.trim()).map(q => q.expr);
+    const all = re => exprs.length && exprs.every(e => re.test(e));
+    if (all(/_bytes(_total)?\b/)) unit = exprs.every(e => /\b(i?rate|deriv)\(/.test(e)) ? 'bytesSec' : 'bytes';
+    else if (all(/_seconds(_bucket|_sum)?\b/) && exprs.every(e => /histogram_quantile|_seconds\b(?!_)/.test(e) && !/_count/.test(e))) unit = 'seconds';
+    else unit = 'none';
+  }
+  switch (unit) {
+    case 'bytes': return signedBytes;
+    case 'bytesSec': return v => signedBytes(v) + '/s';
+    case 'seconds': return fmtSeconds;
+    case 'ms': return v => fmtSeconds(v / 1000);
+    case 'percentUnit': return v => +(v * 100).toFixed(2) + '%';
+    case 'percent': return v => +v.toFixed(2) + '%';
+    case 'perSec': return v => compact(v) + '/s';
+  }
+  return compact;
+}
+
+function seriesStats(values) {
+  let n = 0;
+  let sum = 0;
+  let mn = Infinity;
+  let mx = -Infinity;
+  let last = null;
+  for (const v of values) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    n++;
+    sum += v;
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+    last = v;
+  }
+  return n ? { mean: sum / n, min: mn, max: mx, last } : { mean: null, min: null, max: null, last: null };
+}
+
+function drawResults() {
+  if (!ex.resultsEl) return;
+  for (const q of ex.queries) {
+    if (!q.statusEl) continue;
+    const warn = q.res && q.res.warnings ? q.res.warnings : [];
+    fill(q.statusEl,
+      q.error ? h('span', { class: 'status-bad' }, q.error) : null,
+      !q.error && q.res ? h('span', { class: 'muted' }, t('exSeries', q.res.series.length)) : null,
+      warn.map(w => h('span', { class: 'status-warn' }, ' · ' + w)));
+  }
+  const all = exploreSeries();
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const listed = all.filter(s => matches(words, [s.name]));
+  const shown = listed.filter(s => !ex.hidden.has(s.key));
+  const format = unitFormat();
+  const last = ex.last;
+  const sel = (label, value, options, onchange) => h('label', { class: 'ex-inline' }, label,
+    h('select', { onchange: e => onchange(e.target.value) }, options.map(([v, text]) => h('option', { value: v, selected: v === value }, text))));
+  const tabs = h('div', { class: 'ex-tabs' },
+    ['graph', 'table'].map(id => h('button', { type: 'button', class: ex.tab === id ? 'chip active' : 'chip', onclick: () => { ex.tab = id; drawResults(); } }, t(id === 'graph' ? 'exGraph' : 'exTable'))),
+    h('span', { class: 'grow' }),
+    last ? h('span', { class: 'muted small-text' }, t('exRangeInfo', new Date(last.from).toLocaleString(), new Date(last.to).toLocaleString(), durText(last.step))) : null,
+    ex.tab === 'graph' ? sel(t('exMode'), ex.mode, [['lines', t('exLines')], ['area', t('exArea')], ['stacked', t('exStacked')]], v => { ex.mode = v; replaceExplore(); drawResults(); }) : null,
+    sel(t('exUnit'), ex.unit, EX_UNITS.map(u => [u, t('unit.' + u)]), v => { ex.unit = v; replaceExplore(); drawResults(); }),
+    button(t('exCSV'), () => exploreCSV(shown), null));
+  const anyQuery = ex.queries.some(q => q.expr.trim());
+  const failed = ex.queries.some(q => q.error);
+  let body;
+  if (!anyQuery) body = h('div', { class: 'empty-note' }, t('exEmpty'));
+  else if (!last) body = h('div', { class: 'empty-note' }, t('loading'));
+  else if (!all.length) body = h('div', { class: 'empty-note' }, failed ? t('exFailed') : t('exNoData'));
+  else if (ex.tab === 'graph') {
+    body = [
+      plot({ series: shown, start: last.from, step: last.step, count: Math.round((last.to - last.from) / last.step) + 1, height: 320, format, mode: ex.mode, onZoom: setAbsolute, empty: t('exAllHidden') }),
+      exploreLegend(listed, format),
+    ];
+  } else {
+    body = exploreTable(listed, format);
+  }
+  fill(ex.resultsEl, h('section', { class: 'panel ex-result' }, tabs, body));
+}
+
+function replaceExplore() {
+  if (state.view !== 'explore') return;
+  state.x = exploreParam();
+  ex.appliedX = state.x;
+  replaceRoute();
+}
+
+// exploreLegend lists the series with their mean, largest and last values.
+// A click shows only that series (again: all of them); Ctrl+click hides or
+// shows it.
+function exploreLegend(list, format) {
+  const toggle = (s, e) => {
+    if (e.ctrlKey || e.metaKey) {
+      if (ex.hidden.has(s.key)) ex.hidden.delete(s.key);
+      else ex.hidden.add(s.key);
+    } else {
+      const alone = list.every(x => x === s || ex.hidden.has(x.key)) && !ex.hidden.has(s.key);
+      ex.hidden.clear();
+      if (!alone) list.forEach(x => { if (x !== s) ex.hidden.add(x.key); });
+    }
+    drawResults();
+  };
+  const val = v => (v == null ? '—' : format(v));
+  return h('div', { class: 'ex-legend-list' },
+    h('div', { class: 'ex-leg head' }, h('span'), h('span', null, t('col.series')), h('span', null, t('exMean')), h('span', null, t('exMax')), h('span', null, t('exLast'))),
+    list.slice(0, 300).map(s => {
+      const st = seriesStats(s.values);
+      const dot = h('span', { class: 'plot-dot' });
+      dot.style.background = s.color;
+      return h('div', { class: ex.hidden.has(s.key) ? 'ex-leg off' : 'ex-leg', title: t('exLegendHelp'), onclick: e => toggle(s, e) },
+        dot, h('span', { class: 'mono ex-leg-name' }, s.name), h('span', null, val(st.mean)), h('span', null, val(st.max)), h('span', null, val(st.last)));
+    }),
+    list.length > 300 ? h('div', { class: 'more-note' }, t('exMore', list.length - 300)) : null);
+}
+
+function exploreTable(list, format) {
+  const keys = [...new Set(list.flatMap(s => Object.keys(s.labels)))].sort((a, b) => (a === '__name__' ? -1 : b === '__name__' ? 1 : cmp(a, b)));
+  const val = v => (v == null ? '—' : format(v));
+  const rows = list.map(s => ({ s, st: seriesStats(s.values) })).sort((a, b) => (b.st.last == null ? -Infinity : b.st.last) - (a.st.last == null ? -Infinity : a.st.last));
+  return h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+    h('thead', null, h('tr', null, h('th'), h('th', null, t('exQuery')), keys.map(k => h('th', null, k === '__name__' ? t('exMetric') : k)),
+      ['exLast', 'exMin', 'exMax', 'exMean'].map(k => h('th', { class: 'num' }, t(k))))),
+    h('tbody', null, rows.slice(0, 1000).map(({ s, st }) => {
+      const dot = h('span', { class: 'plot-dot' });
+      dot.style.background = s.color;
+      return h('tr', null, h('td', null, dot), h('td', { title: s.name }, String.fromCharCode(65 + s.qi)), keys.map(k => h('td', { class: 'mono' }, s.labels[k] || '')),
+        [st.last, st.min, st.max, st.mean].map(v => h('td', { class: 'num' }, val(v))));
+    }))));
+}
+
+function exploreCSV(list) {
+  const last = ex.last;
+  if (!last || !list.length) return;
+  const esc = v => (/[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
+  const lines = ['time,' + list.map(s => esc(s.name)).join(',')];
+  const n = Math.round((last.to - last.from) / last.step) + 1;
+  for (let i = 0; i < n; i++) {
+    lines.push(new Date(last.from + i * last.step).toISOString() + ',' + list.map(s => (s.values[i] == null ? '' : String(s.values[i]))).join(','));
+  }
+  download(lines.join('\n') + '\n', 'kartal-explore.csv');
+}
 // podOwner is the workload whose pods a pod is one of, as the agent names
 // it: a ReplicaSet's pods belong to its Deployment.
 function podOwner(pod) {
@@ -4085,6 +5221,7 @@ function metricPorts(pod) {
 // the filter as it is typed into.
 function renderScrapeTab() {
   const { ref, obj, kind } = detail;
+  if (canIn('operator', ref.ns)) storeKnown(() => { if (detail && detail.drawn === 'scrape') renderDetail(); });
   if (!agentAllows('scrape')) {
     fill(els.detailBody, h('div', { class: 'empty-note' }, t('capMissing.scrape')));
     return;
@@ -4153,6 +5290,9 @@ function renderScrapeTab() {
   const toolbar = h('div', { class: 'detail-toolbar' },
     podPick, portIn, h('datalist', { id: 'scrape-ports' }, ports.map(p => h('option', { value: p.port }, p.name))), pathIn,
     button(t('readMetrics'), read),
+    s.asked && state.storeOn && canIn('operator', ref.ns) ? button(t('collectAlways'), () => collectDialog({
+      ns: ref.ns, owner: kind === 'Pod' ? podOwner(obj) : kind + '/' + ref.name, pod: s.pod, port: s.port, path: s.path,
+    })) : null,
     s.asked ? h('input', {
       type: 'text', class: 'filter', value: s.q, placeholder: t('metricsFilter'), 'aria-label': t('metricsFilter'),
       oninput: e => {
@@ -4186,7 +5326,7 @@ function renderScrapeTab() {
     fill(list,
       page.truncated ? h('div', { class: 'more-note' }, t('truncatedMetrics')) : null,
       fams.length ? null : h('div', { class: 'empty-note' }, page.families.length ? t('noMatch') : t('noMetricsHere')),
-      fams.slice(0, s.shown).map(f => metricFamily(f, onWatch && onWatch(f))),
+      fams.slice(0, s.shown).map(f => metricFamily(f, onWatch && onWatch(f), state.storeOn ? () => exploreFamily(f, ref.ns, owner, s.pod) : null)),
       fams.length > s.shown ? h('div', { class: 'more-note' }, button(t('moreMetrics', Math.min(100, fams.length - s.shown)), () => {
         s.shown += 100;
         drawList();
@@ -4198,7 +5338,7 @@ function renderScrapeTab() {
 
 // metricFamily shows one metric of a pod's page: its samples, a few of
 // them when there are many, and a way to watch it.
-function metricFamily(f, onWatch) {
+function metricFamily(f, onWatch, onExplore) {
   const rows = f.samples.slice(0, 20);
   return h('div', { class: 'metric-family' },
     h('div', { class: 'metric-head' },
@@ -4206,7 +5346,7 @@ function metricFamily(f, onWatch) {
         h('span', { class: 'mono metric-name' }, f.name), ' ', h('span', { class: 'metric-type' }, f.type),
         f.samples.length > 1 ? h('span', { class: 'muted small-text' }, ' ' + t('nSeries', f.samples.length)) : null,
         f.help ? h('div', { class: 'muted small-text' }, f.help) : null),
-      onWatch ? button(t('watch'), onWatch) : null),
+      h('div', { class: 'actions' }, onExplore ? button(t('explore'), onExplore) : null, onWatch ? button(t('watch'), onWatch) : null)),
     rows.length ? h('table', { class: 'metric-samples' }, h('tbody', null, rows.map(s => h('tr', null,
       h('td', null, h('div', { class: 'chips' },
         s.name !== f.name ? h('span', { class: 'mono muted small-text' }, s.name.startsWith(f.name) ? s.name.slice(f.name.length) : s.name) : null,

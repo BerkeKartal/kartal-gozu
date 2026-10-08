@@ -5,7 +5,8 @@ metadata:
   labels:
     app.kubernetes.io/name: kartal-server
 spec:
-  # State and pending commands live in memory, so run exactly one replica.
+  # State and pending commands live in memory and the metric store on one
+  # volume, so run exactly one replica.
   replicas: 1
   strategy:
     type: Recreate
@@ -21,6 +22,8 @@ spec:
       serviceAccountName: kartal-server
       securityContext:
         runAsNonRoot: true
+        # The image runs as 65532; the data volume is made writable for it.
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -34,6 +37,9 @@ spec:
             # Where the settings made in the UI are kept (settings-secret.yaml).
             - name: KARTAL_SETTINGS_SECRET
               value: kartal-server-settings
+            # The metric store, on the claim in data.yaml.
+            - name: KARTAL_DATA_DIR
+              value: /var/lib/kartal
             # Named users with roles, one "name:grant:token" per line, where a
             # grant is a role (viewer, operator, admin), everywhere, or only in
             # some places: operator@production/payments+staging. Add a "users"
@@ -105,7 +111,7 @@ spec:
               memory: 32Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -115,7 +121,12 @@ spec:
             - name: secrets
               mountPath: /etc/kartal
               readOnly: true
+            - name: data
+              mountPath: /var/lib/kartal
       volumes:
         - name: secrets
           secret:
             secretName: kartal-server
+        - name: data
+          persistentVolumeClaim:
+            claimName: kartal-server-data

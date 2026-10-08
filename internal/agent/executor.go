@@ -85,7 +85,7 @@ func (e *Executor) Capabilities() []string {
 		out = append(out, protocol.CapabilityEdit)
 	}
 	if e.AllowScrape {
-		out = append(out, protocol.CapabilityScrape)
+		out = append(out, protocol.CapabilityScrape, protocol.CapabilityCollect)
 	}
 	return out
 }
@@ -202,15 +202,20 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 			return "", errScrapeDisabled
 		}
 		return e.findMetrics(ctx, cmd)
-	case protocol.CommandScrape, protocol.CommandSample:
+	case protocol.CommandScrape, protocol.CommandSample, protocol.CommandCollect:
 		if cmd.Path == "" {
 			cmd.Path = "/metrics"
 		}
-		if cmd.Type == protocol.CommandScrape {
-			if err := e.checkObject(cmd.Namespace, cmd.Name); err != nil {
-				return "", err
-			}
-		} else if err := e.checkSample(cmd); err != nil {
+		var err error
+		switch cmd.Type {
+		case protocol.CommandScrape:
+			err = e.checkObject(cmd.Namespace, cmd.Name)
+		case protocol.CommandSample:
+			err = e.checkSample(cmd)
+		default:
+			err = e.checkPods(cmd)
+		}
+		if err != nil {
 			return "", err
 		}
 		if err := protocol.CheckEndpoint(cmd.Port, cmd.Path); err != nil {
@@ -219,10 +224,13 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 		if !e.AllowScrape {
 			return "", errScrapeDisabled
 		}
-		if cmd.Type == protocol.CommandScrape {
+		switch cmd.Type {
+		case protocol.CommandScrape:
 			return e.scrape(ctx, cmd)
+		case protocol.CommandSample:
+			return e.sample(ctx, cmd)
 		}
-		return e.sample(ctx, cmd)
+		return e.collect(ctx, cmd)
 	default:
 		return "", fmt.Errorf("unsupported command %q", cmd.Type)
 	}

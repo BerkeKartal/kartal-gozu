@@ -1,4 +1,4 @@
-// Package ui embeds the web interface: plain HTML, CSS and one ES module.
+// Package ui embeds the web interface: plain HTML, CSS and ES modules.
 // There is nothing to build and nothing is fetched from the internet, so the
 // UI works in air-gapped networks exactly as it does anywhere else.
 package ui

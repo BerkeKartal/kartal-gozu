@@ -9,6 +9,7 @@ import (
 
 	"github.com/BerkeKartal/kartal-gozu/internal/fakekube"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
+	"github.com/BerkeKartal/kartal-gozu/internal/promtext"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 )
 
@@ -91,6 +92,10 @@ func TestScrapeIsChecked(t *testing.T) {
 		{Type: protocol.CommandSample, Namespace: "team-01", Port: "9100", Pods: []string{"web-5d8c-011"}},
 		{Type: protocol.CommandSample, Namespace: "team-01", Port: "9100", Pods: []string{"../x"}, Metrics: []string{"up"}},
 		{Type: protocol.CommandSample, Namespace: "team-01", Port: "9100", Pods: []string{"web-5d8c-011"}, Metrics: []string{"no-dashes"}},
+		{Type: protocol.CommandCollect, Namespace: "team-01", Port: "9100", Pods: []string{"../x"}},
+		{Type: protocol.CommandCollect, Namespace: "team-01", Port: "9100"},
+		{Type: protocol.CommandCollect, Namespace: "team-02", Port: "9100", Pods: []string{"web-5d8c-021"}},
+		{Type: protocol.CommandCollect, Namespace: "team-01", Port: "9100", Path: "/../x", Pods: []string{"web-5d8c-011"}},
 	} {
 		if res := on.Run(context.Background(), cmd); res.OK {
 			t.Errorf("accepted %+v", cmd)
@@ -140,5 +145,34 @@ func TestMetricsPorts(t *testing.T) {
 	}
 	if got := strings.Join(metricsPorts(p), ","); got != "9102,9100,8080" {
 		t.Errorf("ports: %s", got)
+	}
+}
+
+func TestCollectReadsWholePages(t *testing.T) {
+	e := &Executor{Kube: teamsKube(t), AllowScrape: true}
+	if !strings.Contains(strings.Join(e.Capabilities(), ","), protocol.CapabilityCollect) {
+		t.Errorf("capabilities: %v", e.Capabilities())
+	}
+	res := e.Run(context.Background(), protocol.Command{Type: protocol.CommandCollect, Namespace: "team-01", Port: "9100",
+		Pods: []string{"web-5d8c-011", "web-5d8c-012", "gone"}})
+	if !res.OK {
+		t.Fatalf("collect: %+v", res)
+	}
+	var got []protocol.PodMetrics
+	if err := json.Unmarshal([]byte(res.Output), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[2].Pod != "gone" || got[2].Error == "" || got[2].Text != "" {
+		t.Fatalf("pages: %+v", got)
+	}
+	for _, p := range got[:2] {
+		fams, _, err := promtext.Parse(strings.NewReader(p.Text), 1000)
+		if err != nil || p.Error != "" || len(fams) < 5 {
+			t.Errorf("%s: %d families, %v %s", p.Pod, len(fams), err, p.Error)
+		}
+		// Help texts are left out; types stay.
+		if strings.Contains(p.Text, "# HELP") || !strings.Contains(p.Text, "# TYPE http_requests_total counter") {
+			t.Errorf("%s page:\n%s", p.Pod, p.Text)
+		}
 	}
 }

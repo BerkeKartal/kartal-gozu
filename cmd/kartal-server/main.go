@@ -20,12 +20,14 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
 	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
+	"github.com/BerkeKartal/kartal-gozu/internal/collect"
 	"github.com/BerkeKartal/kartal-gozu/internal/config"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
+	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
 )
 
@@ -101,6 +103,10 @@ func run(log *slog.Logger) error {
 	mail := settings.NewMail(keeper, alerts.Email, env)
 	checks := uptime.New(keeper, alerts.Manager, log)
 	watches := appmetrics.New(keeper, alerts.Manager, log)
+	collector, err := metricStore(keeper, log)
+	if err != nil {
+		return err
+	}
 	keeper.OnLoad(mail.Reload)
 	keeper.OnLoad(checks.Reload)
 	staleAfter, err := config.Duration("KARTAL_STALE_AFTER", time.Minute)
@@ -127,6 +133,7 @@ func run(log *slog.Logger) error {
 		Mail:           mail,
 		Checks:         checks,
 		Watches:        watches,
+		Collect:        collector,
 		SessionTTL:     sessionTTL,
 	}
 	if login != nil {
@@ -140,6 +147,12 @@ func run(log *slog.Logger) error {
 	go server.Watch(ctx)
 	checks.Start(ctx)
 	watches.Start(ctx)
+	if collector != nil {
+		// Samples still in memory are written every minute, and on the way out.
+		go collector.DB().Run(ctx, time.Minute)
+		defer collector.DB().Close()
+		collector.Start(ctx)
+	}
 	// Settings that could not be read at the start are read again.
 	go keeper.Retry(ctx, time.Minute)
 
@@ -158,7 +171,7 @@ func run(log *slog.Logger) error {
 	go func() { errc <- srv.ListenAndServe() }()
 	log.Info("kartal-server started", "version", version, "addr", srv.Addr, "clusters", clusters,
 		"users", len(users)+min(len(adminToken), 1), "notification_channels", alerts.Channels(), "settings", keeper.Where(),
-		"url_checks", len(keeper.Get().Checks))
+		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector))
 
 	select {
 	case err := <-errc:
@@ -248,6 +261,27 @@ func emailFromEnv() (*settings.Email, error) {
 		return nil, fmt.Errorf("KARTAL_SMTP_*: %w", err)
 	}
 	return env, nil
+}
+
+// metricStore opens the metric store in KARTAL_DATA_DIR, with the collector
+// that fills it; without the directory there is no store.
+func metricStore(keeper *settings.Keeper, log *slog.Logger) (*collect.Collector, error) {
+	dir := config.String("KARTAL_DATA_DIR", "")
+	if dir == "" {
+		return nil, nil
+	}
+	db, err := tsdb.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("KARTAL_DATA_DIR: %w", err)
+	}
+	return collect.New(keeper, db, dir, log), nil
+}
+
+func storeDir(c *collect.Collector) string {
+	if c == nil {
+		return "off"
+	}
+	return c.Dir()
 }
 
 // settingsStore picks where the settings made in the UI are kept: a Secret

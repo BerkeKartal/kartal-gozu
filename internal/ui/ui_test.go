@@ -34,7 +34,7 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 			files[name] = string(a.body)
 		}
 	}
-	for _, name := range []string{"app.js", "app.css", "yaml.js", "chart.js"} {
+	for _, name := range []string{"app.js", "app.css", "yaml.js", "chart.js", "plot.js"} {
 		if _, ok := files[name]; !ok {
 			t.Fatalf("%s is not embedded", name)
 		}
@@ -43,6 +43,7 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 	// the SVG namespace, which is a name and never fetched.
 	files["app.js"] = strings.Replace(files["app.js"], "(tls ? 'https://' : 'http://')", "", 1)
 	files["chart.js"] = strings.Replace(files["chart.js"], "'http://www.w3.org/2000/svg'", "", 1)
+	files["plot.js"] = strings.Replace(files["plot.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	for name, body := range files {
 		for _, bad := range []string{"http://", "https://", "//cdn", "@import"} {
 			if strings.Contains(body, bad) {

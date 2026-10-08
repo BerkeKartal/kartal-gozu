@@ -48,6 +48,13 @@ tunnel), and the server works under any URL path without configuration.
   charts the last day, and raises an alert past a limit you set. Not sure
   what exposes metrics? One button asks a pod of every workload. No
   Prometheus needed.
+- **A metric store of its own.** Choose workloads to collect, and every metric
+  their pods expose is kept on the server's disk, compressed, with the
+  cluster, namespace, pod and workload as labels: for as long as you like,
+  until you delete a range of days. The **Explore** page charts it as
+  Grafana does, in PromQL: many queries on one chart, a query builder,
+  completion, any time range, zooming by dragging, a table and a CSV. No
+  Prometheus needed for that either.
 - **What changed, and what runs where.** A timeline of what changed in each
   cluster (new images, scaling, restarts, nodes going away), with who did it
   when it was done through Kartal Gözü. The versions of every app side by
@@ -243,7 +250,9 @@ service account's password in the Secret as `ldap-password`; see
 [Active Directory and LDAP](#active-directory-and-ldap). The manifests also create an empty
 Secret, `kartal-server-settings`, where the server keeps the settings made in
 the UI, and a Role that lets the server read and change that one Secret and
-nothing else. Set `namespace` and `images` in
+nothing else. The metric store lives on a 10 GiB volume claim
+(`deploy/server/data.yaml`); set its size, and its `storageClassName` if the
+cluster has no default one. Set `namespace` and `images` in
 `deploy/server/kustomization.yaml`, then:
 
 ```sh
@@ -277,7 +286,7 @@ kind of action, set its variable to `"true"` and enable its RBAC file in
 | `rbac-edit.yaml` | `KARTAL_ALLOW_EDIT` | Saving objects edited as YAML (common kinds; widen it in the file) |
 | `rbac-volumes.yaml` | `KARTAL_VOLUME_STATS` | How full volume claims and the nodes' disks are, and how much disk each pod uses (ephemeral storage: writable layers, logs, `emptyDir`), asked from each node's kubelet once a minute |
 | `rbac-certificates.yaml` | `KARTAL_TLS_SECRETS` | When the certificates of `kubernetes.io/tls` Secrets expire, read every five minutes |
-| `rbac-pod-metrics.yaml` | `KARTAL_POD_METRICS` | The metrics that pods expose, read through the API server: a pod's page on request, and the watched metrics every 30 seconds |
+| `rbac-pod-metrics.yaml` | `KARTAL_POD_METRICS` | The metrics that pods expose, read through the API server: a pod's page on request, the watched metrics every 30 seconds, and the collected workloads |
 
 Three of these grant more than their feature needs, because Kubernetes
 cannot grant less: `rbac-volumes.yaml` gives `get` on `nodes/proxy`, which
@@ -302,8 +311,8 @@ token belongs to a user with one of three roles:
 | Role | May |
 |---|---|
 | `viewer` | See everything: lists, details, YAML, logs, events, charts, the metrics pods expose and the watched ones, alerts, changes, versions, URL checks |
-| `operator` | Also restart, scale, roll back, delete pods, cordon nodes, run and suspend CronJobs, choose which metrics are watched, read the audit log, and see who made a change |
-| `admin` | Also edit YAML, use the pod console, set up e-mail and URL checks, and send test notifications |
+| `operator` | Also restart, scale, roll back, delete pods, cordon nodes, run and suspend CronJobs, choose which metrics are watched and collected, read the audit log, and see who made a change |
+| `admin` | Also edit YAML, use the pod console, set up e-mail and URL checks, send test notifications, and set how often metrics are collected, how long they are kept, and delete them |
 
 ### Where a role applies
 
@@ -483,6 +492,81 @@ come from the server, so the addresses must be reachable from where it runs;
 they honour `HTTPS_PROXY` and `NO_PROXY`. At most 200 checks, and 20 requests
 at a time.
 
+## Metric store
+
+Besides watching single metrics, the server can keep every metric of chosen
+workloads on its own disk, as a Prometheus server would, but read through
+the agents like everything else. On a workload's **App metrics** tab,
+**Collect always** starts collecting its running pods at the port and path
+shown (or a single pod by itself); the sources found on the **Metrics** page
+offer the same button. Regular expressions on the metric's name keep the
+store small: only `http_.*|process_.*`, say, or everything but `go_gc_.*`.
+
+Each round, every collected pod's whole page is read and stored with four
+labels added: `cluster`, `namespace`, `pod` and `workload` (a label of the
+pod's own with one of those names is kept as `exported_<name>`), and an `up`
+series says whether the pod answered. The **Metrics** page lists the
+collected workloads with how many pods answered, how many samples they gave
+and any error.
+
+Admins set how often to read (every 10 seconds to every hour, 30 seconds by
+default) and how long to keep the data: by default until someone deletes it.
+**Delete a range** removes every sample between two moments, of every
+cluster; the page shows how much each stored day takes on disk.
+
+The store is a directory, `KARTAL_DATA_DIR`, with a folder per day (UTC):
+the series of the day and their samples, compressed the way Prometheus does
+it, to 2 to 4 bytes a sample, and once the day is over an index of where
+each series' samples are, so that a query over many days holds only what
+it reads. Samples still in memory are written every minute and when the
+server stops. Without `KARTAL_DATA_DIR` there is no store. Collecting needs
+`KARTAL_POD_METRICS` on the agent, as reading a pod's page does; one round
+reads at most 100 pods of a workload and 20 000 samples of a pod, at most
+200 workloads in all, two commands at a time for each cluster. A day keeps
+at most 100 000 series, and none whose labels take more than 16 KiB, so
+that an app that puts request IDs in its labels cannot fill the server's
+memory; the collected workloads say when that happens.
+
+### Explore
+
+The **Explore** page charts the store the way Grafana's Explore does, in the
+query language of Prometheus (PromQL): `sum by (pod)
+(rate(http_requests_total{namespace="shop"}[$__rate_interval]))`. It has
+
+- several queries on one chart, each with a legend such as `{{pod}}`, and a
+  builder that writes a query from a metric, a function (rate, increase,
+  the 50th to 99th percentile of a histogram...), an aggregation, labels to
+  group by and filters on the cluster, namespace, workload and pod;
+- completion of metric names, functions, label names and label values as
+  you type;
+- ranges from the last 5 minutes to the last 30 days, or any two moments;
+  dragging across the chart zooms in, and **Back** and **Zoom out** go the
+  other way; the queries can run again every few seconds;
+- lines, areas or stacks, with units (bytes, seconds, percent, per second,
+  or guessed from the metric's name); a legend with each series' mean,
+  largest and last value, where a click shows only that series; a table of
+  the values, and a CSV of every point.
+
+`$__rate_interval` is a window that always holds a few samples (four
+readings, or a step and a reading), `$__interval` the step and `$__range` the
+whole range. The page's address keeps the queries and the range, to share
+them. **Explore** buttons open it from a pod's metrics, a watched metric and
+a collected workload.
+
+The language covers selectors with `=`, `!=`, `=~` and `!~`, ranges and
+`offset`; `sum`, `avg`, `min`, `max`, `count`, `group`, `stddev`, `stdvar`,
+`topk`, `bottomk` and `quantile` with `by` and `without`; arithmetic,
+comparisons (with `bool`) and `and`, `or`, `unless`, with `on`, `ignoring`,
+`group_left` and `group_right`; and the functions `rate`, `irate`,
+`increase`, `delta`, `idelta`, `deriv`, `predict_linear`, `resets`,
+`changes`, the `*_over_time` family, `histogram_quantile`, `label_replace`,
+`label_join`, `abs`, `ceil`, `floor`, `round`, `clamp`, `clamp_min`,
+`clamp_max`, `exp`, `ln`, `log2`, `log10`, `sqrt`, `sgn`, `absent`,
+`absent_over_time`, `scalar`, `vector`, `time` and the date functions. Not
+supported: subqueries, `@` and native histograms. Like Prometheus, a series
+counts at a moment if it has a sample in the 5 minutes before. A query
+returns at most 11 000 steps and stops after 30 seconds.
+
 ## Configuration
 
 ### Server
@@ -517,6 +601,7 @@ at a time.
 | `KARTAL_SMTP_ADDR`, `_FROM`, `_TO`, `_USERNAME`, `_PASSWORD` / `_PASSWORD_FILE` | — | E-mail notifications; when set, the UI cannot change them |
 | `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI (e-mail, URL checks) |
 | `KARTAL_SETTINGS_FILE` | — | File that keeps them instead, outside Kubernetes |
+| `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store); without it there is none |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ### Agent
@@ -595,11 +680,24 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/watches` | operator | Body: `{"name", "target", "port", "path", "metric", "labels", "rate", "aggregate", "above", "below"}`; `target` is `Deployment/web` (each of its running pods), a StatefulSet, a DaemonSet or `Pod/web-1`; `aggregate` is `sum`, `avg`, `max` or `min`. A name that another watch of the namespace has gets a number, such as `requests (2)` |
 | PUT | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Same body; changes a watch of that namespace |
 | DELETE | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Removes a watch, its history and its alert |
+| GET | `/api/v1/store` | viewer | The metric store: its directory, each day's size, today's series, the interval and how long data is kept |
+| GET | `/api/v1/store/metrics?from=&to=&cluster=&namespace=` | viewer | The stored metrics, by name, with their type and number of series, between two moments (Unix milliseconds; the last hour by default) |
+| GET | `/api/v1/store/targets?cluster=&namespace=` | viewer | The collected workloads and how their last reading went |
+| POST | `/api/v1/clusters/{c}/namespaces/{ns}/collect` | operator | Body: `{"target", "port", "path", "include", "exclude"}`; `target` as for watches; `include` and `exclude` are regular expressions for metric names |
+| PUT | `/api/v1/clusters/{c}/namespaces/{ns}/collect/{id}` | operator | Same body; changes what a target collects |
+| DELETE | `/api/v1/clusters/{c}/namespaces/{ns}/collect/{id}` | operator | Stops collecting; what was stored stays |
+| PUT | `/api/v1/store/config` | admin | Body: `{"interval": seconds, "retentionDays": days}`; 0 days keeps everything until deleted |
+| POST | `/api/v1/store/delete` | admin | Body: `{"from": ms, "to": ms}`; deletes every sample in between, both ends included |
+| GET | `/api/v1/store/query_range?query=&start=&end=&step=` | viewer | Evaluates a query at each step (Unix milliseconds; the last hour in about 300 steps by default); returns `{"start", "end", "step", "series": [{"labels", "values"}]}` with a value or `null` at each step |
+| GET | `/api/v1/store/query?query=&time=` | viewer | Evaluates a query at one moment (now by default) |
+| GET | `/api/v1/store/labels?from=&to=&match=` | viewer | The label names of the stored series, of those a selector such as `{namespace="shop"}` picks if given |
+| GET | `/api/v1/store/labels/{name}/values?from=&to=&match=` | viewer | A label's values |
 
-The server's own settings (`alerts/test`, `settings/…` and changes to
-`checks`) need the admin role everywhere. Every other call needs its role in
-the cluster and namespace it acts on, and lists hold only what the user may
-see.
+The server's own settings (`alerts/test`, `settings/…`, changes to
+`checks`, `store/config` and `store/delete`) need the admin role everywhere.
+Every other call needs its role in the cluster and namespace it acts on, and
+lists hold only what the user may see; the metric store shows each user the
+series of the namespaces they may see.
 
 Lists carry an `ETag` computed from their content. Send it back in
 `If-None-Match` and you get `304 Not Modified` for as long as the content stays

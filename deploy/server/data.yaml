@@ -1,0 +1,18 @@
+# The metric store (KARTAL_DATA_DIR): every metric of the workloads chosen
+# in the UI, kept until someone deletes a range. Size it for what you
+# collect: a sample takes 2 to 4 bytes, so 10 000 series read every 30
+# seconds fill 55 to 110 MiB a day, and 10 GiB lasts three to six months.
+# Without this claim, drop KARTAL_DATA_DIR and the data volume from
+# deployment.yaml.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kartal-server-data
+  labels:
+    app.kubernetes.io/name: kartal-server
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: standard
+  resources:
+    requests:
+      storage: 10Gi

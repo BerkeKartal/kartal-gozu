@@ -9,8 +9,18 @@ import (
 	"time"
 )
 
-// started is when the demo's counters start counting.
-var started = time.Now()
+// started is when the demo's counters start counting: hours before the
+// demo itself, so that it can fill its metric store with those hours.
+var started = time.Now().Add(-HistoryFor)
+
+// HistoryFor is how far back the counters go.
+const HistoryFor = 6 * time.Hour
+
+// PodPage is the page that web pod replica of generated team team exposes
+// at a moment; the demo fills its metric store with the hours before it.
+func PodPage(team, replica int, at time.Time) string {
+	return appMetrics(team, replica, at.Sub(started).Seconds())
+}
 
 // servePodMetrics answers what the API server proxies to a pod
 // (/api/v1/namespaces/<ns>/pods/<pod>:<port>/proxy/<path>). The generated

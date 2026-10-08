@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,14 +27,17 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
 	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
+	"github.com/BerkeKartal/kartal-gozu/internal/collect"
 	"github.com/BerkeKartal/kartal-gozu/internal/fakekube"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
+	"github.com/BerkeKartal/kartal-gozu/internal/promtext"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
+	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
 )
 
@@ -42,9 +46,10 @@ func main() {
 	adminToken := flag.String("admin-token", "", "token to sign in with; empty leaves the demo open")
 	namespaces := flag.Int("namespaces", 14, "generated namespaces (3 pods each) in the \"production\" cluster; raise it to try a big cluster")
 	withLDAP := flag.Bool("ldap", false, "sign in with a built-in directory: ayse (admin), mehmet (operator in the team-0* namespaces), zeynep (viewer); the password is demo")
+	dataDir := flag.String("data", "", "directory of the metric store; empty uses a temporary one, removed on exit")
 	flag.Parse()
 	log := logging.New("warn")
-	if err := run(*listen, *adminToken, max(*namespaces, 0), *withLDAP, log); err != nil {
+	if err := run(*listen, *adminToken, max(*namespaces, 0), *withLDAP, *dataDir, log); err != nil {
 		log.Error("demo stopped", "err", err)
 		os.Exit(1)
 	}
@@ -55,7 +60,7 @@ type demoCluster struct {
 	kube *fakekube.Server
 }
 
-func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Logger) error {
+func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -90,6 +95,18 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 	if err := demoWatches(ctx, keeper); err != nil {
 		return err
 	}
+	if err := demoCollect(ctx, keeper); err != nil {
+		return err
+	}
+	db, temporary, err := demoStore(&dataDir, keeper)
+	if temporary {
+		defer os.RemoveAll(dataDir)
+	}
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	collector := collect.New(keeper, db, dataDir, log)
 	cfg := api.Config{
 		AgentTokens:    tokens,
 		AdminToken:     adminToken,
@@ -101,6 +118,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 		Checks:         checks,
 		Watches:        watches,
 		History:        hist,
+		Collect:        collector,
 	}
 	if withLDAP {
 		login, err := demoDirectory()
@@ -120,6 +138,8 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, log *slog.Log
 	go server.Watch(ctx)
 	checks.Start(ctx)
 	watches.Start(ctx)
+	go db.Run(ctx, time.Minute)
+	collector.Start(ctx)
 	serverURL := "http://" + ln.Addr().String()
 
 	for i, c := range clusters {
@@ -299,4 +319,66 @@ func demoWatches(ctx context.Context, keeper *settings.Keeper) error {
 		return nil
 	})
 	return err
+}
+
+// demoCollect keeps every metric of three teams' web workloads in the
+// metric store, read every 10 seconds; team-03's fails many requests.
+func demoCollect(ctx context.Context, keeper *settings.Keeper) error {
+	_, err := keeper.Update(ctx, func(s *settings.Settings) error {
+		s.Collect.Interval = 10
+		for _, ns := range []string{"team-01", "team-02", "team-03"} {
+			t := settings.CollectTarget{ID: settings.NewCheckID(), Cluster: "production", Namespace: ns, Target: "Deployment/web", Port: "9100"}
+			if err := t.Normalize(); err != nil {
+				return err
+			}
+			s.Collect.Targets = append(s.Collect.Targets, t)
+		}
+		return nil
+	})
+	return err
+}
+
+// demoStore opens the metric store in dir, a new temporary directory when
+// empty. A store with nothing in it is first filled with the hours before
+// the demo, as the collected targets' pods would have answered them, so
+// that Explore has history to show from the start.
+func demoStore(dir *string, keeper *settings.Keeper) (db *tsdb.DB, temporary bool, err error) {
+	if *dir == "" {
+		if *dir, err = os.MkdirTemp("", "kartal-demo-store-"); err != nil {
+			return nil, false, err
+		}
+		temporary = true
+	}
+	if entries, _ := os.ReadDir(*dir); len(entries) > 0 {
+		db, err = tsdb.Open(*dir)
+		return db, temporary, err
+	}
+	now := time.Now()
+	if db, err = tsdb.OpenAt(*dir, now.Add(-fakekube.HistoryFor)); err != nil {
+		return nil, temporary, err
+	}
+	targets := keeper.Get().Collect.Targets
+	every := time.Duration(keeper.Get().Collect.EffectiveInterval()) * time.Second
+	// Up to the collector's first rounds, which then add nothing older:
+	// a gap there would look like the series stopped for a while.
+	for at := now.Add(-fakekube.HistoryFor).Truncate(time.Minute); !at.After(now.Add(2 * every)); at = at.Add(every) {
+		var samples []tsdb.Sample
+		for _, t := range targets {
+			var team int
+			fmt.Sscanf(t.Namespace, "team-%d", &team)
+			for r := 1; r <= 3; r++ {
+				fams, _, err := promtext.Parse(strings.NewReader(fakekube.PodPage(team, r, at)), 20000)
+				if err != nil {
+					db.Close()
+					return nil, temporary, err
+				}
+				samples = append(samples, collect.Samples(fams, t.Cluster, t, fmt.Sprintf("web-5d8c-%02d%d", team, r), t.Target)...)
+			}
+		}
+		if err := db.Append(at, samples); err != nil {
+			db.Close()
+			return nil, temporary, err
+		}
+	}
+	return db, temporary, db.Flush()
 }

@@ -3,9 +3,11 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,8 +39,8 @@ const (
 
 var errScrapeDisabled = errors.New("reading the metrics of pods is disabled on this agent (KARTAL_POD_METRICS=false)")
 
-// checkSample validates a sample command: its namespace, pods and metrics.
-func (e *Executor) checkSample(cmd protocol.Command) error {
+// checkPods validates the namespace and pods of a sample or collect command.
+func (e *Executor) checkPods(cmd protocol.Command) error {
 	if err := checkNamespace(cmd.Namespace); err != nil {
 		return err
 	}
@@ -52,6 +54,14 @@ func (e *Executor) checkSample(cmd protocol.Command) error {
 		if err := checkName(p); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkSample validates a sample command: its namespace, pods and metrics.
+func (e *Executor) checkSample(cmd protocol.Command) error {
+	if err := e.checkPods(cmd); err != nil {
+		return err
 	}
 	if len(cmd.Metrics) == 0 || len(cmd.Metrics) > maxSampleMetrics {
 		return fmt.Errorf("give 1 to %d metrics", maxSampleMetrics)
@@ -99,6 +109,61 @@ func (e *Executor) scrape(ctx context.Context, cmd protocol.Command) (string, er
 		return "", err
 	}
 	return marshal(protocol.Scrape{Families: fams, Truncated: truncated})
+}
+
+const (
+	// maxCollectSamples is what one pod may add to the store each round.
+	maxCollectSamples = 20000
+	// maxCollectText keeps a collect result under the server's limit for
+	// results (8 MiB).
+	maxCollectText = 6 << 20
+)
+
+// collect reads every metric of several pods for the server's store, a few
+// pods at a time, and returns them in the text format: only what parsed
+// as metrics travels on, as with scrape.
+func (e *Executor) collect(ctx context.Context, cmd protocol.Command) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, sampleBudget)
+	defer cancel()
+	out := make([]protocol.PodMetrics, len(cmd.Pods))
+	sem := make(chan struct{}, sampleConcurrency)
+	var wg sync.WaitGroup
+	for i, pod := range cmd.Pods {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			out[i].Pod = pod
+			fams, truncated, err := e.readMetrics(ctx, cmd.Namespace, pod, cmd.Port, cmd.Path, maxCollectSamples)
+			if err != nil {
+				out[i].Error = err.Error()
+				return
+			}
+			var b strings.Builder
+			promtext.Format(&b, fams)
+			out[i].Text, out[i].Truncated = b.String(), truncated
+		}()
+	}
+	wg.Wait()
+	// What does not fit next to the others is left out, to be asked for
+	// by itself. The size counts the text as JSON carries it: quotes and
+	// line breaks take two bytes there.
+	size := 0
+	for i := range out {
+		quoted, _ := json.Marshal(out[i].Text)
+		if n := len(quoted); size+n > maxCollectText {
+			out[i].Text = ""
+			if len(out) > 1 {
+				out[i].Alone = true
+			} else {
+				out[i].Error = fmt.Sprintf("the pod's metrics take more than %d MiB in the text format, more than one round takes", maxCollectText>>20)
+			}
+		} else {
+			size += n
+		}
+	}
+	return marshal(out)
 }
 
 // sample reads the named samples of several pods, a few at a time. A pod

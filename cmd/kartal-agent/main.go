@@ -109,9 +109,11 @@ func run(log *slog.Logger) error {
 			Namespaces:  namespaces,
 			MaxLogBytes: 1 << 20,
 		},
-		Interval:    interval,
-		PollWait:    pollWait,
-		Concurrency: 4,
+		Interval: interval,
+		PollWait: pollWait,
+		// The server's own reading of metrics takes a few of these; what
+		// people ask for in the UI must find one free.
+		Concurrency: 8,
 		Log:         log,
 	}
 

@@ -12,6 +12,8 @@ resources:
   # then last until the server restarts.
   - rbac.yaml
   - settings-secret.yaml
+  # The metric store's disk (see data.yaml).
+  - data.yaml
 
 images:
   - name: kartal-gozu

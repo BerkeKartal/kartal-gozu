@@ -25,6 +25,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/changes"
+	"github.com/BerkeKartal/kartal-gozu/internal/collect"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/httpx"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
@@ -64,6 +65,9 @@ type Config struct {
 	Checks *uptime.Monitor
 	// Watches reads the metrics that operators chose to watch in pods.
 	Watches *appmetrics.Monitor
+	// Collect, when set, keeps every metric of chosen workloads in the
+	// metric store.
+	Collect *collect.Collector
 	// Login, when set, lets people sign in with a name and password, for a
 	// session of SessionTTL (12 hours when zero).
 	Login      Login
@@ -163,8 +167,12 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeTimeline(mux)
 	s.routeChecks(mux)
 	s.routeWatches(mux)
+	s.routeStore(mux)
 	if cfg.Watches != nil {
 		cfg.Watches.Attach(s.snapshotPods, s.ask)
+	}
+	if cfg.Collect != nil {
+		cfg.Collect.Attach(s.snapshotPods, s.ask)
 	}
 
 	// The web UI: its files below /_ui/, the page itself everywhere else.

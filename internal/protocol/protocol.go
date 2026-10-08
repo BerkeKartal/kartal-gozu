@@ -51,6 +51,9 @@ const (
 	CapabilityEdit = "edit"
 	// CapabilityScrape covers reading the metrics that pods expose.
 	CapabilityScrape = "scrape"
+	// CapabilityCollect covers reading all of a pod's metrics for the
+	// server's store (CommandCollect); agents older than it lack it.
+	CapabilityCollect = "collect"
 )
 
 // Resources is an amount of CPU (millicores), memory (bytes), pod slots and
@@ -406,7 +409,23 @@ const (
 	// Namespace or everywhere, by asking one running pod of each at its
 	// ports, and returns MetricsSources.
 	CommandFindMetrics = "find-metrics"
+	// CommandCollect reads every metric of each of Pods (in Namespace) at
+	// Port and Path for the server's store, and returns []PodMetrics.
+	CommandCollect = "collect"
 )
+
+// PodMetrics is a pod's metrics in the text format (help texts dropped),
+// or why they could not be read.
+type PodMetrics struct {
+	Pod  string `json:"pod"`
+	Text string `json:"text,omitempty"`
+	// Truncated says the pod exposed more samples than one round takes.
+	Truncated bool   `json:"truncated,omitempty"`
+	Error     string `json:"error,omitempty"`
+	// Alone says the pod's metrics did not fit next to the others' in one
+	// answer: ask for the pod by itself.
+	Alone bool `json:"alone,omitempty"`
+}
 
 // MetricsSources are the workloads found to expose metrics.
 type MetricsSources struct {
