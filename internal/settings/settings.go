@@ -32,10 +32,12 @@ type Email struct {
 
 // Settings is everything kept.
 type Settings struct {
-	Email   Email   `json:"email"`
-	Checks  []Check `json:"checks,omitempty"`
-	Watches []Watch `json:"watches,omitempty"`
-	Collect Collect `json:"collect"`
+	Email       Email        `json:"email"`
+	Checks      []Check      `json:"checks,omitempty"`
+	Watches     []Watch      `json:"watches,omitempty"`
+	Collect     Collect      `json:"collect"`
+	DataSources []DataSource `json:"dataSources,omitempty"`
+	Dashboards  []Dashboard  `json:"dashboards,omitempty"`
 }
 
 // maxRecipients keeps a mistake from mailing a whole address book.

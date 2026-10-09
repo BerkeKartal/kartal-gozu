@@ -42,6 +42,10 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 	// The allowed uses: links to the hosts of the cluster's ingresses, and
 	// the SVG namespace, which is a name and never fetched.
 	files["app.js"] = strings.Replace(files["app.js"], "(tls ? 'https://' : 'http://')", "", 1)
+	// Examples of a data source's address, in a help text and a placeholder.
+	for _, example := range []string{"http://prometheus-server.monitoring.svc:9090", "https://elastic.example.org:9200"} {
+		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
+	}
 	files["chart.js"] = strings.Replace(files["chart.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	files["plot.js"] = strings.Replace(files["plot.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	for name, body := range files {

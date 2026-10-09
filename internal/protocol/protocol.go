@@ -54,6 +54,10 @@ const (
 	// CapabilityCollect covers reading all of a pod's metrics for the
 	// server's store (CommandCollect); agents older than it lack it.
 	CapabilityCollect = "collect"
+	// CapabilityDataSource covers HTTP requests to the data sources the
+	// agent allows (KARTAL_DATASOURCE_URLS): Prometheus and Elasticsearch
+	// servers that only the cluster reaches.
+	CapabilityDataSource = "datasource"
 )
 
 // Resources is an amount of CPU (millicores), memory (bytes), pod slots and
@@ -409,10 +413,30 @@ const (
 	// Namespace or everywhere, by asking one running pod of each at its
 	// ports, and returns MetricsSources.
 	CommandFindMetrics = "find-metrics"
+	// CommandHTTP makes an HTTP request to a data source the agent allows,
+	// and returns HTTPResponse.
+	CommandHTTP = "http"
 	// CommandCollect reads every metric of each of Pods (in Namespace) at
 	// Port and Path for the server's store, and returns []PodMetrics.
 	CommandCollect = "collect"
 )
+
+// HTTPRequest is a request to a data source, made by an agent.
+type HTTPRequest struct {
+	Method string            `json:"method"` // GET or POST
+	URL    string            `json:"url"`
+	Header map[string]string `json:"header,omitempty"`
+	Body   []byte            `json:"body,omitempty"`
+	// Insecure skips verifying the server's certificate.
+	Insecure bool `json:"insecure,omitempty"`
+}
+
+// HTTPResponse is what a data source answered.
+type HTTPResponse struct {
+	Status      int    `json:"status"`
+	ContentType string `json:"contentType,omitempty"`
+	Body        []byte `json:"body,omitempty"`
+}
 
 // PodMetrics is a pod's metrics in the text format (help texts dropped),
 // or why they could not be read.
@@ -536,6 +560,8 @@ type Command struct {
 	Path    string   `json:"path,omitempty"`
 	Pods    []string `json:"pods,omitempty"`
 	Metrics []string `json:"metrics,omitempty"`
+	// HTTP is the request of CommandHTTP.
+	HTTP *HTTPRequest `json:"http,omitempty"`
 }
 
 type Result struct {

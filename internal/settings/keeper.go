@@ -139,5 +139,11 @@ func (s Settings) clone() Settings {
 		s.Watches[i] = w.clone()
 	}
 	s.Collect.Targets = slices.Clone(s.Collect.Targets)
+	s.DataSources = slices.Clone(s.DataSources)
+	s.Dashboards = slices.Clone(s.Dashboards)
+	for i, d := range s.Dashboards {
+		s.Dashboards[i].Variables = slices.Clone(d.Variables)
+		s.Dashboards[i].Panels = slices.Clone(d.Panels)
+	}
 	return s
 }

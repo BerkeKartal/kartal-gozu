@@ -84,6 +84,10 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	namespaces := config.List("KARTAL_NAMESPACES")
+	dataSources, err := agent.ParseDataSourceURLs(config.List("KARTAL_DATASOURCE_URLS"))
+	if err != nil {
+		return fmt.Errorf("KARTAL_DATASOURCE_URLS: %w", err)
+	}
 
 	kc, err := kubeClient()
 	if err != nil {
@@ -101,13 +105,14 @@ func run(log *slog.Logger) error {
 		Collector: &agent.Collector{Kube: kc, Namespaces: namespaces, IncludeSecrets: includeSecrets, VolumeStats: volumeStats,
 			TLSSecrets: tlsSecrets, MaxEvents: 200, Version: version},
 		Executor: &agent.Executor{
-			Kube:        kc,
-			AllowWrite:  allowWrite,
-			AllowExec:   allowExec,
-			AllowEdit:   allowEdit,
-			AllowScrape: podMetrics,
-			Namespaces:  namespaces,
-			MaxLogBytes: 1 << 20,
+			Kube:           kc,
+			AllowWrite:     allowWrite,
+			AllowExec:      allowExec,
+			AllowEdit:      allowEdit,
+			AllowScrape:    podMetrics,
+			DataSourceURLs: dataSources,
+			Namespaces:     namespaces,
+			MaxLogBytes:    1 << 20,
 		},
 		Interval: interval,
 		PollWait: pollWait,
@@ -127,7 +132,7 @@ func run(log *slog.Logger) error {
 	if len(namespaces) > 0 {
 		scope = fmt.Sprint(namespaces)
 	}
-	log.Info("kartal-agent started", "version", version, "server", serverURL, "scope", scope, "interval", interval, "allow_write", allowWrite, "allow_exec", allowExec, "allow_edit", allowEdit)
+	log.Info("kartal-agent started", "version", version, "server", serverURL, "scope", scope, "interval", interval, "allow_write", allowWrite, "allow_exec", allowExec, "allow_edit", allowEdit, "data_sources", len(dataSources))
 	a.Run(ctx)
 	log.Info("agent stopped")
 	return nil

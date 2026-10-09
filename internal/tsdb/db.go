@@ -842,3 +842,23 @@ func (db *DB) LabelNames(from, to int64, sel Selector) ([]string, error) {
 	sort.Strings(out)
 	return out, err
 }
+
+// SeriesLabels lists the series sel picks within [from, to], by labels.
+func (db *DB) SeriesLabels(from, to int64, sel Selector) ([]Labels, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	seen := map[string]bool{}
+	var out []Labels
+	err := db.eachSeries(from, to, sel, func(ls Labels, _ string, _ func() ([]Point, error)) error {
+		if k := ls.key(); !seen[k] {
+			if len(out) >= MaxSeries {
+				return ErrTooMuch
+			}
+			seen[k] = true
+			out = append(out, ls)
+		}
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out, err
+}

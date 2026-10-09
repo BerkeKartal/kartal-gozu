@@ -713,3 +713,35 @@ func (p *parser) call() (Expr, error) {
 	}
 	return &Call{Func: f, Args: args}, nil
 }
+
+// Inspect calls f with e and every expression within it, depth first.
+func Inspect(e Expr, f func(Expr)) {
+	if e == nil {
+		return
+	}
+	f(e)
+	switch x := e.(type) {
+	case *Paren:
+		Inspect(x.Expr, f)
+	case *Unary:
+		Inspect(x.Expr, f)
+	case *Binary:
+		Inspect(x.LHS, f)
+		Inspect(x.RHS, f)
+	case *Call:
+		for _, a := range x.Args {
+			Inspect(a, f)
+		}
+	case *Aggregate:
+		Inspect(x.Param, f)
+		Inspect(x.Expr, f)
+	case *MatrixSelector:
+		Inspect(x.VS, f)
+	}
+}
+
+// ResultType names what an expression gives, as Prometheus's API does:
+// scalar, vector, matrix or string.
+func ResultType(e Expr) string {
+	return [...]string{"scalar", "vector", "matrix", "string"}[e.Type()]
+}

@@ -227,3 +227,44 @@ export function plot({ series, start, step, count, height = 300, format = String
   box.append(frame, xAxis);
   return box;
 }
+
+// sparkline draws values small, without axes: a stat panel's trend. Its
+// colour is the text's unless one is given.
+export function sparkline(values, color, height = 36) {
+  const v = values.map(num);
+  const box = div('spark');
+  box.style.height = height + 'px';
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const x of v) {
+    if (x == null) continue;
+    if (x < lo) lo = x;
+    if (x > hi) hi = x;
+  }
+  if (!Number.isFinite(lo)) return box;
+  if (hi === lo) {
+    hi += 1;
+    lo -= 1;
+  }
+  const n = v.length;
+  const xs = i => (n > 1 ? (i / (n - 1)) * W : W / 2).toFixed(1);
+  const ys = x => (height - 2 - ((x - lo) / (hi - lo)) * (height - 4)).toFixed(1);
+  let line = '';
+  let area = '';
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) {
+      const path = run.map((i, k) => `${k ? 'L' : 'M'}${xs(i)},${ys(v[i])}`).join('');
+      line += path;
+      area += path + `L${xs(run[run.length - 1])},${height}L${xs(run[0])},${height}Z`;
+    }
+    run = [];
+  };
+  v.forEach((x, i) => (x == null ? flush() : run.push(i)));
+  flush();
+  const g = svg('svg', { viewBox: `0 0 ${W} ${height}`, preserveAspectRatio: 'none', class: 'plot-svg' });
+  g.append(svg('path', { d: area, fill: color || 'currentColor', 'fill-opacity': '0.15', stroke: 'none' }),
+    svg('path', { d: line, fill: 'none', stroke: color || 'currentColor', 'stroke-width': '1.5', 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' }));
+  box.append(g);
+  return box;
+}

@@ -4,7 +4,7 @@
 
 import { toYAML, diffLines } from './yaml.js';
 import { lineChart } from './chart.js';
-import { plot } from './plot.js';
+import { plot, sparkline } from './plot.js';
 
 const REFRESH_MS = 10000;
 const FOLLOW_MS = 3000;
@@ -14,15 +14,15 @@ const TOKEN_KEY = 'kartal.token';
 
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
-  'alerts', 'appmetrics', 'explore', 'uptime', 'changes', 'releases', 'audit', 'resources'];
+  'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'resources'];
 // Views that are not about one namespace.
-const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore']);
+const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards']);
 // Views that show every cluster at once.
-const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore']);
+const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards']);
 // Views of the server itself, which checks addresses on its own.
 const SERVER_VIEWS = new Set(['uptime']);
 // Views whose data the agent fetches live; they reload on demand only.
-const LIVE_VIEWS = new Set(['resources', 'helm', 'explore']);
+const LIVE_VIEWS = new Set(['resources', 'helm', 'explore', 'dashboards']);
 const WORKLOAD_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet']);
 const KIND_VIEW = {
   Pod: 'pods', Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets',
@@ -44,7 +44,7 @@ const VIEW_KIND = { deployments: 'Deployment', statefulsets: 'StatefulSet', daem
 // cluster's (or the selected namespace's) counts: [total, needs attention],
 // where what needs attention may add up several counts.
 const NAV = [
-  { items: ['overview', 'appmetrics', 'explore'] },
+  { items: ['overview', 'appmetrics', 'explore', 'dashboards'] },
   { group: 'workloads', items: ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'] },
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
   { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
@@ -264,7 +264,7 @@ const STRINGS = {
     storeDeleteHelp: 'Every sample between these two moments is deleted, of every cluster. Whole days go at once; the days at the ends are rewritten.',
     storeDeleteConfirm: 'Delete every stored sample from {0} to {1}? This cannot be undone.', storeDeleted: 'Deleted; {0} freed.',
     storeThisDay: 'This day', storeBadRange: 'Choose a start before the end.',
-    explore: 'Explore', exStoreOff: 'The metric store is off on this server; give it a directory (KARTAL_DATA_DIR).',
+    explore: 'Explore', exStoreOff: 'There is nothing to query yet: the metric store is off on this server (KARTAL_DATA_DIR), and no data source is set up.',
     exHelp: 'Shift+Enter runs the queries. Drag across the chart to zoom in. Click a series in the legend to show only it, Ctrl+click to hide it. $__rate_interval is a window that always holds a few samples.',
     'unitShort.m': 'm', 'unitShort.h': 'h', 'unitShort.d': 'd', exApply: 'Apply', exStep: 'Step', exAuto: 'auto',
     exRefresh: 'Run again every', exOff: 'off', exCustom: 'Custom', exZoomOut: 'Zoom out', exBack: 'Back',
@@ -282,6 +282,57 @@ const STRINGS = {
     exNoData: 'Nothing in this time range. The store holds the metrics of the workloads collected with Collect always (Metrics page).',
     exAllHidden: 'Every series is hidden; click one in the legend.', exMean: 'Mean', exMax: 'Max', exMin: 'Min', exLast: 'Last',
     exLegendHelp: 'Click: only this series. Ctrl+click: hide or show it.', exMore: '{0} more series are not listed',
+    exStore: 'Kartal Gözü store', exSource: 'Source', exSourceGone: 'source not found', exLogs: 'Logs', exIndex: 'Index',
+    exLucene: 'Query (Lucene)', exLogLines: 'Lines', exStat: 'Statistic', exField: 'Field', exTop: 'Top',
+    'es.count': 'count', 'es.avg': 'average', 'es.sum': 'sum', 'es.min': 'minimum', 'es.max': 'maximum', 'es.cardinality': 'distinct values',
+    exMoreThan: 'more than {0}', exLogsOf: 'Logs of {0} · {1}', exLogsCount: '{0} shown of {1}', exNoLogs: 'No document in this range.',
+    dsButton: 'Data sources', dsTitle: 'Data sources',
+    dsHint: 'Prometheus and Elasticsearch servers that Explore queries next to the store. The server asks them itself, or a cluster’s agent does, when only the cluster reaches them; that agent must list the address in KARTAL_DATASOURCE_URLS.',
+    dsNone: 'No data source yet.', dsAdd: 'Add a source', dsNew: 'New data source', dsEdit: 'Edit data source', dsName: 'Name', dsType: 'Type',
+    dsURL: 'Address', dsURLHelp: 'The base the API is under, such as http://prometheus-server.monitoring.svc:9090 or https://elastic.example.org:9200.',
+    dsVia: 'Asked by', dsViaServer: 'the Kartal Gözü server', dsViaAgent: 'the agent of {0}', dsViaHelp: 'An agent reaches what only its cluster does.',
+    dsCluster: 'Data of cluster', dsClusterNone: 'none: only people who see everything', dsClusterHelp: 'Tied to a cluster, people who see some of its namespaces see their data only.',
+    dsNsLabel: 'Namespace label or field', dsNsHelp: 'What tells the namespaces apart: namespace in Prometheus, kubernetes.namespace in filebeat’s documents.',
+    dsAuth: 'Authentication', 'dsAuth.none': 'none', 'dsAuth.basic': 'user name and password', 'dsAuth.bearer': 'bearer token', 'dsAuth.apikey': 'API key (Elasticsearch)',
+    dsUser: 'User name', dsPassword: 'Password', dsToken: 'Token or key', dsKeep: 'saved; type to change it', dsInsecure: 'Do not verify its certificate',
+    dsInterval: 'Scrape interval (seconds)', dsIntervalHelp: 'How often it reads its targets; $__rate_interval goes by it. 30 when empty.',
+    dsIndex: 'Index pattern', dsTimeField: 'Time field', dsMessageField: 'Message field',
+    dsTest: 'Try', dsTesting: 'Asking…', dsTestOK: 'It answers: {0}', dsSaved: 'Data source saved.', dsRemove: 'Remove',
+    dsRemoveTitle: 'Remove data source', dsRemoveConfirm: '{0} will no longer be queried. Remove it?', dsRemoved: 'Data source removed.',
+    dashboards: 'Dashboards', exAddToDash: 'Add to dashboard', exApplyPanel: 'Apply to the panel',
+    exEditingPanel: 'Editing the queries of the panel “{0}” of the dashboard {1}. Variables have the values picked there.',
+    dbHint: 'Saved pages of charts, numbers, tables and logs of the store and the data sources. Each panel shows what the person looking may see.',
+    dbNew: 'New dashboard', dbImport: 'Import', dbCreate: 'Create', dbTitle: 'Title', dbDescription: 'Description', dbPanels: 'Panels',
+    dbOwner: 'Made by', dbUpdated: 'Changed', dbNone: 'No dashboard yet.',
+    dbNoneMaker: 'No dashboard yet. Make one, import one (Grafana’s JSON too), or add a chart from Explore.',
+    dbAddPanel: 'Panel', dbSettings: 'Settings', dbExport: 'Export', dbCopy: 'Save a copy', dbCopyOf: '{0} (copy)', dbCopied: 'Copy saved.',
+    dbEditHelp: 'Editing: drag a panel by its title to move it, by its lower right corner to resize it.', dbUnsaved: 'Not saved yet.',
+    dbSaved: 'Dashboard saved.', dbConflictTitle: 'Changed meanwhile', dbConflictCopy: 'Save your version as a new dashboard?', dbSaveCopy: 'Save as new',
+    dbDiscardTitle: 'Discard changes', dbDiscardConfirm: 'Your changes to this dashboard will be lost.', dbDiscard: 'Discard',
+    dbRemove: 'Remove dashboard', dbRemoveTitle: 'Remove dashboard', dbRemoveConfirm: 'Remove the dashboard {0}, for everyone?', dbRemoved: 'Dashboard removed.',
+    dbRemovePanel: 'Remove panel', dbRemovePanelConfirm: 'Remove the panel {0}?', dbTooMany: 'A dashboard has at most 60 panels.',
+    dbEmpty: 'This dashboard has no panels yet.', dbEmptyEdit: 'Add a panel here, or add a chart from Explore.',
+    dbAll: 'All', dbSearchValues: 'Search values', dbNoValues: 'No values in this range.',
+    dbExplore: 'Explore', dbView: 'View large', dbDuplicate: 'Duplicate', dbResize: 'Drag to resize',
+    dbNoQueries: 'No query yet.', dbNoData: 'No data', dbLogsOnly: 'A logs panel shows Elasticsearch queries in logs mode.',
+    dbUntitled: 'untitled', dbPanelGone: 'That panel is no longer on the dashboard.',
+    dbEditPanel: 'Edit panel', dbNewPanel: 'New panel', dbPanelTitle: 'Title', dbType: 'Type',
+    'dbType.graph': 'Graph', 'dbType.stat': 'Number', 'dbType.table': 'Table', 'dbType.logs': 'Logs', 'dbType.text': 'Text',
+    dbWidth: 'Width (of 12)', dbHeight: 'Height (rows)', dbReduce: 'Value',
+    'dbReduce.last': 'last', 'dbReduce.mean': 'mean', 'dbReduce.max': 'maximum', 'dbReduce.min': 'minimum', 'dbReduce.sum': 'sum',
+    dbWarn: 'Warning at', dbCrit: 'Critical at', dbText: 'Text',
+    dbTextHelp: 'Lines starting with # are headings, with - list items; **bold**, `code` and [links](address) work.',
+    dbQueries: 'Queries', dbInExplore: 'Edit the queries in Explore', dbESHint: 'its form is in Explore',
+    dbRange: 'Range', dbRefresh: 'Refresh', dbVariables: 'Variables', dbAddVar: 'Add variable',
+    dbVarHelp: 'Use them in queries as $name. Their values are a label’s, of the store’s or a Prometheus’s series; the series may use the variables before.',
+    dbVarName: 'name', dbVarTitle: 'shown as', dbVarLabel: 'label', dbVarMatch: 'series, such as up{namespace="$ns"}', dbVarMulti: 'several', dbVarAll: 'All',
+    dbVarBad: 'Variable names are letters, digits and _, each once, not starting with __; each needs a label name.', dbNeedTitle: 'Give the dashboard a title.',
+    dbImportHelp: 'Paste a dashboard exported here, or a Grafana dashboard’s JSON: its PromQL panels, their sizes, units and thresholds, and its label_values variables are taken over.',
+    dbImportPaste: 'Dashboard JSON', dbImportBad: 'This is not a dashboard: {0}', dbImportBig: 'The file is larger than 4 MiB.',
+    dbImportSource: 'Grafana’s queries read', dbImportSourceHelp: 'The store has what Kartal Gözü collects; a Prometheus data source, all that Prometheus has.',
+    dbImported: 'Dashboard imported.', dbImportedSkipped: 'Imported; {0} left out: {1}',
+    dbAddTitle: 'Add to a dashboard', dbWhich: 'Dashboard', dbNewOne: 'a new dashboard', dbNewTitle: 'Title of the new dashboard', dbAdded: 'Added to {0}.',
+    dbHalf: 'half the width', dbFull: 'the whole width', dbThird: 'a third of it',
   },
   tr: {
     overview: 'Genel bakış', workloads: 'İş yükleri', pods: 'Podlar', services: 'Servisler',
@@ -482,7 +533,7 @@ const STRINGS = {
     storeDeleteHelp: 'Bu iki an arasındaki tüm örnekler, tüm cluster’larınki silinir. Tam günler doğrudan gider; uçlardaki günler yeniden yazılır.',
     storeDeleteConfirm: '{0} – {1} arasındaki tüm saklanan örnekler silinsin mi? Geri alınamaz.', storeDeleted: 'Silindi; {0} boşaldı.',
     storeThisDay: 'Bu gün', storeBadRange: 'Başlangıcı bitişten önce seçin.',
-    explore: 'Keşfet', exStoreOff: 'Bu sunucuda metrik deposu kapalı; bir dizin verin (KARTAL_DATA_DIR).',
+    explore: 'Keşfet', exStoreOff: 'Henüz sorgulanacak bir şey yok: bu sunucuda metrik deposu kapalı (KARTAL_DATA_DIR) ve veri kaynağı tanımlı değil.',
     exHelp: 'Shift+Enter sorguları çalıştırır. Yakınlaştırmak için grafikte sürükleyin. Lejantta bir seriye tıklamak yalnızca onu gösterir, Ctrl+tıklama gizler. $__rate_interval her zaman birkaç örnek içeren bir penceredir.',
     'unitShort.m': 'dk', 'unitShort.h': 'sa', 'unitShort.d': 'g', exApply: 'Uygula', exStep: 'Adım', exAuto: 'otomatik',
     exRefresh: 'Şu aralıkla yeniden çalıştır', exOff: 'kapalı', exCustom: 'Özel', exZoomOut: 'Uzaklaş', exBack: 'Geri',
@@ -500,6 +551,57 @@ const STRINGS = {
     exNoData: 'Bu zaman aralığında veri yok. Depoda yalnızca Sürekli topla ile toplanan iş yüklerinin metrikleri bulunur (Metrikler sayfası).',
     exAllHidden: 'Tüm seriler gizli; lejanttan birine tıklayın.', exMean: 'Ort.', exMax: 'Maks.', exMin: 'Min.', exLast: 'Son',
     exLegendHelp: 'Tıklama: yalnızca bu seri. Ctrl+tıklama: gizle ya da göster.', exMore: '{0} seri daha listelenmedi',
+    exStore: 'Kartal Gözü deposu', exSource: 'Kaynak', exSourceGone: 'kaynak bulunamadı', exLogs: 'Loglar', exIndex: 'İndeks',
+    exLucene: 'Sorgu (Lucene)', exLogLines: 'Satır', exStat: 'İstatistik', exField: 'Alan', exTop: 'İlk',
+    'es.count': 'sayı', 'es.avg': 'ortalama', 'es.sum': 'toplam', 'es.min': 'en az', 'es.max': 'en çok', 'es.cardinality': 'farklı değer sayısı',
+    exMoreThan: '{0}’den fazla', exLogsOf: '{0} sorgusunun logları · {1}', exLogsCount: '{1} kayıttan {0} tanesi gösteriliyor', exNoLogs: 'Bu aralıkta belge yok.',
+    dsButton: 'Veri kaynakları', dsTitle: 'Veri kaynakları',
+    dsHint: 'Explore’un depoyla birlikte sorguladığı Prometheus ve Elasticsearch sunucuları. Onlara sunucunun kendisi sorar ya da yalnızca bir cluster ulaşabiliyorsa o cluster’ın agent’ı; o agent adresi KARTAL_DATASOURCE_URLS’te listelemelidir.',
+    dsNone: 'Henüz veri kaynağı yok.', dsAdd: 'Kaynak ekle', dsNew: 'Yeni veri kaynağı', dsEdit: 'Veri kaynağını düzenle', dsName: 'Ad', dsType: 'Tür',
+    dsURL: 'Adres', dsURLHelp: 'API’nin altında bulunduğu adres, örneğin http://prometheus-server.monitoring.svc:9090 ya da https://elastic.example.org:9200.',
+    dsVia: 'Soran', dsViaServer: 'Kartal Gözü sunucusu', dsViaAgent: '{0} agent’ı', dsViaHelp: 'Agent, yalnızca kendi cluster’ının ulaştığı yere ulaşır.',
+    dsCluster: 'Verisi şu cluster’ın', dsClusterNone: 'hiçbiri: yalnızca her şeyi görenler', dsClusterHelp: 'Bir cluster’a bağlanırsa, onun bazı namespace’lerini görenler yalnızca o namespace’lerin verisini görür.',
+    dsNsLabel: 'Namespace etiketi ya da alanı', dsNsHelp: 'Namespace’leri ayıran şey: Prometheus’ta namespace, filebeat belgelerinde kubernetes.namespace.',
+    dsAuth: 'Kimlik doğrulama', 'dsAuth.none': 'yok', 'dsAuth.basic': 'kullanıcı adı ve şifre', 'dsAuth.bearer': 'bearer token', 'dsAuth.apikey': 'API anahtarı (Elasticsearch)',
+    dsUser: 'Kullanıcı adı', dsPassword: 'Şifre', dsToken: 'Token ya da anahtar', dsKeep: 'kayıtlı; değiştirmek için yazın', dsInsecure: 'Sertifikasını doğrulama',
+    dsInterval: 'Toplama aralığı (saniye)', dsIntervalHelp: 'Hedeflerini ne sıklıkla okuduğu; $__rate_interval buna göre hesaplanır. Boşsa 30.',
+    dsIndex: 'İndeks deseni', dsTimeField: 'Zaman alanı', dsMessageField: 'Mesaj alanı',
+    dsTest: 'Dene', dsTesting: 'Soruluyor…', dsTestOK: 'Yanıt veriyor: {0}', dsSaved: 'Veri kaynağı kaydedildi.', dsRemove: 'Kaldır',
+    dsRemoveTitle: 'Veri kaynağını kaldır', dsRemoveConfirm: '{0} artık sorgulanmayacak. Kaldırılsın mı?', dsRemoved: 'Veri kaynağı kaldırıldı.',
+    dashboards: 'Panolar', exAddToDash: 'Panoya ekle', exApplyPanel: 'Panele uygula',
+    exEditingPanel: '{1} panosundaki “{0}” panelinin sorgularını düzenliyorsunuz. Değişkenler orada seçilen değerleri alır.',
+    dbHint: 'Deponun ve veri kaynaklarının grafik, sayı, tablo ve loglarından oluşan kayıtlı sayfalar. Her panel, bakan kişinin görebildiğini gösterir.',
+    dbNew: 'Yeni pano', dbImport: 'İçe aktar', dbCreate: 'Oluştur', dbTitle: 'Başlık', dbDescription: 'Açıklama', dbPanels: 'Panel',
+    dbOwner: 'Oluşturan', dbUpdated: 'Değişiklik', dbNone: 'Henüz pano yok.',
+    dbNoneMaker: 'Henüz pano yok. Yeni bir tane oluşturun, içe aktarın (Grafana JSON’u da olur) ya da Keşfet’ten bir grafik ekleyin.',
+    dbAddPanel: 'Panel', dbSettings: 'Ayarlar', dbExport: 'Dışa aktar', dbCopy: 'Kopyasını kaydet', dbCopyOf: '{0} (kopya)', dbCopied: 'Kopya kaydedildi.',
+    dbEditHelp: 'Düzenleme modu: paneli başlığından sürükleyerek taşıyın, sağ alt köşesinden sürükleyerek boyutlandırın.', dbUnsaved: 'Henüz kaydedilmedi.',
+    dbSaved: 'Pano kaydedildi.', dbConflictTitle: 'Bu arada değişti', dbConflictCopy: 'Sizin sürümünüz yeni bir pano olarak kaydedilsin mi?', dbSaveCopy: 'Yeni olarak kaydet',
+    dbDiscardTitle: 'Değişikliklerden vazgeç', dbDiscardConfirm: 'Bu panoda yaptığınız değişiklikler kaybolacak.', dbDiscard: 'Vazgeç',
+    dbRemove: 'Panoyu sil', dbRemoveTitle: 'Panoyu sil', dbRemoveConfirm: '{0} panosu herkes için silinsin mi?', dbRemoved: 'Pano silindi.',
+    dbRemovePanel: 'Paneli kaldır', dbRemovePanelConfirm: '{0} paneli kaldırılsın mı?', dbTooMany: 'Bir panoda en fazla 60 panel olabilir.',
+    dbEmpty: 'Bu panoda henüz panel yok.', dbEmptyEdit: 'Buradan panel ekleyin ya da Keşfet’ten bir grafik ekleyin.',
+    dbAll: 'Tümü', dbSearchValues: 'Değer ara', dbNoValues: 'Bu aralıkta değer yok.',
+    dbExplore: 'Keşfet', dbView: 'Büyüt', dbDuplicate: 'Çoğalt', dbResize: 'Boyutlandırmak için sürükleyin',
+    dbNoQueries: 'Henüz sorgu yok.', dbNoData: 'Veri yok', dbLogsOnly: 'Log paneli, log modundaki Elasticsearch sorgularını gösterir.',
+    dbUntitled: 'başlıksız', dbPanelGone: 'O panel artık panoda değil.',
+    dbEditPanel: 'Paneli düzenle', dbNewPanel: 'Yeni panel', dbPanelTitle: 'Başlık', dbType: 'Tür',
+    'dbType.graph': 'Grafik', 'dbType.stat': 'Sayı', 'dbType.table': 'Tablo', 'dbType.logs': 'Loglar', 'dbType.text': 'Metin',
+    dbWidth: 'Genişlik (12 üzerinden)', dbHeight: 'Yükseklik (satır)', dbReduce: 'Değer',
+    'dbReduce.last': 'son', 'dbReduce.mean': 'ortalama', 'dbReduce.max': 'en büyük', 'dbReduce.min': 'en küçük', 'dbReduce.sum': 'toplam',
+    dbWarn: 'Uyarı eşiği', dbCrit: 'Kritik eşik', dbText: 'Metin',
+    dbTextHelp: '# ile başlayan satırlar başlık, - ile başlayanlar liste olur; **kalın**, `kod` ve [bağlantı](adres) kullanılabilir.',
+    dbQueries: 'Sorgular', dbInExplore: 'Sorguları Keşfet’te düzenle', dbESHint: 'formu Keşfet’te',
+    dbRange: 'Aralık', dbRefresh: 'Yenileme', dbVariables: 'Değişkenler', dbAddVar: 'Değişken ekle',
+    dbVarHelp: 'Sorgularda $ad olarak kullanın. Değerleri, deponun ya da bir Prometheus’un serilerindeki bir etiketten gelir; seri seçicide önceki değişkenler kullanılabilir.',
+    dbVarName: 'ad', dbVarTitle: 'görünen ad', dbVarLabel: 'etiket', dbVarMatch: 'seri, ör. up{namespace="$ns"}', dbVarMulti: 'çoklu', dbVarAll: 'Tümü',
+    dbVarBad: 'Değişken adları harf, rakam ve _ olur, her biri bir kez ve __ ile başlamadan; her birine bir etiket adı gerekir.', dbNeedTitle: 'Panoya bir başlık verin.',
+    dbImportHelp: 'Burada dışa aktarılmış bir panoyu ya da bir Grafana panosunun JSON’unu yapıştırın: PromQL panelleri, boyutları, birimleri, eşikleri ve label_values değişkenleri aktarılır.',
+    dbImportPaste: 'Pano JSON’u', dbImportBad: 'Bu bir pano değil: {0}', dbImportBig: 'Dosya 4 MiB’tan büyük.',
+    dbImportSource: 'Grafana sorguları nereyi okusun', dbImportSourceHelp: 'Depoda Kartal Gözü’nün topladıkları var; bir Prometheus veri kaynağında o Prometheus’taki her şey.',
+    dbImported: 'Pano içe aktarıldı.', dbImportedSkipped: 'İçe aktarıldı; {0} öğe alınmadı: {1}',
+    dbAddTitle: 'Panoya ekle', dbWhich: 'Pano', dbNewOne: 'yeni bir pano', dbNewTitle: 'Yeni panonun başlığı', dbAdded: '{0} panosuna eklendi.',
+    dbHalf: 'yarım genişlik', dbFull: 'tam genişlik', dbThird: 'üçte bir',
   },
 };
 
@@ -708,7 +810,7 @@ const state = {
   rest: [], // extra route segments: group/version/resource in the resource browser
   obj: '', // the object open in the detail panel, see objParam
   tab: '',
-  x: '', // what Explore shows, see exploreParam
+  x: '', // what Explore or a dashboard shows, see exploreParam and dashParam
   namespaces: null,
   nsError: '',
   nsFilter: '',
@@ -845,8 +947,8 @@ function routeHash({ cluster = state.cluster, view = state.view, ns = state.ns, 
   if (problems) params.set('p', '1');
   if (obj) params.set('o', obj);
   if (obj && tab) params.set('t', tab);
-  // What Explore shows, to share or reload it.
-  if (x && view === 'explore') params.set('x', x);
+  // What Explore or a dashboard shows, to share or reload it.
+  if (x && (view === 'explore' || view === 'dashboards')) params.set('x', x);
   const qs = params.toString();
   return '#/c/' + [cluster, view, ...rest].map(enc).join('/') + (qs ? '?' + qs : '');
 }
@@ -879,7 +981,7 @@ function onRoute() {
     state.obj = r.obj;
     state.tab = r.tab;
     renderDetail();
-    if (r.view === 'explore' && r.x !== state.x) {
+    if ((r.view === 'explore' || r.view === 'dashboards') && r.x !== state.x) {
       state.x = r.x;
       renderContent();
     }
@@ -1138,6 +1240,15 @@ async function loadView(signal) {
       await exploreStore();
       if (ex.el && state.x === ex.appliedX) runExplore();
       return { explore: true };
+    case 'dashboards': {
+      // The data sources' types and the store's interval, for the panels.
+      await exploreStore();
+      const id = state.rest[0];
+      if (!id) return { list: await api('dashboards', { signal }) };
+      // Changes not saved yet are kept, whatever the server has.
+      if (db.work && db.id === id && db.dirty) return { dash: db.dash };
+      return { dash: await api('dashboards/' + enc(id), { signal }) };
+    }
     default: {
       const kind = VIEW_KIND[state.view];
       if (kind) return { items: ofKind(await api(c + '/workloads' + nsq, { signal }), kind) };
@@ -1660,7 +1771,7 @@ function renderHead() {
   if (!els.head) return;
   const v = state.view;
   const table = TABLES[v];
-  els.filter = v === 'overview' ? null : h('input', {
+  els.filter = v === 'overview' || (v === 'dashboards' && state.rest[0]) ? null : h('input', {
     type: 'text', class: 'filter', value: state.q, placeholder: t('filterRows'), 'aria-label': t('filterRows'),
     oninput: e => {
       state.q = e.target.value;
@@ -1728,6 +1839,7 @@ function renderContent() {
     case 'uptime': body = renderUptime(state.data.checks); break;
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
+    case 'dashboards': body = renderDashboards(state.data); break;
     case 'certificates':
       body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays))];
       break;
@@ -3298,12 +3410,30 @@ const EX_WORDS = ['by', 'without', 'on', 'ignoring', 'group_left', 'group_right'
 const ex = {
   el: null, queries: [], range: '1h', from: 0, to: 0, step: 0, unit: 'auto', mode: 'lines', tab: 'graph',
   hidden: new Set(), auto: 0, timer: 0, interval: 30, seq: 0, ctl: null, zooms: [], last: null, running: false,
-  appliedX: null, cache: new Map(),
+  appliedX: null, cache: new Map(), sources: [],
 };
 let exQueryID = 0;
 
-function newQuery(expr = '', legend = '', hidden = false) {
-  return { id: ++exQueryID, expr, legend, hidden, builder: false, b: null, res: null, error: '' };
+// A query reads the metric store (src ''), or a data source: a Prometheus
+// in PromQL as the store, an Elasticsearch through es.
+function newQuery(expr = '', legend = '', hidden = false, src = '', es = null) {
+  return { id: ++exQueryID, expr, legend, hidden, src, es, builder: false, b: null, res: null, logs: null, error: '' };
+}
+
+// sourceOf is a query's data source; null for the metric store.
+function sourceOf(q) {
+  return q.src ? ex.sources.find(s => s.id === q.src) || { id: q.src, name: q.src, type: 'missing' } : null;
+}
+function isES(q) {
+  const s = sourceOf(q);
+  return !!s && s.type === 'elasticsearch';
+}
+// apiBase is where a query's metric names and labels come from.
+function apiBase(q) {
+  return q && q.src ? 'datasources/' + enc(q.src) : 'store';
+}
+function esDefaults(src) {
+  return { mode: 'metrics', index: (src && src.index) || '', query: '', metric: 'count', field: '', groupBy: '', size: 10, lines: 100 };
 }
 
 function rangeMs(r) {
@@ -3325,8 +3455,12 @@ function durText(ms) {
 
 // exploreParam is what the address keeps of the page, to share or reload.
 function exploreParam() {
-  const x = { r: ex.range || [ex.from, ex.to], q: ex.queries.map(q => (q.legend || q.hidden ? [q.expr, q.legend, q.hidden ? 1 : 0] : [q.expr])) };
+  const x = {
+    r: ex.range || [ex.from, ex.to],
+    q: ex.queries.map(queryEntry),
+  };
   if (ex.step) x.s = ex.step;
+  if (ex.dash) x.d = ex.dash;
   if (ex.unit !== 'auto') x.u = ex.unit;
   if (ex.mode !== 'lines') x.m = ex.mode;
   return JSON.stringify(x);
@@ -3345,7 +3479,11 @@ function applyExploreParam(raw) {
   ex.unit = EX_UNITS.includes(x.u) ? x.u : 'auto';
   ex.mode = ['lines', 'area', 'stacked'].includes(x.m) ? x.m : 'lines';
   const qs = Array.isArray(x.q) ? x.q.filter(Array.isArray).slice(0, 10) : [];
-  ex.queries = qs.length ? qs.map(([e, l, hd]) => newQuery(String(e || ''), String(l || ''), !!hd)) : [newQuery()];
+  ex.queries = qs.length ? qs.map(entryQuery) : [newQuery()];
+  // A dashboard's panel whose queries are edited here.
+  const d = x.d;
+  ex.dash = d && typeof d === 'object' && typeof d.id === 'string' && typeof d.p === 'string'
+    ? { id: d.id, p: d.p, t: String(d.t || ''), pt: String(d.pt || ''), v: d.v && typeof d.v === 'object' ? d.v : {} } : null;
   ex.hidden.clear();
   ex.zooms = [];
 }
@@ -3416,23 +3554,38 @@ function stepFor(from, to) {
   // A step chosen by hand grows if the range would hold more steps than
   // the server gives (11 000).
   if (ex.step) return Math.max(ex.step, Math.ceil((to - from) / 10000 / 1000) * 1000);
-  const want = Math.max(ex.interval * 1000, (to - from) / 500);
+  return autoStep(from, to, ex.interval);
+}
+// autoStep is a round step that splits a range into about points steps,
+// none shorter than how often the data is read.
+function autoStep(from, to, interval, points = 500) {
+  const want = Math.max(interval * 1000, (to - from) / points);
   return NICE_STEPS.find(s => s >= want) || Math.ceil(want / 86400000) * 86400000;
 }
 // substitute fills in Grafana's variables: $__interval is the step,
 // $__rate_interval a window that always holds a few samples, $__range the
-// whole range.
-function substitute(expr, step, from, to) {
-  const rate = Math.max(4 * ex.interval * 1000, step + ex.interval * 1000);
-  return expr.replace(/\$__rate_interval\b/g, durText(rate)).replace(/\$__interval\b/g, durText(step)).replace(/\$__range\b/g, durText(to - from));
+// whole range; _ms and _s are them as numbers.
+function substitute(expr, step, from, to, interval = ex.interval) {
+  const rate = Math.max(4 * interval * 1000, step + interval * 1000);
+  // ${__range_s} is $__range_s.
+  return expr.replace(/\$\{(__[a-z_]+)\}/g, '$$$1').replace(/\$__rate_interval\b/g, durText(rate))
+    .replace(/\$__interval_ms\b/g, String(step)).replace(/\$__interval\b/g, durText(step))
+    .replace(/\$__range_ms\b/g, String(Math.round(to - from))).replace(/\$__range_s\b/g, String(Math.round((to - from) / 1000)))
+    .replace(/\$__range\b/g, durText(to - from));
 }
 
 function renderExplore() {
-  if (state.storeOn === false) return emptyState(t('exStoreOff'));
+  if (exploreOff()) {
+    // An admin can add a source even without the store.
+    return panel(null, h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' }, t('exStoreOff'))),
+      canEverywhere('admin') ? h('div', { class: 'actions' }, button(t('dsButton'), () => dataSourcesDialog(), 'primary')) : null));
+  }
   if (!ex.el) buildExplore();
   if (state.x !== ex.appliedX) {
     if (state.x || !ex.queries.length) applyExploreParam(state.x);
+    else ex.dash = null;
     ex.appliedX = state.x;
+    drawExploreBanner();
     drawExploreToolbar();
     drawQueries();
     runExplore();
@@ -3445,22 +3598,27 @@ function buildExplore() {
   ex.toolbar = h('div', { class: 'ex-toolbar' });
   ex.queriesEl = h('div', { class: 'ex-queries' });
   ex.resultsEl = h('div', { class: 'ex-results' });
-  ex.el = h('div', { class: 'explore' }, h('section', { class: 'panel' }, ex.toolbar, ex.queriesEl,
+  ex.bannerEl = h('div');
+  ex.el = h('div', { class: 'explore' }, ex.bannerEl, h('section', { class: 'panel' }, ex.toolbar, ex.queriesEl,
     h('div', { class: 'muted small-text ex-help' }, t('exHelp'))), ex.resultsEl);
 }
 
-// exploreStore learns how often the store reads, for steps and windows.
+// exploreStore learns how often the store reads, for steps and windows,
+// and which data sources the user may query.
 async function exploreStore() {
-  try {
-    const st = await api('store');
+  const [st, sources] = await Promise.allSettled([api('store'), api('datasources')]);
+  if (st.status === 'fulfilled') {
     state.storeOn = true;
-    if (st.interval > 0) ex.interval = st.interval;
-  } catch (e) {
-    if (e.status === 404) {
-      state.storeOn = false;
-      if (state.view === 'explore') renderContent();
-    }
+    if (st.value.interval > 0) ex.interval = st.value.interval;
+  } else if (st.reason.status === 404) {
+    state.storeOn = false;
   }
+  if (sources.status === 'fulfilled') ex.sources = sources.value;
+}
+
+// exploreOff tells that there is nothing to query: no store, no source.
+function exploreOff() {
+  return state.storeOn === false && !ex.sources.length;
 }
 
 function setRange(r) {
@@ -3531,14 +3689,120 @@ function drawQueries() {
       drawQueries();
       const last = ex.queries[ex.queries.length - 1];
       if (last.ta) last.ta.focus();
-    }), button(t('exBrowse'), () => metricBrowser())));
+    }), button(t('exBrowse'), () => metricBrowser()),
+    canEverywhere('admin') ? button(t('dsButton'), () => dataSourcesDialog()) : null));
 }
 
 function queryColor(i) {
   return PALETTE[i % PALETTE.length];
 }
 
+// sourcePicker chooses where a query reads: the metric store or a data
+// source. Another source starts the query over.
+function sourcePicker(q) {
+  if (!ex.sources.length) return null;
+  const opts = [];
+  if (state.storeOn !== false) opts.push(h('option', { value: '', selected: !q.src }, t('exStore')));
+  for (const s of ex.sources) {
+    // The type, unless the name says it.
+    const kind = s.type === 'elasticsearch' ? 'Elasticsearch' : 'Prometheus';
+    opts.push(h('option', { value: s.id, selected: s.id === q.src }, s.name.toLowerCase().includes(kind.toLowerCase()) ? s.name : s.name + ' · ' + kind));
+  }
+  if (q.src && !ex.sources.some(s => s.id === q.src)) opts.push(h('option', { value: q.src, selected: true }, t('exSourceGone')));
+  return h('select', {
+    class: 'ex-source', 'aria-label': t('exSource'), title: t('exSource'),
+    onchange: e => {
+      q.src = e.target.value;
+      q.es = isES(q) ? esDefaults(sourceOf(q)) : null;
+      Object.assign(q, { res: null, logs: null, error: '', b: null, builder: false });
+      drawQueries();
+      runExplore();
+    },
+  }, opts);
+}
+
+const ES_STATS = ['count', 'avg', 'sum', 'min', 'max', 'cardinality', 'p50', 'p75', 'p90', 'p95', 'p99'];
+const ES_NUMERIC = new Set(['long', 'integer', 'short', 'byte', 'double', 'float', 'half_float', 'scaled_float', 'unsigned_long']);
+
+// esEditor sets up an Elasticsearch query: documents matching a Lucene
+// query, counted or measured by a field per step, for each of the most
+// common values of another, or the newest of them as logs.
+function esEditor(q) {
+  const es = q.es;
+  const src = sourceOf(q);
+  const field = (label, input, cls) => h('label', { class: cls }, h('span', null, label), input);
+  const onEnter = e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.target.dispatchEvent(new Event('change'));
+      runExplore();
+    }
+  };
+  const text = (value, set, attrs) => h('input', Object.assign({
+    type: 'text', class: 'mono', value, spellcheck: 'false', autocomplete: 'off', onkeydown: onEnter,
+    onchange: e => { set(e.target.value.trim()); },
+  }, attrs));
+  const pick = (value, options, set) => h('select', { onchange: e => { set(e.target.value); runExplore(); } },
+    options.map(([v, label]) => h('option', { value: String(v), selected: String(v) === String(value) }, label)));
+  const numericID = 'ex-num-' + q.id;
+  const termsID = 'ex-terms-' + q.id;
+  const lists = h('span');
+  cached(apiBase(q) + '/fields?index=' + enc(es.index || src.index || '')).then(fields => {
+    fill(lists,
+      h('datalist', { id: numericID }, fields.filter(f => ES_NUMERIC.has(f.type)).map(f => h('option', { value: f.name }))),
+      h('datalist', { id: termsID }, fields.filter(f => f.aggregatable && f.type !== 'date').map(f => h('option', { value: f.name }))));
+  }).catch(() => {});
+  return h('div', { class: 'ex-es' },
+    h('div', { class: 'chips ex-es-mode' }, [['metrics', t('exGraph')], ['logs', t('exLogs')]].map(([m, label]) => h('button', {
+      type: 'button', class: es.mode === m ? 'chip active' : 'chip',
+      onclick: () => {
+        es.mode = m;
+        Object.assign(q, { res: null, logs: null });
+        drawQueries();
+        runExplore();
+      },
+    }, label))),
+    field(t('exIndex'), text(es.index, v => { es.index = v; }, { placeholder: src.index || 'logs-*' }), 'ex-es-index'),
+    field(t('exLucene'), text(es.query, v => { es.query = v; }, { placeholder: 'log.level:ERROR AND kubernetes.namespace:shop' }), 'ex-es-query'),
+    es.mode === 'logs'
+      ? field(t('exLogLines'), pick(es.lines || 100, [50, 100, 200, 500].map(n => [n, String(n)]), v => { es.lines = Number(v); }))
+      : [
+        field(t('exStat'), pick(es.metric, ES_STATS.map(m => [m, /^p\d\d$/.test(m) ? t('exPercentile', m.slice(1)) : t('es.' + m)]), v => {
+          es.metric = v;
+          drawQueries();
+        })),
+        es.metric === 'count' ? null : field(t('exField'), text(es.field, v => { es.field = v; }, { list: numericID, placeholder: 'event.duration' })),
+        field(t('exBy'), text(es.groupBy, v => { es.groupBy = v; drawQueries(); }, { list: termsID, placeholder: 'kubernetes.pod.name' })),
+        es.groupBy ? field(t('exTop'), pick(es.size || 10, [5, 10, 20, 50].map(n => [n, String(n)]), v => { es.size = Number(v); })) : null,
+      ],
+    lists);
+}
+
 function queryRow(q, i) {
+  if (!q.src && state.storeOn === false && ex.sources.length) q.src = ex.sources[0].id;
+  if (isES(q) && !q.es) q.es = esDefaults(sourceOf(q));
+  const hideButton = h('button', { type: 'button', class: 'icon-btn', title: q.hidden ? t('exShow') : t('exHide'), onclick: () => {
+    q.hidden = !q.hidden;
+    drawQueries();
+    drawResults();
+  } }, q.hidden ? '◌' : '●');
+  const removeButton = h('button', { type: 'button', class: 'icon-btn', title: t('exRemove'), onclick: () => {
+    ex.queries = ex.queries.filter(x => x !== q);
+    if (!ex.queries.length) ex.queries.push(newQuery());
+    drawQueries();
+    drawResults();
+  } }, '✕');
+  if (isES(q)) {
+    q.statusEl = h('div', { class: 'ex-status' });
+    const legendIn = h('input', {
+      type: 'text', class: 'mono ex-legend', value: q.legend, placeholder: t('exLegend'), 'aria-label': t('exLegend'),
+      oninput: e => { q.legend = e.target.value; drawResults(); },
+    });
+    return h('div', { class: q.hidden ? 'ex-query off' : 'ex-query' },
+      h('div', { class: 'ex-qhead' }, h('span', { class: 'ex-letter' }, String.fromCharCode(65 + i)), sourcePicker(q),
+        h('span', { class: 'grow' }), q.es.mode === 'logs' ? null : legendIn, hideButton, removeButton),
+      esEditor(q), q.statusEl);
+  }
   const ta = h('textarea', { class: 'mono ex-expr', rows: '1', spellcheck: 'false', autocomplete: 'off', placeholder: t('exPlaceholder'), 'aria-label': t('exQuery') });
   ta.value = q.expr;
   q.ta = ta;
@@ -3547,7 +3811,7 @@ function queryRow(q, i) {
     ta.style.height = Math.min(220, ta.scrollHeight + 2) + 'px';
   };
   const sugg = h('div', { class: 'ex-suggest', hidden: true });
-  const complete = autoComplete(ta, sugg, () => { q.expr = ta.value; size(); });
+  const complete = autoComplete(ta, sugg, () => { q.expr = ta.value; size(); }, q);
   ta.addEventListener('input', () => {
     q.expr = ta.value;
     size();
@@ -3572,7 +3836,7 @@ function queryRow(q, i) {
   if (q.builder) drawBuilder(q);
   const letter = h('span', { class: 'ex-letter' }, String.fromCharCode(65 + i));
   return h('div', { class: q.hidden ? 'ex-query off' : 'ex-query' },
-    h('div', { class: 'ex-qhead' }, letter,
+    h('div', { class: 'ex-qhead' }, letter, sourcePicker(q),
       h('div', { class: 'ex-expr-box' }, ta, sugg),
       legend,
       h('button', { type: 'button', class: q.builder ? 'chip active' : 'chip', title: t('exBuilder'), onclick: () => {
@@ -3580,17 +3844,7 @@ function queryRow(q, i) {
         q.builderEl.hidden = !q.builder;
         if (q.builder) drawBuilder(q);
       } }, t('exBuilder')),
-      h('button', { type: 'button', class: 'icon-btn', title: q.hidden ? t('exShow') : t('exHide'), onclick: () => {
-        q.hidden = !q.hidden;
-        drawQueries();
-        drawResults();
-      } }, q.hidden ? '◌' : '●'),
-      h('button', { type: 'button', class: 'icon-btn', title: t('exRemove'), onclick: () => {
-        ex.queries = ex.queries.filter(x => x !== q);
-        if (!ex.queries.length) ex.queries.push(newQuery());
-        drawQueries();
-        drawResults();
-      } }, '✕')),
+      hideButton, removeButton),
     q.builderEl, q.statusEl);
 }
 
@@ -3614,20 +3868,22 @@ function cached(path) {
   value.catch(() => ex.cache.delete(path));
   return value;
 }
-function storeMetrics() {
+// The metrics and labels of the store, or of a Prometheus: base is
+// apiBase of the query they are for.
+function storeMetrics(base = 'store') {
   // At least the last day's, so that a short range still offers them all.
-  return cached('store/metrics?' + rangeQuery(86400000));
+  return cached(base + '/metrics?' + rangeQuery(86400000));
 }
-function storeLabelNames(match) {
-  return cached('store/labels?' + rangeQuery() + (match ? '&match=' + enc(match) : ''));
+function storeLabelNames(base, match) {
+  return cached(base + '/labels?' + rangeQuery() + (match ? '&match=' + enc(match) : ''));
 }
-function storeLabelValues(name, match) {
-  return cached('store/labels/' + enc(name) + '/values?' + rangeQuery() + (match ? '&match=' + enc(match) : ''));
+function storeLabelValues(base, name, match) {
+  return cached(base + '/labels/' + enc(name) + '/values?' + rangeQuery() + (match ? '&match=' + enc(match) : ''));
 }
 
 // autoComplete offers metric names, functions, label names and values as
 // the query is typed.
-function autoComplete(ta, box, changed) {
+function autoComplete(ta, box, changed, q) {
   let items = [];
   let active = 0;
   let replace = [0, 0];
@@ -3676,22 +3932,22 @@ function autoComplete(ta, box, changed) {
         prefix = m[3];
         replace = [pos - prefix.length, pos + (/^[^"]*/.exec(ta.value.slice(pos)) || [''])[0].length];
         after = ta.value[replace[1]] === '"' ? '' : '"';
-        const values = await storeLabelValues(m[1], metricOf());
+        const values = await storeLabelValues(apiBase(q), m[1], metricOf());
         list = values.map(v => ({ text: v.replace(/\\/g, '\\\\').replace(/"/g, '\\"'), after, hint: m[1] }));
       } else if (inBraces && (m = /[{,]\s*([a-zA-Z_][a-zA-Z0-9_]*)?$/.exec(before))) {
         prefix = m[1] || '';
         replace = [pos - prefix.length, end];
-        const names = await storeLabelNames(metricOf());
+        const names = await storeLabelNames(apiBase(q), metricOf());
         list = names.map(n => ({ text: n, after: '="', hint: t('exLabel') }));
       } else if ((m = /\b(by|without|on|ignoring|group_left|group_right)\s*\(([^)]*,\s*)?([a-zA-Z_][a-zA-Z0-9_]*)?$/.exec(before))) {
         prefix = m[3] || '';
         replace = [pos - prefix.length, end];
-        const names = await storeLabelNames('');
+        const names = await storeLabelNames(apiBase(q), '');
         list = names.map(n => ({ text: n, after: '', hint: t('exLabel') }));
       } else if ((m = /([a-zA-Z_:$][a-zA-Z0-9_:]*)$/.exec(before)) && m[1].length >= 2) {
         prefix = m[1];
         replace = [pos - prefix.length, end];
-        const metrics = await storeMetrics();
+        const metrics = await storeMetrics(apiBase(q));
         list = metrics.map(x => ({ text: x.name, after: '', hint: x.type }))
           .concat(EX_FUNCS.map(f => ({ text: f, after: '(', hint: t('exFunction') })))
           .concat(EX_WORDS.map(w => ({ text: w, after: '', hint: '' })));
@@ -3744,6 +4000,7 @@ function autoComplete(ta, box, changed) {
 const BUILDER_FNS = ['', 'rate', 'increase', 'irate', 'delta', 'avg_over_time', 'max_over_time', 'min_over_time', 'p50', 'p90', 'p95', 'p99'];
 const BUILDER_AGGS = ['', 'sum', 'avg', 'max', 'min', 'count'];
 const BUILDER_FILTERS = ['cluster', 'namespace', 'workload', 'pod'];
+const BUILDER_LABELS = ['cluster', 'namespace', 'job', 'workload', 'service', 'instance', 'pod', 'container'];
 
 function builderQuery(b) {
   if (!b.metric) return '';
@@ -3759,7 +4016,8 @@ function builderQuery(b) {
 }
 
 async function drawBuilder(q) {
-  if (!q.b) q.b = { metric: '', type: '', fn: '', agg: '', by: [], filters: { cluster: state.cluster } };
+  // The store's series name their cluster; another Prometheus's may not.
+  if (!q.b) q.b = { metric: '', type: '', fn: '', agg: '', by: [], filters: q.src ? {} : { cluster: state.cluster } };
   const b = q.b;
   const apply = () => {
     const text = builderQuery(b);
@@ -3771,7 +4029,7 @@ async function drawBuilder(q) {
   };
   const field = (label, input) => h('label', null, h('span', null, label), input);
   let metrics = [];
-  try { metrics = await storeMetrics(); } catch { metrics = []; }
+  try { metrics = await storeMetrics(apiBase(q)); } catch { metrics = []; }
   const listId = 'ex-metrics-' + q.id;
   const metric = h('input', { type: 'text', class: 'mono', value: b.metric, list: listId, placeholder: 'http_requests_total', spellcheck: 'false' });
   metric.addEventListener('change', () => {
@@ -3788,7 +4046,7 @@ async function drawBuilder(q) {
     BUILDER_AGGS.map(a => h('option', { value: a, selected: a === b.agg }, a || t('exNone'))));
   let names = [];
   if (b.metric) {
-    try { names = await storeLabelNames(b.metric); } catch { names = []; }
+    try { names = await storeLabelNames(apiBase(q), b.metric); } catch { names = []; }
   }
   const by = h('div', { class: 'chips' }, names.filter(n => n !== 'le').map(n => h('button', {
     type: 'button', class: b.by.includes(n) ? 'chip active' : 'chip',
@@ -3798,10 +4056,12 @@ async function drawBuilder(q) {
       apply();
     },
   }, n)));
-  const filters = await Promise.all(BUILDER_FILTERS.map(async l => {
+  // Filters on the labels people pick by most, of those the metric has.
+  const filterNames = q.src ? BUILDER_LABELS.filter(l => names.includes(l)).slice(0, 5) : BUILDER_FILTERS;
+  const filters = await Promise.all(filterNames.map(async l => {
     let values = [];
     if (b.metric) {
-      try { values = await storeLabelValues(l, b.metric); } catch { values = []; }
+      try { values = await storeLabelValues(apiBase(q), l, b.metric); } catch { values = []; }
     }
     const cur = b.filters[l] || '';
     if (cur && !values.includes(cur)) values = [cur, ...values];
@@ -3814,38 +4074,218 @@ async function drawBuilder(q) {
     names.length ? field(t('exBy'), by) : null);
 }
 
+// metricBrowser lists the metrics of the store, or of a Prometheus; one
+// picked becomes a query of it.
 async function metricBrowser() {
-  let list;
-  try {
-    list = await storeMetrics();
-  } catch (e) {
-    if (e.status !== 401) toast(e.message, true);
-    return;
-  }
+  const proms = ex.sources.filter(s => s.type === 'prometheus');
+  const first = ex.queries.find(q => q.src && proms.some(s => s.id === q.src));
+  let src = state.storeOn === false || first ? (first ? first.src : proms.length ? proms[0].id : '') : '';
+  let list = [];
   const search = h('input', { type: 'text', class: 'filter', placeholder: t('exSearch'), 'aria-label': t('exSearch') });
   const body = h('div', { class: 'ex-browse' });
   const draw = () => {
     const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
     const rows = list.filter(m => matches(words, [m.name, m.type]));
     fill(body, rows.length ? h('table', { class: 'flat' },
-      h('thead', null, h('tr', null, h('th', null, t('exMetric')), h('th', null, t('col.type')), h('th', null, t('col.series')))),
+      h('thead', null, h('tr', null, h('th', null, t('exMetric')), h('th', null, t('col.type')), src ? null : h('th', null, t('col.series')))),
       h('tbody', null, rows.slice(0, 500).map(m => h('tr', { class: 'clickable', onclick: () => {
         const text = queryFor(m.name, m.type);
-        const empty = ex.queries.find(q => !q.expr.trim());
-        if (empty) empty.expr = text;
-        else ex.queries.push(newQuery(text));
+        const empty = ex.queries.find(q => !q.expr.trim() && !isES(q));
+        if (empty) Object.assign(empty, { expr: text, src, es: null });
+        else ex.queries.push(newQuery(text, '', false, src));
         close();
         drawQueries();
         runExplore();
-      } }, h('td', { class: 'mono' }, m.name), h('td', { class: 'muted' }, m.type), h('td', null, String(m.series))))))
+      } }, h('td', { class: 'mono' }, m.name), h('td', { class: 'muted' }, m.type || '—'), src ? null : h('td', null, String(m.series))))))
       : h('div', { class: 'empty-note' }, list.length ? t('noMatch') : t('exNoMetrics')));
   };
+  const load = async () => {
+    fill(body, h('div', { class: 'empty-note' }, t('loading')));
+    try {
+      list = await storeMetrics(src ? 'datasources/' + enc(src) : 'store');
+    } catch (e) {
+      list = [];
+      if (e.status !== 401) fill(body, h('div', { class: 'empty-note status-bad' }, e.message));
+      return;
+    }
+    draw();
+  };
+  const options = (state.storeOn === false ? [] : [['', t('exStore')]]).concat(proms.map(s => [s.id, s.name]));
+  const picker = options.length > 1 ? h('select', { 'aria-label': t('exSource'), onchange: e => { src = e.target.value; load(); } },
+    options.map(([v, label]) => h('option', { value: v, selected: v === src }, label))) : null;
   search.addEventListener('input', draw);
-  draw();
   const close = modal(h('div', { class: 'dialog wide ex-browser' },
-    h('h2', null, t('exBrowseTitle')), h('p', { class: 'muted small-text' }, t('exBrowseHint')), search, body,
+    h('h2', null, t('exBrowseTitle')), h('p', { class: 'muted small-text' }, t('exBrowseHint')),
+    h('div', { class: 'ex-browse-head' }, picker, search), body,
     h('div', { class: 'dialog-actions' }, button(t('close'), () => close()))));
   search.focus();
+  load();
+}
+
+// refreshSources reads again which data sources the user may query.
+async function refreshSources() {
+  try {
+    ex.sources = await api('datasources');
+  } catch {
+    return;
+  }
+  drawQueries();
+}
+
+// dataSourcesDialog lets an admin set up the Prometheus and Elasticsearch
+// servers Explore queries.
+async function dataSourcesDialog() {
+  let data;
+  try {
+    data = await api('settings/datasources');
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  const listEl = h('div');
+  const reload = async () => {
+    try {
+      data = await api('settings/datasources');
+    } catch (e) {
+      if (e.status !== 401) toast(e.message, true);
+      return;
+    }
+    drawList();
+    refreshSources();
+  };
+  const drawList = () => {
+    fill(listEl, data.sources.length ? h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, ['dsName', 'dsType', 'dsURL', 'dsVia', 'dsCluster'].map(k => h('th', null, t(k))), h('th'))),
+      h('tbody', null, data.sources.map(d => h('tr', null,
+        h('td', null, h('strong', null, d.name)),
+        h('td', null, d.type === 'elasticsearch' ? 'Elasticsearch' : 'Prometheus'),
+        h('td', { class: 'mono small-text' }, d.url),
+        h('td', null, d.via ? t('dsViaAgent', d.via) : t('dsViaServer')),
+        h('td', null, d.cluster ? d.cluster + ' · ' + d.namespaceLabel : h('span', { class: 'muted' }, t('dsClusterNone'))),
+        h('td', { class: 'actions-cell' },
+          button(t('edit'), () => dataSourceForm(d, reload)),
+          button(t('dsRemove'), async () => {
+            const ok = await ask({ title: t('dsRemoveTitle'), message: t('dsRemoveConfirm', d.name), confirm: t('dsRemove'), danger: true });
+            if (!ok) return;
+            try {
+              await api('settings/datasources/' + enc(d.id), { method: 'DELETE' });
+              toast(t('dsRemoved'));
+              reload();
+            } catch (e) {
+              if (e.status !== 401) toast(e.message, true);
+            }
+          }, 'danger'))))))
+      : h('div', { class: 'empty-note' }, t('dsNone')));
+  };
+  drawList();
+  const close = modal(h('div', { class: 'dialog wide ds-dialog' },
+    h('h2', null, t('dsTitle')),
+    h('p', { class: 'muted small-text' }, t('dsHint')),
+    data.where ? null : h('p', { class: 'small-text status-warn' }, t('mailNotKept')),
+    data.loadError ? h('p', { class: 'small-text status-bad' }, t('mailLoadError', data.loadError)) : null,
+    listEl,
+    h('div', { class: 'dialog-actions' },
+      button('+ ' + t('dsAdd'), () => dataSourceForm(null, reload), 'primary'),
+      h('span', { class: 'grow' }),
+      button(t('close'), () => close()))));
+}
+
+// dataSourceForm adds a source, or changes d; it can try it first.
+function dataSourceForm(d, done) {
+  const v = Object.assign({ type: 'prometheus', auth: 'none', interval: 0 }, d || {});
+  const field = (label, input, help) => h('label', { class: 'field' }, h('span', null, label), input,
+    help ? h('span', { class: 'muted small-text' }, help) : null);
+  const input = (value, attrs) => h('input', Object.assign({ type: 'text', value: value || '', autocomplete: 'off', spellcheck: 'false' }, attrs));
+  const name = input(v.name, { maxlength: '100' });
+  const type = h('select', null, [['prometheus', 'Prometheus'], ['elasticsearch', 'Elasticsearch / OpenSearch']].map(([k, label]) =>
+    h('option', { value: k, selected: k === v.type }, label)));
+  const url = input(v.url, { class: 'mono', inputmode: 'url', placeholder: 'http://prometheus-server.monitoring.svc:9090' });
+  const clusters = (state.clusters || []).map(c => c.name);
+  const via = h('select', null, h('option', { value: '' }, t('dsViaServer')),
+    clusters.map(c => h('option', { value: c, selected: c === v.via }, t('dsViaAgent', c))));
+  const cluster = h('select', null, h('option', { value: '' }, t('dsClusterNone')),
+    clusters.map(c => h('option', { value: c, selected: c === v.cluster }, c)));
+  const nsLabel = input(v.namespaceLabel, { class: 'mono' });
+  const auth = h('select', null, ['none', 'basic', 'bearer', 'apikey'].map(a => h('option', { value: a, selected: a === v.auth }, t('dsAuth.' + a))));
+  const username = input(v.username);
+  const password = input('', { type: 'password', autocomplete: 'new-password', placeholder: v.passwordSet ? t('dsKeep') : '' });
+  const token = input('', { type: 'password', autocomplete: 'new-password', placeholder: v.tokenSet ? t('dsKeep') : '' });
+  const insecure = h('input', { type: 'checkbox', checked: !!v.insecure });
+  const interval = h('input', { type: 'number', min: '1', max: '3600', value: v.interval ? String(v.interval) : '', placeholder: '30' });
+  const index = input(v.index, { class: 'mono', placeholder: 'filebeat-*' });
+  const timeField = input(v.timeField, { class: 'mono', placeholder: '@timestamp' });
+  const messageField = input(v.messageField, { class: 'mono', placeholder: 'message' });
+  const promPart = h('div', null, field(t('dsInterval'), interval, t('dsIntervalHelp')));
+  const esPart = h('div', null, field(t('dsIndex'), index), h('div', { class: 'field-row' }, field(t('dsTimeField'), timeField), field(t('dsMessageField'), messageField)));
+  const userPart = h('div', { class: 'field-row' }, field(t('dsUser'), username), field(t('dsPassword'), password));
+  const tokenPart = field(t('dsToken'), token);
+  const nsField = field(t('dsNsLabel'), nsLabel, t('dsNsHelp'));
+  const show = () => {
+    const es = type.value === 'elasticsearch';
+    promPart.hidden = es;
+    esPart.hidden = !es;
+    nsLabel.placeholder = es ? 'kubernetes.namespace' : 'namespace';
+    url.placeholder = es ? 'https://elastic.example.org:9200' : 'http://prometheus-server.monitoring.svc:9090';
+    nsField.hidden = !cluster.value;
+    userPart.hidden = auth.value !== 'basic';
+    tokenPart.hidden = auth.value !== 'bearer' && auth.value !== 'apikey';
+  };
+  [type, cluster, auth].forEach(el => el.addEventListener('change', show));
+  show();
+  const note = formNote();
+  const body = () => ({
+    id: v.id || '', name: name.value, type: type.value, url: url.value, via: via.value, cluster: cluster.value,
+    namespaceLabel: nsLabel.value, auth: auth.value, username: username.value, password: password.value, token: token.value,
+    insecure: insecure.checked, interval: Number(interval.value) || 0, index: index.value, timeField: timeField.value,
+    messageField: messageField.value,
+  });
+  const buttons = [];
+  const busy = on => buttons.forEach(b => { b.disabled = on; });
+  const tryIt = async () => {
+    busy(true);
+    note.say(t('dsTesting'));
+    try {
+      const r = await api('settings/datasources/test', { method: 'POST', body: body() });
+      note.say(r.ok ? t('dsTestOK', r.version) : '✗ ' + r.error, r.ok ? 'ok' : 'bad');
+    } catch (e) {
+      if (e.status !== 401) note.say(e.message, 'bad');
+    }
+    busy(false);
+  };
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      busy(true);
+      const b = body();
+      delete b.id;
+      try {
+        await api(d ? 'settings/datasources/' + enc(d.id) : 'settings/datasources', { method: d ? 'PUT' : 'POST', body: b });
+        close();
+        toast(t('dsSaved'));
+        done();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        busy(false);
+      }
+    },
+  },
+  h('h2', null, d ? t('dsEdit') : t('dsNew')),
+  h('div', { class: 'field-row' }, field(t('dsName'), name), field(t('dsType'), type)),
+  field(t('dsURL'), url, t('dsURLHelp')),
+  h('div', { class: 'field-row' }, field(t('dsVia'), via, t('dsViaHelp')), field(t('dsCluster'), cluster, t('dsClusterHelp'))),
+  nsField,
+  field(t('dsAuth'), auth), userPart, tokenPart,
+  h('label', { class: 'check-line' }, insecure, t('dsInsecure')),
+  promPart, esPart,
+  note,
+  h('div', { class: 'dialog-actions' },
+    buttons[0] = button(t('dsTest'), tryIt),
+    h('span', { class: 'grow' }),
+    buttons[1] = button(t('cancel'), () => close()),
+    buttons[2] = h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  name.focus();
 }
 
 function scheduleExplore() {
@@ -3864,7 +4304,7 @@ async function runExplore() {
   const ctl = new AbortController();
   ex.ctl = ctl;
   clearTimeout(ex.timer);
-  if (state.storeOn === false) {
+  if (exploreOff()) {
     ex.running = false;
     return;
   }
@@ -3875,19 +4315,15 @@ async function runExplore() {
   to = Math.floor(to / step) * step;
   ex.running = true;
   drawExploreToolbar();
+  // A dashboard's panel being edited here has its variables filled in.
+  const vars = ex.dash ? unpackVars(ex.dash.v) : null;
   await Promise.all(ex.queries.map(async q => {
     q.error = '';
-    if (!q.expr.trim()) {
-      q.res = null;
-      return;
-    }
-    const p = new URLSearchParams({ query: substitute(q.expr, step, from, to), start: String(from), end: String(to), step: String(step) });
     try {
-      q.res = await api('store/query_range?' + p, { signal: ctl.signal });
+      Object.assign(q, await fetchQuery(q, { from, to, step, signal: ctl.signal, vars }));
     } catch (e) {
       if (e.name === 'AbortError') return;
-      q.res = null;
-      q.error = e.message;
+      Object.assign(q, { res: null, logs: null, error: e.message });
     }
   }));
   if (my !== ex.seq) return;
@@ -3903,10 +4339,42 @@ async function runExplore() {
   scheduleExplore();
 }
 
+// queryInterval is how often what a query reads is scraped: a
+// Prometheus's windows go by its own interval.
+function queryInterval(q) {
+  const src = sourceOf(q);
+  return src ? src.interval || 30 : ex.interval;
+}
+
+// fetchQuery reads a query over a range: its series, and the documents of
+// an Elasticsearch logs query. vars fills in a dashboard's variables.
+async function fetchQuery(q, { from, to, step, signal, vars }) {
+  const src = sourceOf(q);
+  if (src && src.type === 'missing') throw new Error(t('exSourceGone'));
+  if (src && src.type === 'elasticsearch') {
+    const es = q.es || esDefaults(src);
+    const body = { index: es.index, query: vars ? fillVars(es.query, vars, 'lucene') : es.query, start: from, end: to, step };
+    if (es.mode === 'logs') {
+      const logs = await api(apiBase(q) + '/logs', { method: 'POST', body: Object.assign(body, { size: es.lines || 100 }), signal });
+      return { res: logs.counts, logs };
+    }
+    const res = await api(apiBase(q) + '/series', {
+      method: 'POST', signal,
+      body: Object.assign(body, { metric: es.metric, field: es.field, groupBy: es.groupBy, size: es.size || 10 }),
+    });
+    return { res, logs: null };
+  }
+  if (!q.expr.trim()) return { res: null, logs: null };
+  const expr = substitute(vars ? fillVars(q.expr, vars, 'promql') : q.expr, step, from, to, queryInterval(q));
+  const p = new URLSearchParams({ query: expr, start: String(from), end: String(to), step: String(step) });
+  return { res: await api(apiBase(q) + '/query_range?' + p, { signal }), logs: null };
+}
+
 // legendName writes a series' name: the legend format with {{label}}
 // filled in, or its labels the way Prometheus writes them.
 function legendName(q, labels) {
-  if (q.legend) return q.legend.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_, k) => labels[k] || '');
+  // Elasticsearch's fields have dots: {{kubernetes.pod.name}}.
+  if (q.legend) return q.legend.replace(/\{\{\s*([a-zA-Z_@][a-zA-Z0-9_.@-]*)\s*\}\}/g, (_, k) => labels[k] || '');
   const { __name__: name = '', ...rest } = labels;
   const text = name + labelsText(rest);
   return text || q.expr.trim();
@@ -3940,10 +4408,9 @@ function signedBytes(v) {
 
 // unitFormat writes values of the chosen unit; auto goes by what the
 // queries are about.
-function unitFormat() {
-  let unit = ex.unit;
+function unitFormat(unit = ex.unit, queries = ex.queries) {
   if (unit === 'auto') {
-    const exprs = ex.queries.filter(q => !q.hidden && q.expr.trim()).map(q => q.expr);
+    const exprs = queries.filter(q => !q.hidden && q.expr.trim()).map(q => q.expr);
     const all = re => exprs.length && exprs.every(e => re.test(e));
     if (all(/_bytes(_total)?\b/)) unit = exprs.every(e => /\b(i?rate|deriv)\(/.test(e)) ? 'bytesSec' : 'bytes';
     else if (all(/_seconds(_bucket|_sum)?\b/) && exprs.every(e => /histogram_quantile|_seconds\b(?!_)/.test(e) && !/_count/.test(e))) unit = 'seconds';
@@ -4002,8 +4469,9 @@ function drawResults() {
     last ? h('span', { class: 'muted small-text' }, t('exRangeInfo', new Date(last.from).toLocaleString(), new Date(last.to).toLocaleString(), durText(last.step))) : null,
     ex.tab === 'graph' ? sel(t('exMode'), ex.mode, [['lines', t('exLines')], ['area', t('exArea')], ['stacked', t('exStacked')]], v => { ex.mode = v; replaceExplore(); drawResults(); }) : null,
     sel(t('exUnit'), ex.unit, EX_UNITS.map(u => [u, t('unit.' + u)]), v => { ex.unit = v; replaceExplore(); drawResults(); }),
-    button(t('exCSV'), () => exploreCSV(shown), null));
-  const anyQuery = ex.queries.some(q => q.expr.trim());
+    button(t('exCSV'), () => exploreCSV(shown), null),
+    !ex.dash && roleAtLeast('operator') && ex.queries.some(q => q.expr.trim() || isES(q)) ? button(t('exAddToDash'), () => addToDashboard()) : null);
+  const anyQuery = ex.queries.some(q => q.expr.trim() || isES(q));
   const failed = ex.queries.some(q => q.error);
   let body;
   if (!anyQuery) body = h('div', { class: 'empty-note' }, t('exEmpty'));
@@ -4017,7 +4485,46 @@ function drawResults() {
   } else {
     body = exploreTable(listed, format);
   }
-  fill(ex.resultsEl, h('section', { class: 'panel ex-result' }, tabs, body));
+  fill(ex.resultsEl, h('section', { class: 'panel ex-result' }, tabs, body),
+    ex.queries.map((q, i) => (q.logs && !q.hidden ? logsPanel(q, i) : null)));
+}
+
+// logsPanel lists the documents a logs query found, newest first; the
+// filter above the page keeps the lines that have its words.
+function logsPanel(q, i) {
+  const src = sourceOf(q);
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const lines = q.logs.lines.filter(l => matches(words, [l.message]));
+  const total = q.logs.totalMore ? t('exMoreThan', q.logs.total) : String(q.logs.total);
+  return h('section', { class: 'panel ex-logs' },
+    h('h2', null, t('exLogsOf', String.fromCharCode(65 + i), src ? src.name : ''),
+      h('span', { class: 'muted small-text' }, ' · ' + t('exLogsCount', lines.length, total))),
+    lines.length ? h('div', { class: 'ex-log-list' }, lines.map(logLine)) : h('div', { class: 'empty-note' }, t('exNoLogs')));
+}
+
+// logLevel finds how serious a document says it is.
+function logLevel(source) {
+  const level = String(source.level || (source.log && source.log.level) || source['log.level'] || source.severity || '').toLowerCase();
+  if (/^(err|error|fatal|crit|critical|alert|emerg|panic)/.test(level)) return 'bad';
+  if (/^warn/.test(level)) return 'warn';
+  return '';
+}
+
+function logLine(l) {
+  let source = {};
+  try { source = typeof l.source === 'object' && l.source ? l.source : JSON.parse(l.source || '{}'); } catch { source = {}; }
+  const level = logLevel(source);
+  const details = h('pre', { class: 'ex-log-doc mono', hidden: true });
+  const row = h('div', { class: level ? 'ex-log ' + level : 'ex-log' },
+    h('div', {
+      class: 'ex-log-head', role: 'button', tabindex: '0', title: l.index + ' · ' + l.id,
+      onclick: () => {
+        if (!details.textContent) details.textContent = JSON.stringify(source, null, 2);
+        details.hidden = !details.hidden;
+      },
+    }, h('span', { class: 'ex-log-time mono' }, new Date(l.t).toLocaleString()), h('span', { class: 'ex-log-msg mono' }, l.message)),
+    details);
+  return row;
 }
 
 function replaceExplore() {
@@ -4055,17 +4562,18 @@ function exploreLegend(list, format) {
     list.length > 300 ? h('div', { class: 'more-note' }, t('exMore', list.length - 300)) : null);
 }
 
-function exploreTable(list, format) {
+// letters shows which query each series is of.
+function exploreTable(list, format, letters = true) {
   const keys = [...new Set(list.flatMap(s => Object.keys(s.labels)))].sort((a, b) => (a === '__name__' ? -1 : b === '__name__' ? 1 : cmp(a, b)));
   const val = v => (v == null ? '—' : format(v));
   const rows = list.map(s => ({ s, st: seriesStats(s.values) })).sort((a, b) => (b.st.last == null ? -Infinity : b.st.last) - (a.st.last == null ? -Infinity : a.st.last));
   return h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
-    h('thead', null, h('tr', null, h('th'), h('th', null, t('exQuery')), keys.map(k => h('th', null, k === '__name__' ? t('exMetric') : k)),
+    h('thead', null, h('tr', null, h('th'), letters ? h('th', null, t('exQuery')) : null, keys.map(k => h('th', null, k === '__name__' ? t('exMetric') : k)),
       ['exLast', 'exMin', 'exMax', 'exMean'].map(k => h('th', { class: 'num' }, t(k))))),
     h('tbody', null, rows.slice(0, 1000).map(({ s, st }) => {
       const dot = h('span', { class: 'plot-dot' });
       dot.style.background = s.color;
-      return h('tr', null, h('td', null, dot), h('td', { title: s.name }, String.fromCharCode(65 + s.qi)), keys.map(k => h('td', { class: 'mono' }, s.labels[k] || '')),
+      return h('tr', null, h('td', null, dot), letters ? h('td', { title: s.name }, String.fromCharCode(65 + s.qi)) : null, keys.map(k => h('td', { class: 'mono' }, s.labels[k] || '')),
         [st.last, st.min, st.max, st.mean].map(v => h('td', { class: 'num' }, val(v))));
     }))));
 }
@@ -4081,6 +4589,1450 @@ function exploreCSV(list) {
   }
   download(lines.join('\n') + '\n', 'kartal-explore.csv');
 }
+// ---------------------------------------------------------------- dashboards
+
+// A dashboard is a page of panels over one range of time, with variables
+// people pick values of. db is the one shown: dash as the server keeps it,
+// work the copy shown and changed, which outlives a trip to Explore to edit
+// a panel's queries.
+const db = {
+  data: null, dash: null, work: null, id: '', edit: false, dirty: false, el: null, opening: null, pending: null,
+  range: '6h', from: 0, to: 0, zooms: [], picked: {}, options: {}, values: {}, auto: 0,
+  timer: 0, seq: 0, ctl: null, appliedX: null, cells: new Map(), drag: null, unsaved: new Map(),
+};
+const DB_ROW = 64;
+const DB_GAP = 12;
+const DB_HEAD = 34;
+const DB_TYPES = ['graph', 'stat', 'table', 'logs', 'text'];
+const DB_REDUCE = ['last', 'mean', 'max', 'min', 'sum'];
+const DB_REFRESH = [0, 30, 60, 300, 900];
+const DB_ALL = '$__all';
+const DB_RANGE = /^\d{1,3}[mhd]$/;
+const DB_VAR = /^(?!__)[A-Za-z_][A-Za-z0-9_]{0,40}$/;
+const DB_LABEL = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
+
+function copyOf(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+function clampInt(v, lo, hi, def) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && v !== '' ? Math.max(lo, Math.min(hi, n)) : def;
+}
+function newPanelID() {
+  return 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+function iconButton(label, title, onclick) {
+  return h('button', { type: 'button', class: 'icon-btn', title, 'aria-label': title, onclick }, label);
+}
+// mayEditDash tells whether the user may change a dashboard of the list,
+// as the server decides: its maker, or an admin.
+function mayEditDash(d) {
+  return roleAtLeast('operator') && !!state.me && (d.owner === state.me.name || canEverywhere('admin'));
+}
+// panelHeight is how high a panel of rows rows is, in pixels.
+function panelHeight(rows) {
+  return rows * DB_ROW + (rows - 1) * DB_GAP;
+}
+
+// fillVars puts the values picked for a dashboard's variables in a query,
+// for $name, ${name} or [[name]]. In PromQL a variable that may have
+// several values becomes a regular expression, All any value; in Lucene,
+// an OR of phrases; in text, a list.
+function fillVars(text, vars, format) {
+  if (!text || !vars) return text;
+  return text.replace(/\$\{([A-Za-z_]\w*)(?::[\w-]+)?\}|\[\[([A-Za-z_]\w*)\]\]|\$([A-Za-z_]\w*)/g, (m, a, b, c) => {
+    const v = vars[a || b || c];
+    return v ? varText(v, format) : m;
+  });
+}
+function reEscape(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function varText(v, format) {
+  if (format === 'text') return v.all ? t('dbAll') : v.values.join(', ');
+  if (format === 'lucene') {
+    if (v.all) return '*';
+    if (v.values.length === 1) return v.values[0].replace(/[+\-=&|><!(){}[\]^"~*?:\\/\s]/g, '\\$&');
+    return v.values.length ? '(' + v.values.map(x => '"' + x.replace(/["\\]/g, '\\$&') + '"').join(' OR ') + ')' : '""';
+  }
+  // PromQL: the value goes in a quoted string.
+  let s;
+  if (v.all) s = '.*';
+  else if (!v.multi) s = v.values[0] || '';
+  else s = v.values.length === 1 ? reEscape(v.values[0]) : '(' + v.values.map(reEscape).join('|') + ')';
+  return s.replace(/["\\]/g, '\\$&');
+}
+// packVars and unpackVars are variables' values in an address.
+function packVars(values) {
+  const out = {};
+  for (const [k, v] of Object.entries(values)) out[k] = [v.all ? [] : v.values, v.multi ? 1 : 0, v.all ? 1 : 0];
+  return out;
+}
+function unpackVars(packed) {
+  const out = {};
+  for (const [k, v] of Object.entries(packed || {})) {
+    if (Array.isArray(v)) out[k] = { values: strings(v[0]), multi: !!v[1], all: !!v[2] };
+  }
+  return out;
+}
+
+// entryQuery is a query of a panel, kept as Explore's address keeps it;
+// queryEntry the other way around.
+function entryQuery(e) {
+  const [expr, legend, hidden, src, es] = Array.isArray(e) ? e : [];
+  const q = newQuery(String(expr || ''), String(legend || ''), !!hidden, typeof src === 'string' ? src : '');
+  if (es && typeof es === 'object') q.es = Object.assign(esDefaults(), es);
+  else if (isES(q)) q.es = esDefaults(sourceOf(q));
+  return q;
+}
+function queryEntry(q) {
+  if (q.src) return [q.expr, q.legend, q.hidden ? 1 : 0, q.src, q.es];
+  return q.legend || q.hidden ? [q.expr, q.legend, q.hidden ? 1 : 0] : [q.expr];
+}
+// fillEntry is an entry with the values picked in it.
+function fillEntry(e, vars) {
+  const out = e.slice();
+  out[0] = fillVars(String(e[0] || ''), vars, 'promql');
+  if (e[4] && typeof e[4] === 'object') out[4] = Object.assign({}, e[4], { query: fillVars(e[4].query || '', vars, 'lucene') });
+  return out;
+}
+
+// ---- the address: the range and the values picked
+
+function dashParam() {
+  const x = { r: db.range || [db.from, db.to] };
+  if (Object.keys(db.picked).length) x.v = db.picked;
+  return JSON.stringify(x);
+}
+function applyDashParam(raw) {
+  let x = null;
+  try { x = JSON.parse(raw || 'null'); } catch { x = null; }
+  if (!x || typeof x !== 'object') x = {};
+  if (Array.isArray(x.r) && x.r.length === 2 && x.r.every(Number.isFinite) && x.r[0] < x.r[1]) {
+    db.range = '';
+    [db.from, db.to] = x.r;
+  } else {
+    db.range = typeof x.r === 'string' && DB_RANGE.test(x.r) ? x.r : db.work.range || '6h';
+  }
+  db.picked = {};
+  const v = x.v && typeof x.v === 'object' ? x.v : {};
+  for (const variable of db.work.variables || []) {
+    if (Array.isArray(v[variable.name])) db.picked[variable.name] = strings(v[variable.name]).slice(0, 200);
+  }
+  db.zooms = [];
+}
+function replaceDash() {
+  if (state.view !== 'dashboards' || state.rest[0] !== db.id) return;
+  state.x = dashParam();
+  db.appliedX = state.x;
+  replaceRoute();
+}
+function dashRange() {
+  if (db.range) {
+    const to = Date.now();
+    return [to - rangeMs(db.range), to];
+  }
+  return [db.from, db.to];
+}
+
+// ---- the list
+
+function renderDashboards(data) {
+  return data.list ? renderDashboardList(data.list) : renderDashboard(data);
+}
+
+function renderDashboardList({ dashboards, where }) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = dashboards.filter(d => matches(words, [d.title, d.description, d.owner]));
+  const maker = roleAtLeast('operator');
+  return [
+    !where && maker ? h('div', { class: 'banner' }, t('mailNotKept')) : null,
+    h('section', { class: 'panel' },
+      h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('dbHint')), h('span', { class: 'grow' }),
+        maker ? button(t('dbImport'), () => importDashboard()) : null,
+        maker ? button('+ ' + t('dbNew'), () => newDashboard(), 'primary') : null),
+      rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, h('th', null, t('dbTitle')), h('th', { class: 'num' }, t('dbPanels')), h('th', null, t('dbOwner')),
+          h('th', null, t('dbUpdated')), h('th'))),
+        h('tbody', null, rows.map(d => h('tr', null,
+          h('td', null, h('a', { class: 'db-link', href: routeHash({ view: 'dashboards', rest: [d.id] }) }, d.title),
+            db.unsaved.has(d.id) || (db.dirty && db.id === d.id) ? h('span', { class: 'status-warn small-text' }, ' · ' + t('dbUnsaved')) : null,
+            d.description ? h('div', { class: 'muted small-text db-list-desc' }, d.description) : null),
+          h('td', { class: 'num' }, String(d.panels)),
+          h('td', null, d.owner),
+          h('td', null, age(d.updated), d.updatedBy && d.updatedBy !== d.owner ? h('span', { class: 'muted' }, ' · ' + d.updatedBy) : null),
+          h('td', { class: 'actions-cell' }, mayEditDash(d) ? button(t('dsRemove'), () => removeDashboard(d), 'danger') : null))))))
+        : h('div', { class: 'empty-note' }, dashboards.length ? t('noMatch') : maker ? t('dbNoneMaker') : t('dbNone'))),
+  ];
+}
+
+function newDashboard() {
+  const title = h('input', { type: 'text', maxlength: '120', autocomplete: 'off' });
+  const desc = h('textarea', { rows: '2', maxlength: '2000' });
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      try {
+        const saved = await api('dashboards', { method: 'POST', body: { title: title.value, description: desc.value, panels: [] } });
+        close();
+        openDashboard(saved, true);
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t('dbNew')), dialogField(t('dbTitle'), title), dialogField(t('dbDescription'), desc), note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('dbCreate'))));
+  const close = modal(form);
+  title.focus();
+}
+
+// openDashboard goes to a dashboard just saved; edit opens it to change.
+function openDashboard(saved, edit) {
+  db.opening = { id: saved.id, edit };
+  go({ view: 'dashboards', rest: [saved.id] });
+}
+
+async function removeDashboard(d) {
+  const ok = await ask({ title: t('dbRemoveTitle'), message: t('dbRemoveConfirm', d.title), confirm: t('dsRemove'), danger: true });
+  if (!ok) return;
+  try {
+    await api('dashboards/' + enc(d.id), { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t('dbRemoved'));
+  db.unsaved.delete(d.id);
+  if (db.id === d.id) Object.assign(db, { id: '', dash: null, work: null, data: null, dirty: false, edit: false });
+  if (state.rest[0]) go({ view: 'dashboards', rest: [] });
+  else refresh();
+}
+
+// ---- one dashboard
+
+function renderDashboard(data) {
+  if (data !== db.data) {
+    db.data = data;
+    const dash = data.dash;
+    if (dash !== db.dash) {
+      if (dash.id !== db.id) {
+        // Changes not saved yet wait for their dashboard to be opened again.
+        if (db.dirty && db.id) db.unsaved.set(db.id, db.work);
+        Object.assign(db, { id: dash.id, edit: false, dirty: false, picked: {}, options: {}, values: {}, zooms: [], appliedX: null, auto: dash.refresh || 0 });
+        db.cells.clear();
+        const kept = db.unsaved.get(dash.id);
+        if (kept) {
+          db.unsaved.delete(dash.id);
+          Object.assign(db, { work: kept, dirty: true, edit: true });
+        }
+      }
+      if (db.opening && db.opening.id === dash.id) db.edit = db.opening.edit;
+      db.opening = null;
+      if (!db.dirty) db.work = copyOf(dash);
+      db.dash = dash;
+    }
+    db.el = null;
+  }
+  if (db.pending && db.pending.id === db.id) takePending();
+  let run = false;
+  if (!db.el) {
+    buildDashboard();
+    run = true;
+  }
+  if (state.x !== db.appliedX) {
+    applyDashParam(state.x);
+    db.appliedX = state.x;
+    run = true;
+  }
+  if (run) {
+    drawDashboard();
+    runDashboard();
+  }
+  return db.el;
+}
+
+// takePending puts the queries edited in Explore in their panel.
+function takePending() {
+  const pend = db.pending;
+  db.pending = null;
+  const p = db.work.panels.find(x => x.id === pend.panel);
+  if (!p) {
+    toast(t('dbPanelGone'), true);
+    return;
+  }
+  p.queries = pend.queries;
+  if (p.type !== 'logs') p.unit = pend.unit === 'auto' ? undefined : pend.unit;
+  if (p.type === 'graph') p.mode = pend.mode === 'lines' ? undefined : pend.mode;
+  db.edit = true;
+  db.dirty = true;
+  db.el = null;
+}
+
+function buildDashboard() {
+  db.headEl = h('div', { class: 'db-head' });
+  db.barEl = h('div', { class: 'db-bar' });
+  db.varsEl = h('div', { class: 'db-vars' });
+  db.noteEl = h('div');
+  db.gridEl = h('div', { class: 'db-grid' });
+  db.el = h('div', { class: 'dash' }, db.headEl, db.barEl, db.varsEl, db.noteEl, db.gridEl);
+}
+
+function drawDashboard() {
+  db.el.classList.toggle('editing', db.edit);
+  drawDashHead();
+  drawDashBar();
+  drawVars();
+  drawDashNote();
+  drawGrid();
+}
+
+function markDirty() {
+  db.dirty = true;
+  drawDashNote();
+}
+
+function drawDashHead() {
+  const w = db.work;
+  const actions = db.edit ? [
+    button('+ ' + t('dbAddPanel'), () => panelEditor(null)),
+    button(t('dbSettings'), () => dashSettings()),
+    button(t('cancel'), () => discardDashboard()),
+    button(t('save'), () => saveDashboard(), 'primary'),
+  ] : [
+    db.dash.canEdit ? button('✎ ' + t('edit'), () => { db.edit = true; drawDashboard(); }) : null,
+    button(t('dbExport'), () => exportDashboard()),
+    roleAtLeast('operator') ? button(t('dbCopy'), () => copyDashboard(false)) : null,
+  ];
+  fill(db.headEl,
+    h('div', { class: 'db-titles' },
+      h('div', { class: 'db-crumbs small-text' }, h('a', { href: routeHash({ view: 'dashboards', rest: [] }) }, t('dashboards')), ' /'),
+      h('h2', { class: 'db-title' }, w.title),
+      w.description ? h('p', { class: 'db-desc' }, w.description) : null),
+    h('span', { class: 'grow' }),
+    h('div', { class: 'db-actions' }, actions));
+}
+
+function drawDashNote() {
+  if (!db.noteEl) return;
+  fill(db.noteEl, db.edit ? h('div', { class: 'banner db-note' }, t('dbEditHelp'), db.dirty ? h('strong', null, ' ' + t('dbUnsaved')) : null) : null);
+}
+
+function setDashRange(r) {
+  db.zooms.push({ range: db.range, from: db.from, to: db.to });
+  db.range = r;
+  afterDashRange();
+}
+function setDashAbsolute(from, to) {
+  db.zooms.push({ range: db.range, from: db.from, to: db.to });
+  Object.assign(db, { range: '', from: Math.round(from), to: Math.round(to) });
+  afterDashRange();
+}
+function afterDashRange() {
+  replaceDash();
+  drawDashBar();
+  runDashboard();
+}
+
+function drawDashBar() {
+  const chip = (label, active, onclick) => h('button', { type: 'button', class: active ? 'chip active' : 'chip', onclick }, label);
+  const [from, to] = dashRange();
+  const ranges = EX_RANGES.includes(db.work.range) ? EX_RANGES : [...EX_RANGES, db.work.range].sort((a, b) => rangeMs(a) - rangeMs(b));
+  let custom = null;
+  if (!db.range) {
+    const fromIn = h('input', { type: 'datetime-local', value: localInput(from), 'aria-label': t('storeFrom') });
+    const toIn = h('input', { type: 'datetime-local', value: localInput(to), 'aria-label': t('storeTo') });
+    const apply = () => {
+      const a = fromLocal(fromIn.value);
+      const b = fromLocal(toIn.value);
+      if (Number.isFinite(a) && Number.isFinite(b) && a < b) setDashAbsolute(a, b);
+      else toast(t('storeBadRange'), true);
+    };
+    custom = h('span', { class: 'ex-custom' }, fromIn, '–', toIn, button(t('exApply'), apply));
+  }
+  const every = [...new Set([...DB_REFRESH, db.auto])].sort((a, b) => a - b);
+  const auto = h('select', {
+    'aria-label': t('exRefresh'), title: t('exRefresh'),
+    onchange: e => { db.auto = Number(e.target.value); scheduleDashboard(); },
+  }, every.map(s => h('option', { value: String(s), selected: s === db.auto }, '↻ ' + (s ? durText(s * 1000) : t('exOff')))));
+  fill(db.barEl,
+    ranges.map(r => chip(rangeLabel(r), db.range === r, () => setDashRange(r))),
+    chip(t('exCustom'), !db.range, () => { if (db.range) setDashAbsolute(from, to); }),
+    custom,
+    h('span', { class: 'ex-sep' }),
+    chip('⊖ ' + t('exZoomOut'), false, () => {
+      const c = (from + to) / 2;
+      const half = to - from;
+      setDashAbsolute(c - half, Math.min(Date.now(), c + half));
+    }),
+    db.zooms.length ? chip('↶ ' + t('exBack'), false, () => {
+      Object.assign(db, db.zooms.pop());
+      replaceDash();
+      drawDashBar();
+      runDashboard();
+    }) : null,
+    h('span', { class: 'grow' }),
+    auto,
+    button(t('exRun'), () => runDashboard(), 'primary'));
+}
+
+// ---- variables
+
+function drawVars() {
+  const vars = db.work.variables || [];
+  db.varsEl.hidden = !vars.length;
+  fill(db.varsEl, vars.map(varPicker));
+}
+
+function setVar(name, values) {
+  db.picked[name] = values;
+  replaceDash();
+  runDashboard();
+}
+
+// varPicker chooses a variable's value: one from a list, or several (or
+// all) from a menu that applies them when it closes.
+function varPicker(v) {
+  const options = db.options[v.name] || [];
+  const picked = db.picked[v.name] || [];
+  const all = picked[0] === DB_ALL;
+  const name = v.title || v.name;
+  if (!v.multi) {
+    const cur = all ? DB_ALL : picked[0] || '';
+    const list = cur && cur !== DB_ALL && !options.includes(cur) ? [cur, ...options] : options;
+    return h('label', { class: 'db-var' }, h('span', { class: 'muted' }, name),
+      h('select', { onchange: e => setVar(v.name, [e.target.value]) },
+        v.all ? h('option', { value: DB_ALL, selected: all }, t('dbAll')) : null,
+        list.map(o => h('option', { value: o, selected: o === cur }, o)),
+        !list.length && !v.all ? h('option', { value: '' }, '—') : null));
+  }
+  const chosen = new Set(all ? [] : picked);
+  let allOn = all;
+  let changed = false;
+  const search = h('input', { type: 'text', class: 'filter', placeholder: t('dbSearchValues'), 'aria-label': t('dbSearchValues') });
+  const listEl = h('div', { class: 'db-var-list' });
+  // The boxes are ticked in place, so that the list keeps where it is
+  // scrolled to.
+  const boxes = [];
+  const box = (checked, label, onchange) => {
+    const input = h('input', { type: 'checkbox', checked, onchange });
+    return [input, h('label', null, input, h('span', { class: 'mono' }, label))];
+  };
+  const drawList = () => {
+    const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    boxes.length = 0;
+    const [allBox, allRow] = v.all ? box(allOn, t('dbAll'), e => {
+      allOn = e.target.checked;
+      if (allOn) chosen.clear();
+      changed = true;
+      boxes.forEach(b => { b.checked = false; });
+    }) : [null, null];
+    const rows = options.filter(o => matches(words, [o])).slice(0, 500).map(o => {
+      const [input, row] = box(!allOn && chosen.has(o), o, e => {
+        if (e.target.checked) chosen.add(o);
+        else chosen.delete(o);
+        allOn = false;
+        if (allBox) allBox.checked = false;
+        changed = true;
+      });
+      boxes.push(input);
+      return row;
+    });
+    fill(listEl, allRow, rows, options.length ? null : h('div', { class: 'empty-note' }, t('dbNoValues')));
+  };
+  search.addEventListener('input', drawList);
+  drawList();
+  const details = h('details', { class: 'db-var multi' },
+    h('summary', null, h('span', { class: 'muted' }, name), h('span', { class: 'mono db-var-value' }, all ? t('dbAll') : picked.length ? picked.join(', ') : '—')),
+    h('div', { class: 'db-var-menu' }, options.length > 8 ? search : null, listEl));
+  details.addEventListener('toggle', () => {
+    if (details.open) {
+      if (options.length > 8) search.focus();
+      return;
+    }
+    if (changed) setVar(v.name, allOn ? [DB_ALL] : [...chosen]);
+  });
+  return details;
+}
+// A menu of values closes when one clicks beside it.
+document.addEventListener('click', e => {
+  for (const d of document.querySelectorAll('details.db-var[open]')) if (!d.contains(e.target)) d.open = false;
+});
+
+// loadVariables reads the values each variable offers, in order, as a
+// variable's series may use the ones before it; what was picked is kept if
+// it is still offered.
+async function loadVariables(from, to) {
+  const values = {};
+  const minute = 60000;
+  const range = 'from=' + Math.floor(from / minute) * minute + '&to=' + Math.ceil(to / minute) * minute;
+  for (const v of db.work.variables || []) {
+    const base = v.source ? 'datasources/' + enc(v.source) : 'store';
+    const match = v.match ? fillVars(v.match, values, 'promql') : '';
+    let options = [];
+    try {
+      options = await cached(base + '/labels/' + enc(v.label) + '/values?' + range + (match ? '&match=' + enc(match) : ''));
+    } catch {
+      options = [];
+    }
+    db.options[v.name] = options;
+    let picked = (db.picked[v.name] || []).slice(0, v.multi ? 200 : 1);
+    let all = picked[0] === DB_ALL && v.all;
+    if (picked[0] === DB_ALL && !all) picked = [];
+    if (!all && !(picked.length && (!options.length || picked.some(x => options.includes(x))))) {
+      all = !!v.all;
+      picked = all ? [DB_ALL] : options.slice(0, 1);
+    }
+    db.picked[v.name] = picked;
+    values[v.name] = { all, multi: !!(v.multi || v.all), values: all ? [] : picked };
+  }
+  return values;
+}
+
+// ---- running the panels
+
+async function runDashboard() {
+  const my = ++db.seq;
+  if (db.ctl) db.ctl.abort();
+  const ctl = new AbortController();
+  db.ctl = ctl;
+  clearTimeout(db.timer);
+  const [from, to] = dashRange();
+  const values = await loadVariables(from, to);
+  if (my !== db.seq) return;
+  db.values = values;
+  replaceDash();
+  // A menu being used is not taken away.
+  if (!db.varsEl.querySelector('details[open]')) drawVars();
+  await Promise.all(db.work.panels.map(p => runPanel(p, from, to, ctl.signal)));
+  if (my !== db.seq) return;
+  scheduleDashboard();
+}
+
+function scheduleDashboard() {
+  clearTimeout(db.timer);
+  if (!db.auto || !db.range) return;
+  db.timer = setTimeout(() => {
+    if (state.view !== 'dashboards' || state.rest[0] !== db.id) return;
+    if (document.hidden) scheduleDashboard();
+    else runDashboard();
+  }, db.auto * 1000);
+}
+
+function cellOf(p) {
+  let c = db.cells.get(p.id);
+  if (!c) {
+    c = { qs: [], range: null, loading: false, hidden: new Set(), el: null, body: null, titleEl: null };
+    db.cells.set(p.id, c);
+  }
+  return c;
+}
+
+// runPanel reads a panel's queries, with steps that suit its width.
+async function runPanel(p, from, to, signal) {
+  const cell = cellOf(p);
+  if (p.type === 'text') {
+    drawPanel(p);
+    return;
+  }
+  const qs = (p.queries || []).map(entryQuery);
+  for (const q of qs) q.legend = fillVars(q.legend, db.values, 'text');
+  const interval = qs.length ? Math.min(...qs.map(queryInterval)) : ex.interval;
+  const step = autoStep(from, to, interval, Math.max(120, Math.round((p.w / 12) * 600)));
+  const range = { from: Math.floor(from / step) * step, to: Math.floor(to / step) * step, step };
+  cell.loading = true;
+  if (cell.el) cell.el.classList.add('loading');
+  try {
+    await Promise.all(qs.map(async q => {
+      if (q.hidden) return;
+      try {
+        Object.assign(q, await fetchQuery(q, Object.assign({ signal, vars: db.values }, range)));
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        Object.assign(q, { res: null, logs: null, error: e.message });
+      }
+    }));
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+  }
+  // A panel changed meanwhile is read again as it is now.
+  if (!db.work.panels.includes(p)) return;
+  Object.assign(cell, { qs, range, loading: false });
+  drawPanel(p);
+}
+
+// ---- the grid of panels
+
+function drawGrid() {
+  const panels = db.work.panels;
+  if (!panels.length) {
+    fill(db.gridEl, h('div', { class: 'db-empty' }, h('div', { class: 'empty-note' }, db.edit ? t('dbEmptyEdit') : t('dbEmpty')),
+      db.dash.canEdit ? button('+ ' + t('dbAddPanel'), () => {
+        db.edit = true;
+        drawDashboard();
+        panelEditor(null);
+      }, 'primary') : null));
+    return;
+  }
+  fill(db.gridEl, panels.map(panelEl));
+  panels.forEach(drawPanel);
+}
+
+function clearDrop() {
+  for (const el of db.gridEl.querySelectorAll('.db-panel.drop-before, .db-panel.drop-after')) el.classList.remove('drop-before', 'drop-after');
+}
+
+function panelEl(p) {
+  const cell = cellOf(p);
+  const title = h('span', { class: 'db-panel-title' });
+  const tools = h('span', { class: 'db-tools' });
+  const head = h('div', { class: 'db-panel-head' }, title, tools);
+  const body = h('div', { class: 'db-body' });
+  const el = h('section', { class: 'db-panel' }, head, body);
+  el.style.setProperty('--w', String(p.w));
+  el.style.setProperty('--h', String(p.h));
+  Object.assign(cell, { el, body, titleEl: title });
+  if (!db.edit) {
+    fill(tools,
+      p.type === 'text' ? null : iconButton('↗', t('dbExplore'), () => panelToExplore(p, false)),
+      iconButton('⤢', t('dbView'), () => viewPanel(p)));
+    return el;
+  }
+  fill(tools,
+    iconButton('✎', t('edit'), () => panelEditor(p)),
+    iconButton('⧉', t('dbDuplicate'), () => duplicatePanel(p)),
+    iconButton('✕', t('exRemove'), () => removePanel(p)));
+  // A panel moves by its title, before or after the one it is dropped on.
+  head.draggable = true;
+  head.addEventListener('dragstart', e => {
+    db.drag = p.id;
+    el.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', p.id);
+  });
+  head.addEventListener('dragend', () => {
+    db.drag = null;
+    el.classList.remove('dragging');
+    clearDrop();
+  });
+  const after = e => {
+    const r = el.getBoundingClientRect();
+    return e.clientX > r.left + r.width / 2;
+  };
+  el.addEventListener('dragover', e => {
+    if (!db.drag || db.drag === p.id) return;
+    e.preventDefault();
+    clearDrop();
+    el.classList.add(after(e) ? 'drop-after' : 'drop-before');
+  });
+  el.addEventListener('drop', e => {
+    if (!db.drag) return;
+    e.preventDefault();
+    movePanel(db.drag, p.id, after(e));
+  });
+  const grip = h('div', { class: 'db-resize', title: t('dbResize') });
+  grip.addEventListener('pointerdown', e => resizePanel(e, p, el));
+  el.append(grip);
+  return el;
+}
+
+function movePanel(id, target, after) {
+  const list = db.work.panels;
+  const from = list.findIndex(x => x.id === id);
+  if (from < 0 || id === target) return;
+  const [p] = list.splice(from, 1);
+  const to = list.findIndex(x => x.id === target) + (after ? 1 : 0);
+  list.splice(to, 0, p);
+  markDirty();
+  drawGrid();
+}
+
+// resizePanel follows the corner being dragged, a column and a row at a
+// time.
+function resizePanel(e, p, el) {
+  e.preventDefault();
+  const grip = e.currentTarget;
+  try { grip.setPointerCapture(e.pointerId); } catch { /* the moves still come while over the corner */ }
+  const rect = el.getBoundingClientRect();
+  const col = (db.gridEl.clientWidth - 11 * DB_GAP) / 12;
+  let w = p.w;
+  let rows = p.h;
+  const move = ev => {
+    w = Math.max(1, Math.min(12, Math.round((ev.clientX - rect.left + DB_GAP) / (col + DB_GAP))));
+    rows = Math.max(1, Math.min(24, Math.round((ev.clientY - rect.top + DB_GAP) / (DB_ROW + DB_GAP))));
+    el.style.setProperty('--w', String(w));
+    el.style.setProperty('--h', String(rows));
+  };
+  const up = () => {
+    grip.removeEventListener('pointermove', move);
+    grip.removeEventListener('pointerup', up);
+    grip.removeEventListener('pointercancel', up);
+    if (w === p.w && rows === p.h) return;
+    p.w = w;
+    p.h = rows;
+    markDirty();
+    drawPanel(p);
+  };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', up);
+  grip.addEventListener('pointercancel', up);
+}
+
+function duplicatePanel(p) {
+  const twin = Object.assign(copyOf(p), { id: newPanelID() });
+  const list = db.work.panels;
+  if (list.length >= 60) return toast(t('dbTooMany'), true);
+  list.splice(list.indexOf(p) + 1, 0, twin);
+  const cell = cellOf(p);
+  db.cells.set(twin.id, Object.assign({}, cell, { hidden: new Set(cell.hidden), el: null }));
+  markDirty();
+  drawGrid();
+}
+
+async function removePanel(p) {
+  const ok = await ask({ title: t('dbRemovePanel'), message: t('dbRemovePanelConfirm', p.title || t('dbUntitled')), confirm: t('exRemove'), danger: true });
+  if (!ok) return;
+  db.work.panels = db.work.panels.filter(x => x !== p);
+  db.cells.delete(p.id);
+  markDirty();
+  drawGrid();
+}
+
+function drawPanel(p) {
+  const cell = cellOf(p);
+  if (!cell.el) return;
+  cell.el.classList.toggle('loading', !!cell.loading);
+  cell.titleEl.textContent = fillVars(p.title || '', db.values, 'text');
+  cell.titleEl.title = cell.titleEl.textContent;
+  cell.body.className = ['table', 'logs', 'text'].includes(p.type) ? 'db-body scroll' : 'db-body';
+  fill(cell.body, panelContent(p, cell, { height: panelHeight(p.h) - DB_HEAD - 12, redraw: () => drawPanel(p), onZoom: setDashAbsolute }));
+}
+
+// panelSeries are the series a panel's queries found, colored in turn.
+function panelSeries(cell) {
+  const out = [];
+  cell.qs.forEach((q, qi) => {
+    if (q.hidden || !q.res) return;
+    for (const s of q.res.series || []) {
+      out.push({ key: qi + '|' + JSON.stringify(s.labels), q, qi, labels: s.labels, name: legendName(q, s.labels), values: s.values });
+    }
+  });
+  out.forEach((s, i) => { s.color = queryColor(i); });
+  return out;
+}
+
+function panelContent(p, cell, opts) {
+  if (p.type === 'text') return h('div', { class: 'db-text' }, textBlocks(p.text));
+  if (!(p.queries || []).length) return h('div', { class: 'empty-note' }, t('dbNoQueries'));
+  if (!cell.range) return h('div', { class: 'empty-note' }, t('loading'));
+  const failed = cell.qs.filter(q => q.error);
+  const errors = failed.slice(0, 3).map(q => h('div', { class: 'db-error', title: q.error },
+    (cell.qs.length > 1 ? String.fromCharCode(65 + cell.qs.indexOf(q)) + ': ' : '') + q.error));
+  const height = opts.height - 18 * errors.length;
+  switch (p.type) {
+    case 'logs': return [errors, logsContent(cell)];
+    case 'stat': return [errors, statContent(p, cell, height)];
+    case 'table': return [errors, exploreTable(panelSeries(cell), unitFormat(p.unit || 'auto', cell.qs), cell.qs.length > 1)];
+    default: return [errors, graphContent(p, cell, height, opts)];
+  }
+}
+
+function graphContent(p, cell, height, { redraw, onZoom }) {
+  const all = panelSeries(cell);
+  const shown = all.filter(s => !cell.hidden.has(s.key));
+  const format = unitFormat(p.unit || 'auto', cell.qs);
+  const legend = all.length > 1 && all.length <= 60 && height >= 150;
+  const r = cell.range;
+  const toggle = (s, e) => {
+    if (e.ctrlKey || e.metaKey) {
+      if (cell.hidden.has(s.key)) cell.hidden.delete(s.key);
+      else cell.hidden.add(s.key);
+    } else {
+      const alone = all.every(x => x === s || cell.hidden.has(x.key)) && !cell.hidden.has(s.key);
+      cell.hidden.clear();
+      if (!alone) all.forEach(x => { if (x !== s) cell.hidden.add(x.key); });
+    }
+    redraw();
+  };
+  return [
+    plot({
+      series: shown, start: r.from, step: r.step, count: Math.round((r.to - r.from) / r.step) + 1,
+      height: Math.max(40, height - 22 - (legend ? 46 : 0)), format, mode: p.mode || 'lines', onZoom,
+      empty: all.length ? t('exAllHidden') : t('dbNoData'),
+    }),
+    legend ? h('div', { class: 'db-legend' }, all.map(s => {
+      const dot = h('span', { class: 'plot-dot' });
+      dot.style.background = s.color;
+      return h('span', { class: cell.hidden.has(s.key) ? 'off' : null, title: s.name + '\n' + t('exLegendHelp'), onclick: e => toggle(s, e) }, dot, s.name);
+    })) : null,
+  ];
+}
+
+// reduceValues is a series as one number.
+function reduceValues(values, how) {
+  if (how === 'sum') {
+    let sum = 0;
+    let n = 0;
+    for (const v of values) {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        sum += v;
+        n++;
+      }
+    }
+    return n ? sum : null;
+  }
+  return seriesStats(values)[DB_REDUCE.includes(how) ? how : 'last'];
+}
+
+// statLevel colors a value by its thresholds; thresholds that fall mean
+// that less is worse.
+function statLevel(v, warn, crit) {
+  if (v == null || (warn == null && crit == null)) return '';
+  const down = warn != null && crit != null && crit < warn;
+  const past = x => x != null && (down ? v <= x : v >= x);
+  return past(crit) ? 'bad' : past(warn) ? 'warn' : 'ok';
+}
+
+function statContent(p, cell, height) {
+  const series = panelSeries(cell).slice(0, 24);
+  if (!series.length) return h('div', { class: 'empty-note' }, t('dbNoData'));
+  const format = unitFormat(p.unit || 'auto', cell.qs);
+  const one = series.length === 1;
+  const spark = one && height >= 110;
+  const perRow = Math.max(1, Math.floor(p.w / 2));
+  const size = one
+    ? Math.max(18, Math.min(72, (height - (spark ? 44 : 0) - 18) * 0.6))
+    : Math.max(14, Math.min(34, (height / Math.ceil(series.length / perRow)) * 0.4));
+  return h('div', { class: one ? 'db-stats one' : 'db-stats' }, series.map(s => {
+    const v = reduceValues(s.values, p.reduce || 'last');
+    const level = statLevel(v, p.warn, p.crit);
+    const value = h('div', { class: 'db-stat-value' }, v == null ? '—' : format(v));
+    value.style.fontSize = size + 'px';
+    // A lone series of a query without labels needs no name.
+    const named = s.q.legend || Object.keys(s.labels).some(k => k !== '__name__');
+    return h('div', { class: level ? 'db-stat ' + level : 'db-stat', title: s.name },
+      value, !one || named ? h('div', { class: 'db-stat-name' }, s.name) : null,
+      spark ? sparkline(s.values, level ? null : s.color) : null);
+  }));
+}
+
+function logsContent(cell) {
+  if (!cell.qs.some(q => q.logs)) return h('div', { class: 'empty-note' }, t('dbLogsOnly'));
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const lines = cell.qs.filter(q => q.logs && !q.hidden).flatMap(q => q.logs.lines)
+    .filter(l => matches(words, [l.message])).sort((a, b) => when(b.t) - when(a.t));
+  return lines.length ? h('div', { class: 'db-logs' }, lines.slice(0, 500).map(logLine)) : h('div', { class: 'empty-note' }, t('exNoLogs'));
+}
+
+// textBlocks writes a text panel: lines starting with # are headings, with
+// - list items; **bold**, `code` and [links](address) to web pages work.
+// Everything else is text, never HTML.
+function textBlocks(text) {
+  const out = [];
+  let list = null;
+  for (const line of String(text || '').split('\n')) {
+    const item = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (item) {
+      if (!list) out.push(list = h('ul'));
+      list.append(h('li', null, inlineText(item[1])));
+      continue;
+    }
+    list = null;
+    const head = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (head) out.push(h('h' + (head[1].length + 2), null, inlineText(head[2])));
+    else if (line.trim()) out.push(h('p', null, inlineText(line)));
+  }
+  return out;
+}
+function inlineText(s) {
+  const parts = [];
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let at = 0;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m.index > at) parts.push(s.slice(at, m.index));
+    if (m[1]) parts.push(h('strong', null, m[1]));
+    else if (m[2]) parts.push(h('code', null, m[2]));
+    else parts.push(h('a', { href: m[4], target: '_blank', rel: 'noopener noreferrer' }, m[3]));
+    at = re.lastIndex;
+  }
+  parts.push(s.slice(at));
+  return parts;
+}
+
+// viewPanel shows a panel large.
+function viewPanel(p) {
+  const cell = cellOf(p);
+  const body = h('div', { class: 'db-view-body' });
+  const draw = () => fill(body, panelContent(p, cell, {
+    height: Math.max(240, Math.round(window.innerHeight * 0.6)), redraw: draw,
+    onZoom: (a, b) => { close(); setDashAbsolute(a, b); },
+  }));
+  draw();
+  const close = modal(h('div', { class: 'dialog db-view' },
+    h('div', { class: 'db-view-head' }, h('h2', null, fillVars(p.title || '', db.values, 'text') || t('dbUntitled')), h('span', { class: 'grow' }),
+      p.type === 'text' ? null : button(t('dbExplore'), () => { close(); panelToExplore(p, false); }),
+      button(t('close'), () => close())),
+    body));
+}
+
+// panelToExplore opens a panel's queries in Explore: as they run, with
+// the values picked, or, to edit them, as they are, to bring back.
+function panelToExplore(p, edit) {
+  const queries = p.queries && p.queries.length ? p.queries : [['']];
+  const x = { r: db.range || [db.from, db.to], q: edit ? queries : queries.map(e => fillEntry(e, db.values)) };
+  if (p.unit) x.u = p.unit;
+  if (p.mode) x.m = p.mode;
+  if (edit) x.d = { id: db.id, p: p.id, t: db.work.title, pt: p.title || '', v: packVars(db.values) };
+  go({ view: 'explore', ns: state.ns, x: JSON.stringify(x) });
+}
+
+// ---- editing
+
+function panelEditor(p) {
+  const v = copyOf(p || { title: '', type: 'graph', w: 6, h: 4, queries: [['']] });
+  const title = h('input', { type: 'text', value: v.title || '', maxlength: '120', autocomplete: 'off' });
+  const type = h('select', null, DB_TYPES.map(x => h('option', { value: x, selected: x === v.type }, t('dbType.' + x))));
+  const width = h('input', { type: 'number', min: '1', max: '12', value: String(v.w || 6) });
+  const height = h('input', { type: 'number', min: '1', max: '24', value: String(v.h || 4) });
+  const unit = h('select', null, EX_UNITS.map(u => h('option', { value: u, selected: u === (v.unit || 'auto') }, t('unit.' + u))));
+  const mode = h('select', null, [['lines', t('exLines')], ['area', t('exArea')], ['stacked', t('exStacked')]].map(([k, l]) =>
+    h('option', { value: k, selected: k === (v.mode || 'lines') }, l)));
+  const reduce = h('select', null, DB_REDUCE.map(r => h('option', { value: r, selected: r === (v.reduce || 'last') }, t('dbReduce.' + r))));
+  const warn = h('input', { type: 'number', step: 'any', value: v.warn != null ? String(v.warn) : '' });
+  const crit = h('input', { type: 'number', step: 'any', value: v.crit != null ? String(v.crit) : '' });
+  const text = h('textarea', { rows: '8', maxlength: '10000' });
+  text.value = v.text || '';
+  const qs = (v.queries || []).map(entryQuery);
+  const qsEl = h('div', { class: 'db-queries' });
+  const drawQs = () => fill(qsEl, qs.map((q, i) => editorQuery(q, i, {
+    redraw: drawQs,
+    remove: () => {
+      qs.splice(i, 1);
+      drawQs();
+    },
+  })), qs.length < 10 ? h('div', null, button('+ ' + t('exAddQuery'), () => {
+    qs.push(newQuery('', '', false, state.storeOn === false && ex.sources.length ? ex.sources[0].id : ''));
+    drawQs();
+  })) : null);
+  drawQs();
+  const parts = {
+    unit: dialogField(t('exUnit'), unit),
+    mode: dialogField(t('exMode'), mode),
+    stat: h('div', { class: 'field-row three' }, dialogField(t('dbReduce'), reduce), dialogField(t('dbWarn'), warn), dialogField(t('dbCrit'), crit)),
+    text: dialogField(t('dbText'), text, t('dbTextHelp')),
+    queries: h('div', { class: 'field' }, h('span', null, t('dbQueries')), qsEl),
+  };
+  const show = () => {
+    const ty = type.value;
+    parts.unit.hidden = ty === 'text' || ty === 'logs';
+    parts.mode.hidden = ty !== 'graph';
+    parts.stat.hidden = ty !== 'stat';
+    parts.text.hidden = ty !== 'text';
+    parts.queries.hidden = ty === 'text';
+  };
+  type.addEventListener('change', show);
+  show();
+  const apply = () => {
+    const out = { id: v.id || newPanelID(), title: title.value.trim(), type: type.value, w: clampInt(width.value, 1, 12, 6), h: clampInt(height.value, 1, 24, 4) };
+    if (out.type === 'text') {
+      out.text = text.value;
+    } else {
+      out.queries = qs.filter(q => q.expr.trim() || isES(q)).map(queryEntry);
+      if (out.type !== 'logs' && unit.value !== 'auto') out.unit = unit.value;
+      if (out.type === 'graph' && mode.value !== 'lines') out.mode = mode.value;
+      if (out.type === 'stat') {
+        out.reduce = reduce.value;
+        if (warn.value !== '' && Number.isFinite(Number(warn.value))) out.warn = Number(warn.value);
+        if (crit.value !== '' && Number.isFinite(Number(crit.value))) out.crit = Number(crit.value);
+      }
+    }
+    const list = db.work.panels;
+    const i = list.findIndex(x => x.id === out.id);
+    if (i >= 0) list[i] = out;
+    else list.push(out);
+    markDirty();
+    drawGrid();
+    const [from, to] = dashRange();
+    runPanel(out, from, to, db.ctl ? db.ctl.signal : undefined);
+    return out;
+  };
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog db-wide',
+    onsubmit: e => {
+      e.preventDefault();
+      if (!p && db.work.panels.length >= 60) {
+        note.say(t('dbTooMany'), 'bad');
+        return;
+      }
+      apply();
+      close();
+    },
+  },
+  h('h2', null, p ? t('dbEditPanel') : t('dbNewPanel')),
+  h('div', { class: 'field-row panel-row' }, dialogField(t('dbPanelTitle'), title), dialogField(t('dbType'), type),
+    dialogField(t('dbWidth'), width), dialogField(t('dbHeight'), height)),
+  parts.queries, h('div', { class: 'field-row' }, parts.unit, parts.mode), parts.stat, parts.text,
+  note,
+  h('div', { class: 'dialog-actions' },
+    button(t('dbInExplore'), () => {
+      if (!p && db.work.panels.length >= 60) {
+        note.say(t('dbTooMany'), 'bad');
+        return;
+      }
+      const out = apply();
+      close();
+      panelToExplore(out, true);
+    }),
+    h('span', { class: 'grow' }),
+    button(t('cancel'), () => close()),
+    h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
+  const close = modal(form);
+  title.focus();
+}
+
+// editorQuery is a query in the panel editor: PromQL is written here,
+// Elasticsearch's form is in Explore.
+function editorQuery(q, i, { redraw, remove }) {
+  const opts = state.storeOn === false && q.src ? [] : [['', t('exStore')]];
+  for (const s of ex.sources) opts.push([s.id, s.name + ' · ' + (s.type === 'elasticsearch' ? 'Elasticsearch' : 'Prometheus')]);
+  if (q.src && !ex.sources.some(s => s.id === q.src)) opts.push([q.src, t('exSourceGone')]);
+  const src = h('select', {
+    'aria-label': t('exSource'),
+    onchange: e => {
+      q.src = e.target.value;
+      q.es = isES(q) ? esDefaults(sourceOf(q)) : null;
+      redraw();
+    },
+  }, opts.map(([id, name]) => h('option', { value: id, selected: id === q.src }, name)));
+  const legend = h('input', { type: 'text', class: 'mono', value: q.legend, placeholder: t('exLegend'), 'aria-label': t('exLegend'), oninput: e => { q.legend = e.target.value; } });
+  let body;
+  if (isES(q)) {
+    const es = q.es;
+    const what = es.mode === 'logs' ? t('exLogs') : es.metric + (es.field ? '(' + es.field + ')' : '') + (es.groupBy ? ' · ' + t('exBy') + ' ' + es.groupBy : '');
+    body = h('div', { class: 'db-es-summary small-text' }, h('span', { class: 'mono' }, [es.index || sourceOf(q).index || '*', es.query || '*', what].join(' · ')),
+      h('span', { class: 'muted' }, ' — ' + t('dbESHint')));
+  } else {
+    body = h('textarea', { class: 'mono', rows: '2', spellcheck: 'false', placeholder: t('exPlaceholder'), 'aria-label': t('exQuery'), oninput: e => { q.expr = e.target.value; } });
+    body.value = q.expr;
+  }
+  return h('div', { class: 'db-qrow' }, h('span', { class: 'ex-letter' }, String.fromCharCode(65 + i)), src, body,
+    isES(q) && q.es.mode === 'logs' ? h('span') : legend, iconButton('✕', t('exRemove'), remove));
+}
+
+function dashSettings() {
+  const w = db.work;
+  const title = h('input', { type: 'text', value: w.title, maxlength: '120', autocomplete: 'off' });
+  const desc = h('textarea', { rows: '2', maxlength: '2000' });
+  desc.value = w.description || '';
+  const ranges = EX_RANGES.includes(w.range) ? EX_RANGES : [...EX_RANGES, w.range];
+  const range = h('select', null, ranges.map(r => h('option', { value: r, selected: r === w.range }, rangeLabel(r))));
+  const every = [...new Set([...DB_REFRESH, w.refresh || 0])].sort((a, b) => a - b);
+  const refreshSel = h('select', null, every.map(s => h('option', { value: String(s), selected: s === (w.refresh || 0) }, s ? durText(s * 1000) : t('exOff'))));
+  const vars = copyOf(w.variables || []);
+  const proms = ex.sources.filter(s => s.type === 'prometheus');
+  const varsEl = h('div', { class: 'db-var-rows' });
+  const labels = h('datalist', { id: 'db-label-names' });
+  storeLabelNames('store', '').then(names => fill(labels, names.map(n => h('option', { value: n })))).catch(() => {});
+  const drawRows = () => {
+    const input = (v, key, attrs) => h('input', Object.assign({
+      type: 'text', class: 'mono', value: v[key] || '', autocomplete: 'off', spellcheck: 'false',
+      oninput: e => { v[key] = e.target.value.trim(); },
+    }, attrs));
+    const check = (v, key, label) => h('label', { class: 'check-line' }, h('input', { type: 'checkbox', checked: !!v[key], onchange: e => { v[key] = e.target.checked; } }), label);
+    fill(varsEl,
+      vars.map((v, i) => h('div', { class: 'db-var-row' },
+        input(v, 'name', { placeholder: t('dbVarName'), 'aria-label': t('dbVarName'), maxlength: '41' }),
+        input(v, 'title', { placeholder: t('dbVarTitle'), 'aria-label': t('dbVarTitle'), class: '', maxlength: '100' }),
+        proms.length ? h('select', { 'aria-label': t('exSource'), onchange: e => { v.source = e.target.value; } },
+          h('option', { value: '' }, t('exStore')), proms.map(s => h('option', { value: s.id, selected: s.id === v.source }, s.name))) : h('span'),
+        input(v, 'label', { placeholder: t('dbVarLabel'), 'aria-label': t('dbVarLabel'), list: 'db-label-names' }),
+        input(v, 'match', { placeholder: t('dbVarMatch'), 'aria-label': t('dbVarMatch') }),
+        check(v, 'multi', t('dbVarMulti')), check(v, 'all', t('dbVarAll')),
+        iconButton('✕', t('exRemove'), () => {
+          vars.splice(i, 1);
+          drawRows();
+        }))),
+      vars.length < 20 ? h('div', null, button('+ ' + t('dbAddVar'), () => {
+        vars.push({ name: '', label: '' });
+        drawRows();
+      })) : null, labels);
+  };
+  drawRows();
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog db-wide',
+    onsubmit: e => {
+      e.preventDefault();
+      const kept = vars.filter(v => v.name || v.label);
+      const seen = new Set();
+      for (const v of kept) {
+        if (!DB_VAR.test(v.name || '') || seen.has(v.name) || !DB_LABEL.test(v.label || '')) {
+          note.say(t('dbVarBad'), 'bad');
+          return;
+        }
+        seen.add(v.name);
+      }
+      if (!title.value.trim()) {
+        note.say(t('dbNeedTitle'), 'bad');
+        return;
+      }
+      const before = w.range;
+      Object.assign(w, { title: title.value.trim(), description: desc.value.trim(), range: range.value, refresh: Number(refreshSel.value), variables: kept });
+      if (w.range !== before && db.range === before) db.range = w.range;
+      db.auto = w.refresh;
+      close();
+      markDirty();
+      drawDashboard();
+      runDashboard();
+    },
+  },
+  h('h2', null, t('dbSettings')),
+  h('div', { class: 'field-row' }, dialogField(t('dbTitle'), title), h('div', { class: 'field-row' }, dialogField(t('dbRange'), range), dialogField(t('dbRefresh'), refreshSel))),
+  dialogField(t('dbDescription'), desc),
+  h('div', { class: 'field' }, h('span', null, t('dbVariables')), h('span', { class: 'muted small-text' }, t('dbVarHelp')), varsEl),
+  note,
+  h('div', { class: 'dialog-actions' },
+    db.dash.canEdit ? button(t('dbRemove'), () => { close(); removeDashboard(db.dash); }, 'danger') : null,
+    h('span', { class: 'grow' }),
+    button(t('cancel'), () => close()),
+    h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
+  const close = modal(form);
+  title.focus();
+}
+
+function dashBody(d) {
+  return { title: d.title, description: d.description || '', range: d.range, refresh: d.refresh || 0, variables: d.variables || [], panels: d.panels, version: d.version };
+}
+
+async function saveDashboard() {
+  let saved;
+  try {
+    saved = await api('dashboards/' + enc(db.id), { method: 'PUT', body: dashBody(db.work) });
+  } catch (e) {
+    if (e.status === 401) return;
+    if (e.status === 409) {
+      const ok = await ask({ title: t('dbConflictTitle'), message: e.message + ' ' + t('dbConflictCopy'), confirm: t('dbSaveCopy') });
+      if (ok) copyDashboard(true);
+      return;
+    }
+    toast(e.message, true);
+    return;
+  }
+  toast(t('dbSaved'));
+  Object.assign(db, { dash: saved, work: copyOf(saved), dirty: false, edit: false });
+  db.data = state.data = { dash: saved };
+  drawDashboard();
+}
+
+async function discardDashboard() {
+  if (db.dirty) {
+    const ok = await ask({ title: t('dbDiscardTitle'), message: t('dbDiscardConfirm'), confirm: t('dbDiscard'), danger: true });
+    if (!ok) return;
+  }
+  Object.assign(db, { work: copyOf(db.dash), dirty: false, edit: false });
+  drawDashboard();
+  runDashboard();
+}
+
+// copyDashboard saves a dashboard anew: as saved, or with the changes
+// being made.
+async function copyDashboard(changed) {
+  const body = dashBody(changed ? db.work : db.dash);
+  delete body.version;
+  body.title = t('dbCopyOf', body.title).slice(0, 120);
+  let saved;
+  try {
+    saved = await api('dashboards', { method: 'POST', body });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  if (changed) Object.assign(db, { dirty: false, edit: false, work: copyOf(db.dash) });
+  toast(t('dbCopied'));
+  openDashboard(saved, false);
+}
+
+function exportDashboard() {
+  const d = dashBody(db.work);
+  delete d.version;
+  const name = d.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'dashboard';
+  download(JSON.stringify(d, null, 2) + '\n', name + '.json');
+}
+
+// ---- importing, from here or from Grafana
+
+function importDashboard() {
+  const area = h('textarea', { rows: '12', class: 'mono', spellcheck: 'false', placeholder: t('dbImportPaste'), 'aria-label': t('dbImportPaste') });
+  const note = formNote();
+  const file = h('input', { type: 'file', accept: '.json,application/json' });
+  file.addEventListener('change', () => {
+    const f = file.files[0];
+    if (!f) return;
+    if (f.size > 4 << 20) {
+      note.say(t('dbImportBig'), 'bad');
+      return;
+    }
+    f.text().then(s => { area.value = s; }).catch(e => note.say(e.message, 'bad'));
+  });
+  const proms = ex.sources.filter(s => s.type === 'prometheus');
+  const choices = (state.storeOn === false ? [] : [['', t('exStore')]]).concat(proms.map(s => [s.id, s.name]));
+  const target = choices.length > 1 ? h('select', null, choices.map(([id, name]) => h('option', { value: id }, name))) : null;
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      let x;
+      try {
+        x = JSON.parse(area.value);
+      } catch (err) {
+        note.say(t('dbImportBad', err.message), 'bad');
+        return;
+      }
+      if (x && typeof x === 'object' && x.dashboard && typeof x.dashboard === 'object') x = x.dashboard;
+      if (!x || typeof x !== 'object' || Array.isArray(x)) {
+        note.say(t('dbImportBad', '{…}'), 'bad');
+        return;
+      }
+      const src = target ? target.value : choices.length ? choices[0][0] : '';
+      const { dash, skipped } = isGrafana(x) ? fromGrafana(x, src) : { dash: plainDashboard(x), skipped: [] };
+      let saved;
+      try {
+        saved = await api('dashboards', { method: 'POST', body: dash });
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        return;
+      }
+      close();
+      toast(skipped.length ? t('dbImportedSkipped', skipped.length, skipped.slice(0, 6).join(', ')) : t('dbImported'));
+      openDashboard(saved, false);
+    },
+  },
+  h('h2', null, t('dbImport')), h('p', { class: 'muted small-text' }, t('dbImportHelp')),
+  file, area, target ? dialogField(t('dbImportSource'), target, t('dbImportSourceHelp')) : null, note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('dbImport'))));
+  const close = modal(form);
+  area.focus();
+}
+
+function plainDashboard(x) {
+  return {
+    title: String(x.title || ''), description: String(x.description || ''), range: x.range, refresh: x.refresh,
+    variables: Array.isArray(x.variables) ? x.variables : [], panels: Array.isArray(x.panels) ? x.panels : [],
+  };
+}
+
+function isGrafana(x) {
+  return 'schemaVersion' in x || 'templating' in x || Array.isArray(x.rows) ||
+    (Array.isArray(x.panels) && x.panels.some(p => p && typeof p === 'object' && (p.gridPos || p.targets)));
+}
+
+const GRAFANA_TYPES = {
+  timeseries: 'graph', graph: 'graph', 'state-timeline': 'graph', barchart: 'graph', stat: 'stat', singlestat: 'stat',
+  gauge: 'stat', bargauge: 'stat', table: 'table', 'table-old': 'table', text: 'text',
+};
+const GRAFANA_UNITS = {
+  bytes: 'bytes', decbytes: 'bytes', Bps: 'bytesSec', binBps: 'bytesSec', s: 'seconds', ms: 'ms',
+  percentunit: 'percentUnit', percent: 'percent', reqps: 'perSec', rps: 'perSec', ops: 'perSec', wps: 'perSec',
+};
+const GRAFANA_CALCS = { lastNotNull: 'last', last: 'last', current: 'last', mean: 'mean', avg: 'mean', max: 'max', min: 'min', sum: 'sum', total: 'sum' };
+
+// fromGrafana takes over a Grafana dashboard: its panels of PromQL
+// queries in their order on the page, their sizes, units and thresholds,
+// and its label_values variables; their queries read src. It tells what
+// it left out.
+function fromGrafana(g, src) {
+  const skipped = [];
+  const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+  const pos = p => (p && p.gridPos) || {};
+  let flat = [];
+  if (Array.isArray(g.panels)) {
+    for (const p of g.panels) {
+      if (!p || typeof p !== 'object') continue;
+      // A collapsed row keeps its panels.
+      if (p.type === 'row') flat.push(...(Array.isArray(p.panels) ? p.panels : []));
+      else flat.push(p);
+    }
+    flat = flat.filter(p => p && typeof p === 'object').sort((a, b) => (pos(a).y || 0) - (pos(b).y || 0) || (pos(a).x || 0) - (pos(b).x || 0));
+  } else if (Array.isArray(g.rows)) {
+    // Dashboards before Grafana 5 have rows of panels a span of twelve wide.
+    for (const row of g.rows) {
+      const height = parseInt(row && row.height, 10) || 250;
+      for (const p of (row && Array.isArray(row.panels) ? row.panels : [])) {
+        if (p && typeof p === 'object') flat.push(Object.assign({}, p, { gridPos: { w: (num(p.span) || 12) * 2, h: height / 30 } }));
+      }
+    }
+  }
+  const panels = [];
+  for (const p of flat) {
+    const name = String(p.title || p.type || '?');
+    const type = GRAFANA_TYPES[p.type];
+    if (!type || panels.length >= 60) {
+      skipped.push(name);
+      continue;
+    }
+    // Grafana's rows are 30px with 8px between them; its columns are 24.
+    const rows = num(pos(p).h) || 8;
+    const px = rows * 30 + (rows - 1) * 8;
+    const out = {
+      title: String(p.title || '').slice(0, 120), type,
+      w: clampN((num(pos(p).w) || 12) / 2, 1, 12), h: clampN((px + DB_GAP) / (DB_ROW + DB_GAP), 1, 24),
+    };
+    if (type === 'text') {
+      out.text = String((p.options && p.options.content) || p.content || '').slice(0, 10000);
+      panels.push(out);
+      continue;
+    }
+    // Loki's and other sources' queries are not PromQL, though they have
+    // an expr too.
+    const kind = x => (x && x.datasource && typeof x.datasource === 'object' && typeof x.datasource.type === 'string' ? x.datasource.type : '');
+    const promql = x => {
+      const k = kind(x) || kind(p);
+      return !k || k === 'prometheus' || k === '-- Mixed --' || k === 'datasource';
+    };
+    const targets = (Array.isArray(p.targets) ? p.targets : []).filter(x => x && typeof x.expr === 'string' && x.expr.trim() && promql(x));
+    if (!targets.length) {
+      skipped.push(name);
+      continue;
+    }
+    out.queries = targets.slice(0, 10).map(x => {
+      const legend = typeof x.legendFormat === 'string' && x.legendFormat !== '__auto' ? x.legendFormat : '';
+      return src ? [x.expr, legend, x.hide ? 1 : 0, src, null] : legend || x.hide ? [x.expr, legend, x.hide ? 1 : 0] : [x.expr];
+    });
+    const fc = (p.fieldConfig && p.fieldConfig.defaults) || {};
+    const unit = GRAFANA_UNITS[fc.unit || p.format || (Array.isArray(p.yaxes) && p.yaxes[0] && p.yaxes[0].format) || ''];
+    if (unit && type !== 'logs') out.unit = unit;
+    if (type === 'graph') {
+      const custom = fc.custom || {};
+      if ((custom.stacking && custom.stacking.mode === 'normal') || p.stack === true) out.mode = 'stacked';
+      else if (num(custom.fillOpacity) > 0) out.mode = 'area';
+    }
+    if (type === 'stat') {
+      const calcs = (p.options && p.options.reduceOptions && p.options.reduceOptions.calcs) || [];
+      out.reduce = GRAFANA_CALCS[calcs[0]] || GRAFANA_CALCS[p.valueName] || 'last';
+      const steps = ((fc.thresholds && fc.thresholds.steps) || []).map(s => num(s && s.value)).filter(v => v != null);
+      if (steps.length === 1) out.crit = steps[0];
+      else if (steps.length > 1) [out.warn, out.crit] = [steps[0], steps[steps.length - 1]];
+      else if (typeof p.thresholds === 'string') {
+        const [a, b] = p.thresholds.split(',').map(s => (s.trim() === '' ? NaN : Number(s)));
+        if (Number.isFinite(a)) out.warn = a;
+        if (Number.isFinite(b)) out.crit = b;
+      }
+    }
+    panels.push(out);
+  }
+  const variables = [];
+  for (const v of (g.templating && Array.isArray(g.templating.list) ? g.templating.list : [])) {
+    // Picking a data source is done here when importing.
+    if (!v || typeof v !== 'object' || v.type === 'datasource') continue;
+    const q = typeof v.query === 'string' ? v.query : (v.query && typeof v.query.query === 'string' ? v.query.query : '');
+    const m = v.type === 'query' ? /^\s*label_values\(\s*(?:(.+?)\s*,\s*)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\)\s*$/.exec(q) : null;
+    if (!m || !DB_VAR.test(String(v.name || '')) || variables.length >= 20) {
+      skipped.push('$' + (v.name || '?'));
+      continue;
+    }
+    variables.push({ name: v.name, title: String(v.label || '').slice(0, 100), source: src, label: m[2], match: (m[1] || '').slice(0, 2000), multi: !!v.multi, all: !!v.includeAll });
+  }
+  const from = /^now-(\d{1,3})([mhd])$/.exec((g.time && g.time.from) || '');
+  const every = /^(\d+)([smhd])$/.exec(typeof g.refresh === 'string' ? g.refresh : '');
+  return {
+    dash: {
+      title: String(g.title || 'Grafana').slice(0, 120), description: String(g.description || '').slice(0, 2000),
+      range: from ? from[1] + from[2] : '6h',
+      refresh: every ? Math.min(86400, Number(every[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[every[2]]) : 0,
+      variables, panels,
+    },
+    skipped,
+  };
+}
+
+// ---- from Explore
+
+// addToDashboard puts Explore's queries on a dashboard as a panel.
+async function addToDashboard() {
+  const entries = ex.queries.filter(q => q.expr.trim() || isES(q)).map(queryEntry);
+  if (!entries.length) return;
+  let list;
+  try {
+    list = (await api('dashboards')).dashboards.filter(mayEditDash);
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  const pick = h('select', null, list.map(d => h('option', { value: d.id, selected: d.id === db.id }, d.title)), h('option', { value: '' }, t('dbNewOne')));
+  const newTitle = h('input', { type: 'text', maxlength: '120', autocomplete: 'off' });
+  const newField = dialogField(t('dbNewTitle'), newTitle);
+  const show = () => { newField.hidden = pick.value !== ''; };
+  pick.addEventListener('change', show);
+  show();
+  const named = ex.queries.find(q => q.legend && !/\{\{/.test(q.legend));
+  const title = h('input', { type: 'text', maxlength: '120', autocomplete: 'off', value: named ? named.legend : '' });
+  const logs = ex.queries.some(q => isES(q) && q.es && q.es.mode === 'logs');
+  const type = h('select', null, ['graph', 'stat', 'table', 'logs'].map(x => h('option', { value: x, selected: x === (logs ? 'logs' : 'graph') }, t('dbType.' + x))));
+  const width = h('select', null, [[6, t('dbHalf')], [12, t('dbFull')], [4, t('dbThird')]].map(([n, label]) => h('option', { value: String(n) }, label)));
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      const panel = { id: newPanelID(), title: title.value.trim(), type: type.value, w: Number(width.value), h: type.value === 'stat' ? 3 : 5, queries: entries };
+      if (ex.unit !== 'auto' && panel.type !== 'logs') panel.unit = ex.unit;
+      if (ex.mode !== 'lines' && panel.type === 'graph') panel.mode = ex.mode;
+      let saved;
+      try {
+        if (!pick.value) {
+          saved = await api('dashboards', { method: 'POST', body: { title: newTitle.value, range: EX_RANGES.includes(ex.range) ? ex.range : '6h', panels: [panel] } });
+        } else {
+          const d = await api('dashboards/' + enc(pick.value));
+          if (d.panels.length >= 60) throw new Error(t('dbTooMany'));
+          d.panels.push(panel);
+          saved = await api('dashboards/' + enc(d.id), { method: 'PUT', body: dashBody(d) });
+        }
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        return;
+      }
+      close();
+      toast(t('dbAdded', saved.title));
+      openDashboard(saved, false);
+    },
+  },
+  h('h2', null, t('dbAddTitle')),
+  dialogField(t('dbWhich'), pick), newField,
+  dialogField(t('dbPanelTitle'), title),
+  h('div', { class: 'field-row' }, dialogField(t('dbType'), type), dialogField(t('dbWidth'), width)),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
+  const close = modal(form);
+  (list.length ? title : newTitle).focus();
+}
+
+// The banner over Explore while a dashboard's panel is edited there.
+function drawExploreBanner() {
+  if (!ex.bannerEl) return;
+  const d = ex.dash;
+  fill(ex.bannerEl, d ? h('div', { class: 'banner ex-dash' },
+    h('span', null, t('exEditingPanel', d.pt || t('dbUntitled'), d.t)), h('span', { class: 'grow' }),
+    button(t('exApplyPanel'), () => {
+      db.pending = { id: d.id, panel: d.p, queries: ex.queries.filter(q => q.expr.trim() || isES(q)).map(queryEntry), unit: ex.unit, mode: ex.mode };
+      backToDashboard(d.id);
+    }, 'primary'),
+    button(t('cancel'), () => backToDashboard(d.id))) : null);
+}
+function backToDashboard(id) {
+  go({ view: 'dashboards', ns: state.ns, rest: [id], x: db.id === id && db.appliedX ? db.appliedX : '' });
+}
+// Changes to a dashboard not saved yet are not lost to a closing tab.
+window.addEventListener('beforeunload', e => {
+  if (db.dirty || db.unsaved.size) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
 // podOwner is the workload whose pods a pod is one of, as the agent names
 // it: a ReplicaSet's pods belong to its Deployment.
 function podOwner(pod) {

@@ -66,9 +66,12 @@ type Executor struct {
 	AllowEdit  bool
 	// AllowScrape enables reading the metrics that pods expose.
 	AllowScrape bool
-	Namespaces  []string
-	MaxLogBytes int64
-	Now         func() time.Time
+	// DataSourceURLs are the data sources the agent may make requests to
+	// for the server (CommandHTTP).
+	DataSourceURLs []*url.URL
+	Namespaces     []string
+	MaxLogBytes    int64
+	Now            func() time.Time
 }
 
 // Capabilities lists what the executor may do beyond reading, for the
@@ -86,6 +89,9 @@ func (e *Executor) Capabilities() []string {
 	}
 	if e.AllowScrape {
 		out = append(out, protocol.CapabilityScrape, protocol.CapabilityCollect)
+	}
+	if len(e.DataSourceURLs) > 0 {
+		out = append(out, protocol.CapabilityDataSource)
 	}
 	return out
 }
@@ -197,6 +203,11 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 			return "", errEditDisabled
 		}
 		return e.apply(ctx, cmd)
+	case protocol.CommandHTTP:
+		if len(e.DataSourceURLs) == 0 {
+			return "", errDataSourcesOff
+		}
+		return e.dataSourceRequest(ctx, cmd)
 	case protocol.CommandFindMetrics:
 		if !e.AllowScrape {
 			return "", errScrapeDisabled

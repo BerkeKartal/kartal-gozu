@@ -55,6 +55,17 @@ tunnel), and the server works under any URL path without configuration.
   Grafana does, in PromQL: many queries on one chart, a query builder,
   completion, any time range, zooming by dragging, a table and a CSV. No
   Prometheus needed for that either.
+- **Your Prometheus and Elasticsearch too.** Explore also queries the
+  Prometheus and Elasticsearch servers you connect, through a cluster's
+  agent when only the cluster reaches them: PromQL next to the store, and
+  documents counted or measured per step, or read as logs. People who see
+  some namespaces see only theirs. And Grafana can read the store as a
+  Prometheus.
+- **Dashboards.** Save charts, numbers, tables, logs and notes on pages that
+  everyone sees, each panel showing what the person looking may see: one
+  time range, variables to pick namespaces or pods, panels moved and resized
+  by dragging. Add a chart from Explore in a click, or import a Grafana
+  dashboard's JSON.
 - **What changed, and what runs where.** A timeline of what changed in each
   cluster (new images, scaling, restarts, nodes going away), with who did it
   when it was done through Kartal Gözü. The versions of every app side by
@@ -123,7 +134,7 @@ minutes, a new build of one app in production. Options:
   - **Pinned:** your starred namespaces (with the same shortcuts) and objects.
   - **Navigation by kind:** each entry shows a count for the cluster or the
     selected namespace, with a badge when something needs attention.
-    - Overview
+    - Overview, Metrics, Explore, Dashboards
     - Workloads: Pods, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs
     - Networking: Services, Ingresses
     - Configuration: ConfigMaps, Secrets, Certificates
@@ -567,6 +578,85 @@ supported: subqueries, `@` and native histograms. Like Prometheus, a series
 counts at a moment if it has a sample in the 5 minutes before. A query
 returns at most 11 000 steps and stops after 30 seconds.
 
+### Data sources: Prometheus and Elasticsearch
+
+Next to the store, Explore queries the Prometheus and Elasticsearch (or
+OpenSearch) servers that admins set up with **Data sources** on that page.
+Each query picks its source:
+
+- a **Prometheus** is queried in PromQL as the store is, with completion of
+  its own metrics and labels; `$__rate_interval` goes by its scrape interval;
+- an **Elasticsearch** charts the documents that match a Lucene query
+  (`log.level:ERROR AND kubernetes.namespace:shop`) per step: how many, or
+  the average, sum, minimum, maximum, number of distinct values or a
+  percentile of a field, for all of them or for each of the most common
+  values of another field (`kubernetes.pod.name`); or lists the newest of
+  them as **logs**, with how many match per step, each line opening into its
+  document.
+
+The server asks a source itself, through `HTTPS_PROXY` if one is set, or a
+cluster's agent asks it, for a source that only the cluster reaches. The
+agent then needs the source's address in `KARTAL_DATASOURCE_URLS` (base URLs
+separated by commas): it reaches nothing outside that list, follows no
+redirects, and sends no headers but authentication and content types.
+Sources may sign in with a user name and password, a bearer token or an
+Elasticsearch API key; these are kept with the other settings, and the UI
+never gets them back. **Try** asks the source what it is before it is saved.
+
+Only people who see every cluster and namespace may query a source, unless
+it is tied to a cluster. Then everyone who sees some of that cluster's
+namespaces may, and sees only theirs: every selector of their PromQL also
+asks that the namespace label match one of them, as prom-label-proxy does
+(their queries must be ones Kartal Gözü's own parser reads), and their
+Elasticsearch searches are filtered on the namespace field, such as
+filebeat's `kubernetes.namespace`.
+
+### The store as a Prometheus, for Grafana
+
+Below `/prometheus`, the server answers as Prometheus's HTTP API does
+(`query`, `query_range`, `labels`, `label/<name>/values`, `series`,
+`metadata`), so Grafana, or anything else that reads Prometheus, can use the
+store as a Prometheus data source: give it
+`https://kartal.example.org/prometheus` (with your sub-path, if any) and a
+user's token as a bearer token, in a custom `Authorization` header. It sees
+what that user sees.
+
+### Dashboards
+
+The **Dashboards** page keeps pages of panels over the store and the data
+sources, as Grafana's dashboards do:
+
+- **Panels**: a graph (lines, areas or stacked), a number (the last, mean,
+  largest, smallest or total value, colored by a warning and a critical
+  threshold, with its trend), a table, Elasticsearch logs, or a text with
+  headings, lists and links. Each has Explore's queries, and is laid out on
+  twelve columns: drag it by its title to move it, by its corner to resize
+  it.
+- **Variables** offer the values of a label, of the store's or a
+  Prometheus's series, such as the namespaces; the series may use the
+  variables before them, so that `pod` can follow `namespace`. Queries use
+  them as `$name`: in PromQL, several values (or All) become a regular
+  expression for `=~`; in a Lucene query, an `OR` of phrases.
+- **One range for all of it**, picked or zoomed into by dragging across a
+  graph, and read again every so often if you like. The address keeps the
+  range and the values picked, to share them.
+- **From Explore and back**: *Add to dashboard* puts Explore's queries on a
+  dashboard; a panel's ↗ opens it in Explore with the values picked, and
+  *Edit the queries in Explore*, while editing, brings them back with
+  *Apply to the panel*.
+- **Import and export**: a dashboard downloads as JSON and comes back from
+  it. A Grafana dashboard's JSON is taken over too: its PromQL panels in
+  their order on the page (rows included), their sizes, units, thresholds
+  and statistics, and its `label_values()` variables; their queries read the
+  store or a Prometheus data source, as you choose. What it cannot take
+  (Loki panels, interval variables) is listed.
+
+Everyone sees every dashboard; operators make them, and a dashboard is
+changed or removed by whoever made it, or by an admin. Saving a dashboard
+someone else saved meanwhile is refused, and offered as a copy instead.
+They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
+`KARTAL_SETTINGS_FILE`), up to 100 dashboards and 600 KiB in all.
+
 ## Configuration
 
 ### Server
@@ -620,6 +710,7 @@ returns at most 11 000 steps and stops after 30 seconds.
 | `KARTAL_VOLUME_STATS` | `false` | Report how full volume claims and node disks are, and the pods' disk use (with `rbac-volumes.yaml`) |
 | `KARTAL_TLS_SECRETS` | `false` | Report when the certificates of TLS Secrets expire (with `rbac-certificates.yaml`) |
 | `KARTAL_POD_METRICS` | `false` | Read the metrics that pods expose (with `rbac-pod-metrics.yaml`) |
+| `KARTAL_DATASOURCE_URLS` | — | Base URLs of the Prometheus and Elasticsearch servers that Explore may query through this agent, separated by commas |
 | `KARTAL_CA_FILE` | — | Extra CA file, if the server uses a private CA |
 | `KARTAL_INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (testing only) |
 | `KARTAL_HEALTH_LISTEN` | `:8081` | Liveness endpoint; `off` disables it |
@@ -688,6 +779,19 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | DELETE | `/api/v1/clusters/{c}/namespaces/{ns}/collect/{id}` | operator | Stops collecting; what was stored stays |
 | PUT | `/api/v1/store/config` | admin | Body: `{"interval": seconds, "retentionDays": days}`; 0 days keeps everything until deleted |
 | POST | `/api/v1/store/delete` | admin | Body: `{"from": ms, "to": ms}`; deletes every sample in between, both ends included |
+| GET | `/api/v1/datasources` | viewer | The data sources the user may query |
+| GET | `/api/v1/datasources/{id}/query_range?query=&start=&end=&step=` | viewer | A Prometheus source's query, as the store's |
+| GET | `/api/v1/datasources/{id}/labels`, `/labels/{name}/values`, `/metrics` | viewer | A Prometheus source's label names, a label's values and its metrics, with `?match=`, `from=` and `to=` |
+| POST | `/api/v1/datasources/{id}/series` | viewer | An Elasticsearch source's series. Body: `{"index", "query", "metric", "field", "groupBy", "size", "start", "end", "step"}`; `metric` is `count`, `avg`, `sum`, `min`, `max`, `cardinality` or `p50` to `p99` |
+| POST | `/api/v1/datasources/{id}/logs` | viewer | An Elasticsearch source's newest documents. Body: `{"index", "query", "size", "start", "end", "step"}` |
+| GET | `/api/v1/datasources/{id}/fields?index=` | viewer | An Elasticsearch source's fields, with their types |
+| GET, POST, PUT, DELETE | `/api/v1/settings/datasources`, `/api/v1/settings/datasources/{id}` | admin | The data sources, without their passwords and tokens (`passwordSet`, `tokenSet`); an empty password or token in a change keeps the saved one |
+| POST | `/api/v1/settings/datasources/test` | admin | Asks a source, as the body sets it up, what it is |
+| GET, POST | `/prometheus/api/v1/query`, `query_range`, `labels`, `series`; GET `label/{name}/values`, `metadata` | viewer | The store, as Prometheus's API answers |
+| GET | `/api/v1/dashboards` | viewer | The dashboards: `{"dashboards": [{"id", "title", "description", "panels", "owner", "updated", "updatedBy"}], "where"}` |
+| GET | `/api/v1/dashboards/{id}` | viewer | A dashboard, with `canEdit`: whether the user may change it |
+| POST | `/api/v1/dashboards` | operator | Saves a new dashboard: `{"title", "description", "range", "refresh", "variables", "panels"}`; the user becomes its owner |
+| PUT, DELETE | `/api/v1/dashboards/{id}` | operator | Changes or removes a dashboard of the user's, or any as an admin. A change carries the `version` it was made on, and is refused with `409` if another was saved since |
 | GET | `/api/v1/store/query_range?query=&start=&end=&step=` | viewer | Evaluates a query at each step (Unix milliseconds; the last hour in about 300 steps by default); returns `{"start", "end", "step", "series": [{"labels", "values"}]}` with a value or `null` at each step |
 | GET | `/api/v1/store/query?query=&time=` | viewer | Evaluates a query at one moment (now by default) |
 | GET | `/api/v1/store/labels?from=&to=&match=` | viewer | The label names of the stored series, of those a selector such as `{namespace="shop"}` picks if given |

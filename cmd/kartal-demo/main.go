@@ -9,7 +9,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +20,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,7 +31,11 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
 	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
+	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/collect"
+	"github.com/BerkeKartal/kartal-gozu/internal/dashboard"
+	"github.com/BerkeKartal/kartal-gozu/internal/datasource"
+	"github.com/BerkeKartal/kartal-gozu/internal/fakees"
 	"github.com/BerkeKartal/kartal-gozu/internal/fakekube"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
@@ -119,13 +127,22 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		Watches:        watches,
 		History:        hist,
 		Collect:        collector,
+		DataSources:    datasource.NewManager(keeper),
+		Dashboards:     dashboard.New(keeper),
 	}
+	selfToken := adminToken
 	if withLDAP {
 		login, err := demoDirectory()
 		if err != nil {
 			return err
 		}
 		cfg.Login = login
+		// Signing in is needed then; the Prometheus source that is the demo
+		// server itself gets a token of its own, which sees everything.
+		if adminToken == "" {
+			selfToken = randomToken()
+			cfg.Users = map[string]auth.User{selfToken: {Name: "prometheus-source", Role: auth.Viewer}}
+		}
 	}
 	server := api.New(cfg, st, log)
 	go backfill(ctx, st, hist, "production")
@@ -141,6 +158,23 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	go db.Run(ctx, time.Minute)
 	collector.Start(ctx)
 	serverURL := "http://" + ln.Addr().String()
+	// An Elasticsearch with the web apps' logs, which only the production
+	// cluster's agent may reach.
+	esURL, err := serveFakeES(ctx)
+	if err != nil {
+		return err
+	}
+	esAllowed, err := agent.ParseDataSourceURLs([]string{esURL})
+	if err != nil {
+		return err
+	}
+	esID, err := demoDataSources(ctx, keeper, serverURL, esURL, selfToken)
+	if err != nil {
+		return err
+	}
+	if err := demoDashboard(ctx, cfg.Dashboards, esID); err != nil {
+		return err
+	}
 
 	for i, c := range clusters {
 		kubeURL, err := serveFake(ctx, c.kube)
@@ -153,7 +187,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 			Token:       fmt.Sprintf("demo-agent-token-%02d", i),
 			HTTP:        &http.Client{Timeout: 30 * time.Second},
 			Collector:   &agent.Collector{Kube: kc, Version: "demo", IncludeSecrets: true, VolumeStats: true, TLSSecrets: true},
-			Executor:    &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true, AllowScrape: true},
+			Executor:    &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true, AllowScrape: true, DataSourceURLs: sources(c.name, esAllowed)},
 			Interval:    5 * time.Second,
 			PollWait:    15 * time.Second,
 			Concurrency: 2,
@@ -381,4 +415,104 @@ func demoStore(dir *string, keeper *settings.Keeper) (db *tsdb.DB, temporary boo
 		}
 	}
 	return db, temporary, db.Flush()
+}
+
+// serveFakeES starts the demo's Elasticsearch on a free local port.
+func serveFakeES(ctx context.Context) (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	srv := &http.Server{Handler: &fakees.Server{}, ReadHeaderTimeout: 10 * time.Second}
+	go srv.Serve(ln)
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	return "http://" + ln.Addr().String(), nil
+}
+
+// sources are the data sources a demo cluster's agent may reach: the
+// Elasticsearch, from production only.
+func sources(cluster string, es []*url.URL) []*url.URL {
+	if cluster == "production" {
+		return es
+	}
+	return nil
+}
+
+// demoDataSources sets up Explore's data sources: the demo server's own
+// Prometheus API, as a Prometheus elsewhere would be, and the
+// Elasticsearch through the production cluster's agent. Both hold
+// production's data, so people who see only some of its namespaces see
+// only theirs. It gives the Elasticsearch's ID.
+func demoDataSources(ctx context.Context, keeper *settings.Keeper, serverURL, esURL, token string) (string, error) {
+	prom := settings.DataSource{Name: "Prometheus", Type: settings.SourcePrometheus, URL: serverURL + "/prometheus",
+		Cluster: "production", Interval: 10}
+	if token != "" {
+		prom.Auth, prom.Token = "bearer", token
+	}
+	es := settings.DataSource{ID: settings.NewCheckID(), Name: "Elasticsearch (logs)", Type: settings.SourceElasticsearch, URL: esURL,
+		Via: "production", Cluster: "production", Index: "logs-*"}
+	prom.ID = settings.NewCheckID()
+	_, err := keeper.Update(ctx, func(s *settings.Settings) error {
+		for _, d := range []settings.DataSource{prom, es} {
+			if err := d.Normalize(); err != nil {
+				return err
+			}
+			s.DataSources = append(s.DataSources, d)
+		}
+		return nil
+	})
+	return es.ID, err
+}
+
+// demoDashboard saves a dashboard of the web apps that production's
+// metric store has, and of their logs in the Elasticsearch esID.
+func demoDashboard(ctx context.Context, m *dashboard.Manager, esID string) error {
+	query := func(v ...any) []json.RawMessage {
+		b, err := json.Marshal(v)
+		if err != nil {
+			panic(err)
+		}
+		return []json.RawMessage{b}
+	}
+	level := func(v float64) *float64 { return &v }
+	const rate = `sum(rate(http_requests_total{namespace=~"$ns"}[$__rate_interval]))`
+	d := settings.Dashboard{
+		Title:       "Web apps",
+		Description: "The web apps of the team-0* namespaces in production: their traffic, errors, speed and logs.",
+		Range:       "1h",
+		Refresh:     30,
+		Variables:   []settings.Variable{{Name: "ns", Title: "Namespace", Label: "namespace", Match: `up{cluster="production"}`, Multi: true, All: true}},
+		Panels: []settings.Panel{
+			{Title: "Requests", Type: "stat", W: 3, H: 3, Unit: "perSec", Queries: query(rate)},
+			{Title: "Errors", Type: "stat", W: 3, H: 3, Unit: "percentUnit", Warn: level(0.05), Crit: level(0.2),
+				Queries: query(`sum(rate(http_requests_total{namespace=~"$ns", code=~"5.."}[$__rate_interval])) / ` + rate)},
+			{Title: "95th percentile", Type: "stat", W: 3, H: 3, Unit: "seconds", Warn: level(0.25), Crit: level(0.5),
+				Queries: query(`histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace=~"$ns"}[$__rate_interval])))`)},
+			{Title: "Pods answering", Type: "stat", W: 3, H: 3, Queries: query(`sum(up{namespace=~"$ns"})`)},
+			{Title: "Requests by namespace", Type: "graph", W: 8, H: 5, Unit: "perSec", Mode: "stacked",
+				Queries: query(`sum by (namespace) (rate(http_requests_total{namespace=~"$ns"}[$__rate_interval]))`, "{{namespace}}")},
+			{Title: "About", Type: "text", W: 4, H: 5, Text: "# Web apps\nEvery team runs the same **web** Deployment, collected every 10 seconds.\n" +
+				"- team-03's pods crash, and fail most of their requests\n- the queue fills up now and then\n\nPick namespaces above; the panels follow. " +
+				"A panel's ↗ opens it in Explore."},
+			{Title: "Server errors", Type: "graph", W: 6, H: 5, Unit: "perSec",
+				Queries: query(`sum by (namespace, code) (rate(http_requests_total{namespace=~"$ns", code=~"5.."}[$__rate_interval]))`, "{{namespace}} {{code}}")},
+			{Title: "Memory by pod", Type: "graph", W: 6, H: 5, Unit: "bytes",
+				Queries: query(`process_resident_memory_bytes{namespace=~"$ns"}`, "{{pod}}")},
+			{Title: "Queue depth", Type: "table", W: 5, H: 5,
+				Queries: query(`max by (namespace, pod) (app_queue_depth{namespace=~"$ns"})`)},
+			{Title: "Error logs", Type: "logs", W: 7, H: 5,
+				Queries: query("", "", 0, esID, map[string]any{"mode": "logs", "index": "logs-*", "query": "log.level:ERROR AND kubernetes.namespace:$ns", "lines": 100})},
+		},
+	}
+	_, err := m.Add(ctx, d, "demo")
+	return err
+}
+
+func randomToken() string {
+	b := make([]byte, 24)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

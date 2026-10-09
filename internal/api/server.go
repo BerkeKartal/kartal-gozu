@@ -26,6 +26,8 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/changes"
 	"github.com/BerkeKartal/kartal-gozu/internal/collect"
+	"github.com/BerkeKartal/kartal-gozu/internal/dashboard"
+	"github.com/BerkeKartal/kartal-gozu/internal/datasource"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/httpx"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
@@ -68,6 +70,11 @@ type Config struct {
 	// Collect, when set, keeps every metric of chosen workloads in the
 	// metric store.
 	Collect *collect.Collector
+	// DataSources, when set, are the Prometheus and Elasticsearch servers
+	// Explore queries.
+	DataSources *datasource.Manager
+	// Dashboards, when set, are the saved dashboards.
+	Dashboards *dashboard.Manager
 	// Login, when set, lets people sign in with a name and password, for a
 	// session of SessionTTL (12 hours when zero).
 	Login      Login
@@ -174,6 +181,12 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	if cfg.Collect != nil {
 		cfg.Collect.Attach(s.snapshotPods, s.ask)
 	}
+	s.routeDataSources(mux)
+	s.routePrometheus(mux)
+	s.routeDashboards(mux)
+	if cfg.DataSources != nil {
+		cfg.DataSources.Attach(s.ask)
+	}
 
 	// The web UI: its files below /_ui/, the page itself everywhere else.
 	mux.Handle("GET /_ui/", ui.Assets())
@@ -208,6 +221,17 @@ func (s *Server) Watch(ctx context.Context) {
 	}
 }
 
+// promRoot is where the store's Prometheus API is (promcompat.go).
+const promRoot = "/prometheus/api/v1/"
+
+func isPromEndpoint(rest string) bool {
+	switch rest {
+	case "query", "query_range", "labels", "series", "metadata", "status/buildinfo":
+		return true
+	}
+	return strings.HasPrefix(rest, "label/")
+}
+
 // routeMarkers are the fixed roots of every route. Whatever precedes the
 // first one is a deployment prefix and is ignored.
 var routeMarkers = []string{"/api/v1/", "/agent/v1/", "/_ui/"}
@@ -218,6 +242,11 @@ func routeStart(escapedPath string) int {
 		if i := strings.Index(escapedPath, m); i >= 0 && (start < 0 || i < start) {
 			start = i
 		}
+	}
+	// The store's Prometheus API: only its own endpoints, so that the UI's
+	// API still works below a prefix that ends in /prometheus.
+	if i := strings.Index(escapedPath, promRoot); i >= 0 && isPromEndpoint(escapedPath[i+len(promRoot):]) && (start < 0 || i < start) {
+		start = i
 	}
 	if start < 0 && strings.HasSuffix(escapedPath, "/healthz") {
 		start = len(escapedPath) - len("/healthz")

@@ -52,6 +52,11 @@ spec:
             # The metrics that pods expose, such as /metrics (needs rbac-pod-metrics.yaml).
             - name: KARTAL_POD_METRICS
               value: "false"
+            # Prometheus and Elasticsearch servers that only this cluster reaches,
+            # which Explore may query through this agent: their base URLs,
+            # separated by commas. The agent reaches nothing else for it.
+            # - name: KARTAL_DATASOURCE_URLS
+            #   value: http://prometheus-server.monitoring.svc:9090,https://elastic.example.org:9200
             # List Secret names in the snapshot (needs rbac-browse.yaml); values are never sent.
             - name: KARTAL_INCLUDE_SECRETS
               value: "false"

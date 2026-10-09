@@ -22,6 +22,8 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/collect"
 	"github.com/BerkeKartal/kartal-gozu/internal/config"
+	"github.com/BerkeKartal/kartal-gozu/internal/dashboard"
+	"github.com/BerkeKartal/kartal-gozu/internal/datasource"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
@@ -134,6 +136,8 @@ func run(log *slog.Logger) error {
 		Checks:         checks,
 		Watches:        watches,
 		Collect:        collector,
+		DataSources:    datasource.NewManager(keeper),
+		Dashboards:     dashboard.New(keeper),
 		SessionTTL:     sessionTTL,
 	}
 	if login != nil {
