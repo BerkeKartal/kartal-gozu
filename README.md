@@ -530,7 +530,11 @@ the series of the day and their samples, compressed the way Prometheus does
 it, to 2 to 4 bytes a sample, and once the day is over an index of where
 each series' samples are, so that a query over many days holds only what
 it reads. Samples still in memory are written every minute and when the
-server stops. Without `KARTAL_DATA_DIR` there is no store. Collecting needs
+server stops. Earlier versions cut every series' chunk at every one of
+those writes, so that today's day held a little memory a minute for each
+series, enough to fill the server's by the afternoon; on starting, the
+server writes such days again in full chunks, in the background. Without
+`KARTAL_DATA_DIR` there is no store. Collecting needs
 `KARTAL_POD_METRICS` on the agent, as reading a pod's page does; one round
 reads at most 100 pods of a workload and 20 000 samples of a pod, at most
 200 workloads in all, two commands at a time for each cluster. A day keeps

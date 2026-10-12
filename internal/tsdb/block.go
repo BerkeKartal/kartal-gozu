@@ -19,6 +19,7 @@ import (
 //	series  one line per series that has samples that day:
 //	        <id> TAB <type> TAB <labels as JSON>
 //	chunks  records of a header and a chunk's encoded samples
+//	open    today: the chunks not yet full, as records, as of the last flush
 //	index   once the day is over: where each series' chunks are
 //
 // Days are independent: a query reads only the days it covers, and
@@ -29,6 +30,7 @@ import (
 const (
 	seriesFile = "series"
 	chunksFile = "chunks"
+	openFile   = "open"
 	indexFile  = "index"
 	dayLayout  = "2006-01-02"
 
@@ -218,6 +220,26 @@ func (b *block) points(id int, from, to int64, out []Point) ([]Point, error) {
 
 func (b *block) close() { b.data.close() }
 
+// fragmented tells whether a day's chunks are much smaller than they could
+// be: more than one a series, and on average under a quarter full. Up to
+// 256 of its series tell.
+func (b *block) fragmented() (bool, error) {
+	step := max(1, len(b.series)/256)
+	var series, chunks, samples int
+	for id := 0; id < len(b.series); id += step {
+		refs, err := b.refs(id)
+		if err != nil {
+			return false, err
+		}
+		series++
+		chunks += len(refs)
+		for _, r := range refs {
+			samples += int(r.count)
+		}
+	}
+	return chunks > series && samples < chunks*maxChunkSamples/4, nil
+}
+
 func writeRecord(w io.Writer, id uint32, minT, maxT int64, count int, data []byte) error {
 	var h [recordHeader]byte
 	binary.LittleEndian.PutUint16(h[0:], recordMagic)
@@ -315,6 +337,39 @@ func scanChunks(path string, series []blockSeries) (int64, error) {
 		}
 		off += recordHeader + int64(length)
 	}
+}
+
+// openChunk is a chunk not yet full, as the open file keeps it.
+type openChunk struct {
+	id     int
+	points []Point
+}
+
+// readOpen reads the chunks the last flush left open. A record that does
+// not check out ends the reading.
+func readOpen(path string) []openChunk {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []openChunk
+	for len(b) >= recordHeader && binary.LittleEndian.Uint16(b) == recordMagic {
+		length := int(binary.LittleEndian.Uint32(b[24:]))
+		if len(b) < recordHeader+length {
+			break
+		}
+		data := b[recordHeader : recordHeader+length]
+		if crc32.ChecksumIEEE(data) != binary.LittleEndian.Uint32(b[28:]) {
+			break
+		}
+		pts, err := decode(data, int(binary.LittleEndian.Uint16(b[22:])), nil)
+		if err != nil {
+			break
+		}
+		out = append(out, openChunk{id: int(binary.LittleEndian.Uint32(b[2:])), points: pts})
+		b = b[recordHeader+length:]
+	}
+	return out
 }
 
 // writeIndex writes where a closed day's chunks are, from the refs its
@@ -430,7 +485,8 @@ func fileSize(path string) int64 {
 
 // daySize is what a day takes on disk.
 func daySize(dir string) int64 {
-	return fileSize(filepath.Join(dir, seriesFile)) + fileSize(filepath.Join(dir, chunksFile)) + fileSize(filepath.Join(dir, indexFile))
+	return fileSize(filepath.Join(dir, seriesFile)) + fileSize(filepath.Join(dir, chunksFile)) +
+		fileSize(filepath.Join(dir, openFile)) + fileSize(filepath.Join(dir, indexFile))
 }
 
 // clip keeps out[:start] and the points of out[start:] within [from, to].
@@ -449,27 +505,42 @@ func clip(out []Point, start int, from, to int64) []Point {
 // new day has no index yet; it gets one when it is next read.
 func rewriteDay(dir string, b *block, from, to int64) (bool, error) {
 	tmp := dir + ".tmp"
+	kept, err := writeDay(tmp, b, from, to)
+	b.close()
+	if err != nil {
+		return false, err
+	}
+	if kept == 0 {
+		return false, os.RemoveAll(dir)
+	}
+	return true, swapDay(dir, tmp)
+}
+
+// writeDay writes a day's samples outside [from, to] into the directory
+// tmp, in full chunks, and returns how many series it kept; with none, it
+// leaves no directory.
+func writeDay(tmp string, b *block, from, to int64) (int, error) {
 	os.RemoveAll(tmp)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return false, err
+		return 0, err
 	}
 	// The new day is written as it is made: a day can be large.
 	sf, err := newSyncedWriter(filepath.Join(tmp, seriesFile))
 	if err != nil {
 		os.RemoveAll(tmp)
-		return false, err
+		return 0, err
 	}
 	cf, err := newSyncedWriter(filepath.Join(tmp, chunksFile))
 	if err != nil {
 		sf.abort()
 		os.RemoveAll(tmp)
-		return false, err
+		return 0, err
 	}
-	fail := func(err error) (bool, error) {
+	fail := func(err error) (int, error) {
 		sf.abort()
 		cf.abort()
 		os.RemoveAll(tmp)
-		return false, err
+		return 0, err
 	}
 	kept := 0
 	var pts, left []Point
@@ -509,29 +580,32 @@ func rewriteDay(dir string, b *block, from, to int64) (bool, error) {
 		}
 		kept++
 	}
-	b.close()
 	if kept == 0 {
 		sf.abort()
 		cf.abort()
-		os.RemoveAll(tmp)
-		return false, os.RemoveAll(dir)
+		return 0, os.RemoveAll(tmp)
 	}
 	for _, w := range []*syncedWriter{sf, cf} {
 		if err := w.close(); err != nil {
 			return fail(err)
 		}
 	}
+	return kept, nil
+}
+
+// swapDay puts the day written into tmp in place of dir.
+func swapDay(dir, tmp string) error {
 	old := dir + ".old"
 	os.RemoveAll(old)
 	if err := os.Rename(dir, old); err != nil {
 		os.RemoveAll(tmp)
-		return false, err
+		return err
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		os.Rename(old, dir)
-		return false, err
+		return err
 	}
-	return true, os.RemoveAll(old)
+	return os.RemoveAll(old)
 }
 
 // syncedWriter writes a new file through a buffer and syncs it on close.

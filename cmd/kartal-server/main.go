@@ -155,6 +155,17 @@ func run(log *slog.Logger) error {
 		// Samples still in memory are written every minute, and on the way out.
 		go collector.DB().Run(ctx, time.Minute)
 		defer collector.DB().Close()
+		// Days that earlier versions wrote in chunks of a minute are
+		// written again in full ones.
+		go func() {
+			days, err := collector.DB().Compact()
+			if len(days) > 0 {
+				log.Info("metric store compacted", "days", days)
+			}
+			if err != nil {
+				log.Warn("compacting the metric store", "err", err)
+			}
+		}()
 		collector.Start(ctx)
 	}
 	// Settings that could not be read at the start are read again.

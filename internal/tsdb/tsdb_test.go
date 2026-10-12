@@ -433,3 +433,145 @@ func TestIndexOfClosedDays(t *testing.T) {
 		t.Error("the damaged index was not made again")
 	}
 }
+
+// dayChunks counts the chunks in a day's chunks file.
+func dayChunks(t *testing.T, dir string) int {
+	t.Helper()
+	series, err := readSeries(filepath.Join(dir, seriesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanChunks(filepath.Join(dir, chunksFile), series); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, s := range series {
+		n += len(s.chunks)
+	}
+	return n
+}
+
+func TestFlushKeepsChunksOpen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openAt(dir, day(6, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Samples every 30 seconds and a flush every minute, as the server
+	// takes them: 610 a series, five full chunks and ten still open.
+	n := 0
+	for m := 0; m < 305; m++ {
+		for s := 0; s < 2; s++ {
+			at := day(6, 0).Add(time.Duration(m)*time.Minute + time.Duration(s)*30*time.Second)
+			if err := db.Append(at, samples(float64(n), "a", "b")); err != nil {
+				t.Fatal(err)
+			}
+			n++
+		}
+		if err := db.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := filepath.Join(dir, "2026-10-06")
+	if got := dayChunks(t, d); got != 2*5 {
+		t.Errorf("%d chunks after the flushes, want 10: flushing cut them", got)
+	}
+	if days, err := db.Compact(); err != nil || len(days) != 0 {
+		t.Errorf("compacted %v (%v), want nothing", days, err)
+	}
+	// A crash: the store is opened again without being closed. The open
+	// chunks come back as the last flush left them; what came after is lost.
+	db.Append(day(6, 5).Add(10*time.Minute), samples(-1, "a"))
+	db, err = openAt(dir, day(6, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := Match(mustMatch(t, MatchEqual, "pod", "a"))
+	sel, err := db.Select(0, farFuture, web)
+	if err != nil || len(sel) != 1 || len(sel[0].Points) != n {
+		t.Fatalf("after the crash: %d series, err %v; want %d points", len(sel), err, n)
+	}
+	// It goes on from there; closing cuts the open chunks, and the open
+	// file goes.
+	if err := db.Append(day(6, 6), samples(float64(n), "a", "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(d, openFile)); !os.IsNotExist(err) {
+		t.Errorf("the open file outlived closing: %v", err)
+	}
+	db, err = openAt(dir, day(6, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sel, _ = db.Select(0, farFuture, web)
+	for i, v := range values(sel[0]) {
+		if v != float64(i) {
+			t.Fatalf("point %d = %v of %d", i, v, len(sel[0].Points))
+		}
+	}
+	if len(sel[0].Points) != n+1 {
+		t.Errorf("%d points after closing, want %d", len(sel[0].Points), n+1)
+	}
+}
+
+func TestCompactFragmentedDays(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openAt(dir, day(7, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { db.Close() }()
+	// What earlier versions left: every open chunk cut at every flush, a
+	// sample a chunk, on a closed day and today.
+	n := 0
+	for d := 7; d <= 8; d++ {
+		for m := 0; m < 600; m++ {
+			if err := db.Append(day(d, 0).Add(time.Duration(m)*time.Minute), samples(float64(n), "a", "b")); err != nil {
+				t.Fatal(err)
+			}
+			n++
+			db.hmu.Lock()
+			err := db.head.cutOpen()
+			db.hmu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	before, err := db.Select(0, farFuture, Selector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	days, err := db.Compact()
+	if err != nil || !reflect.DeepEqual(days, []string{"2026-10-08", "2026-10-07"}) {
+		t.Fatalf("compacted %v (%v)", days, err)
+	}
+	after, err := db.Select(0, farFuture, Selector{})
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("compacting changed the samples (%v)", err)
+	}
+	for _, d := range []string{"2026-10-07", "2026-10-08"} {
+		if got := dayChunks(t, filepath.Join(dir, d)); got != 2*5 {
+			t.Errorf("%s: %d chunks, want 10", d, got)
+		}
+	}
+	// Today takes samples again, and compact days are left alone.
+	if err := db.Append(day(8, 12), samples(-1, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if days, err := db.Compact(); err != nil || len(days) != 0 {
+		t.Errorf("compacted again: %v (%v)", days, err)
+	}
+	db.Close()
+	if db, err = openAt(dir, day(8, 13)); err != nil {
+		t.Fatal(err)
+	}
+	sel, err := db.Select(0, farFuture, Match(mustMatch(t, MatchEqual, "pod", "a")))
+	if err != nil || len(sel) != 1 || len(sel[0].Points) != 1201 || sel[0].Points[1200].V != -1 {
+		t.Fatalf("after reopening: %v %v", sel, err)
+	}
+}

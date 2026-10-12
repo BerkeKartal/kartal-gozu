@@ -1,11 +1,12 @@
 // Package tsdb keeps time series on disk, with nothing but the standard
 // library: a directory per day, chunks compressed as in Gorilla, samples
 // kept until someone deletes a range. Today's chunks fill up in memory and
-// reach the disk when full and every few minutes, so a crash loses at most
-// those minutes.
+// reach the disk when full; the ones still filling are written aside every
+// few minutes, so a crash loses at most those minutes.
 package tsdb
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -128,6 +129,23 @@ func openHead(root, day string) (*head, error) {
 		h.seriesW.Close()
 		return nil, err
 	}
+	// The chunks the last flush left open, unless the store was closed;
+	// samples the chunks file has already are skipped.
+	for _, c := range readOpen(filepath.Join(dir, openFile)) {
+		if c.id >= len(h.series) {
+			continue
+		}
+		for _, p := range c.points {
+			if p.T <= h.lastT[c.id] {
+				continue
+			}
+			if err := h.add(uint32(c.id), p.T, p.V); err != nil {
+				h.seriesW.Close()
+				h.chunksW.Close()
+				return nil, err
+			}
+		}
+	}
 	return h, nil
 }
 
@@ -170,12 +188,17 @@ func (h *head) append(s Sample, t int64) error {
 	if t <= h.lastT[id] {
 		return nil // already have this moment
 	}
+	return h.add(id, t, s.Value)
+}
+
+// add puts a sample later than a series' last into its open chunk.
+func (h *head) add(id uint32, t int64, v float64) error {
 	e := h.open[id]
 	if e == nil {
 		e = &encoder{}
 		h.open[id] = e
 	}
-	e.add(t, s.Value)
+	e.add(t, v)
 	h.lastT[id] = t
 	if e.n >= maxChunkSamples {
 		return h.cut(id)
@@ -201,8 +224,39 @@ func (h *head) cut(id uint32) error {
 	return nil
 }
 
-// flush writes every open chunk and syncs the files.
+// flush syncs today's files and writes the chunks still filling beside
+// them, so that a crash loses only what came after. They are not cut: a
+// chunk of a minute's samples would hold a ref in memory all day, and
+// take a read of its own.
 func (h *head) flush() error {
+	if err := h.seriesW.Sync(); err != nil {
+		return err
+	}
+	if err := h.chunksW.Sync(); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(h.dir, ".open-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	w := &syncedWriter{f: tmp, w: bufio.NewWriterSize(tmp, 1<<16)}
+	for id, e := range h.open {
+		if e != nil && e.n > 0 {
+			if err := writeRecord(w.w, uint32(id), e.minT, e.t, e.n, e.bytes()); err != nil {
+				w.abort()
+				return err
+			}
+		}
+	}
+	if err := w.close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(h.dir, openFile))
+}
+
+// cutOpen writes every open chunk to the day's file and syncs the files.
+func (h *head) cutOpen() error {
 	for id, e := range h.open {
 		if e != nil && e.n > 0 {
 			if err := h.cut(uint32(id)); err != nil {
@@ -216,10 +270,16 @@ func (h *head) flush() error {
 	return h.chunksW.Sync()
 }
 
+// closeWriters cuts the open chunks, the day being over or the store
+// closing, and closes today's files.
 func (h *head) closeWriters() error {
-	err := h.flush()
+	err := h.cutOpen()
 	h.seriesW.Close()
 	h.chunksW.Close()
+	if err == nil {
+		// Every sample is in the chunks file now.
+		os.Remove(filepath.Join(h.dir, openFile))
+	}
 	return err
 }
 
@@ -360,7 +420,7 @@ func (db *DB) rollover(day string) error {
 	return err
 }
 
-// Flush writes today's open chunks to disk.
+// Flush writes today's open chunks to disk, beside the full ones.
 func (db *DB) Flush() error {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -819,6 +879,112 @@ func (db *DB) bytes() int64 {
 		n += daySize(dir)
 	}
 	return n
+}
+
+// Compact writes again, in full chunks, the days whose chunks are much
+// smaller than they could be, and returns them. Before the store kept its
+// open chunks aside, it cut every series' chunk at every flush, once a
+// minute: such a day holds a ref a minute for each series, in memory while
+// it is today, and a query reads its chunks one by one. Today is written
+// again with samples and queries waiting; a closed day is written aside
+// meanwhile, and only swapped in under the lock.
+func (db *DB) Compact() ([]string, error) {
+	var done []string
+	head, err := db.compactHead()
+	if head != "" {
+		done = append(done, head)
+	}
+	if err != nil {
+		return done, err
+	}
+	db.mu.RLock()
+	days, today := db.days(0, farFuture), db.head.day
+	db.mu.RUnlock()
+	var errs []error
+	for _, day := range days {
+		if day >= today {
+			continue
+		}
+		ok, err := db.compactDay(day)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", day, err))
+		} else if ok {
+			done = append(done, day)
+		}
+	}
+	return done, errors.Join(errs...)
+}
+
+// compactHead writes today again if its chunks are fragmented, and returns
+// it if so.
+func (db *DB) compactHead() (string, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.hmu.Lock()
+	defer db.hmu.Unlock()
+	h := db.head
+	if frag, err := h.block.fragmented(); err != nil || !frag {
+		return "", err
+	}
+	if err := h.closeWriters(); err != nil {
+		return "", err
+	}
+	h.block.close()
+	// An empty range: every sample stays.
+	_, err := rewriteDay(h.dir, h.block, math.MaxInt64, math.MinInt64)
+	// Whatever happened, today must take samples again.
+	nh, herr := openHead(db.root, h.day)
+	if herr != nil {
+		return "", herr
+	}
+	db.head = nh
+	if err != nil {
+		return "", err
+	}
+	return h.day, nil
+}
+
+// compactDay writes a closed day again if its chunks are fragmented, and
+// tells whether it did.
+func (db *DB) compactDay(day string) (bool, error) {
+	dir := filepath.Join(db.root, day)
+	stamp := dayStamp(dir)
+	b, err := loadBlock(dir, day)
+	if err != nil {
+		return false, err
+	}
+	if frag, err := b.fragmented(); err != nil || !frag {
+		b.close()
+		return false, err
+	}
+	tmp := dir + ".compact.tmp"
+	kept, err := writeDay(tmp, b, math.MaxInt64, math.MinInt64)
+	b.close()
+	if err != nil || kept == 0 {
+		return false, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	// A deletion may have rewritten or removed the day meanwhile.
+	if dayStamp(dir) != stamp {
+		return false, os.RemoveAll(tmp)
+	}
+	db.cacheDrop(day)
+	if err := swapDay(dir, tmp); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// dayStamp changes when a day's series or chunks file does.
+func dayStamp(dir string) string {
+	var s strings.Builder
+	for _, name := range []string{seriesFile, chunksFile} {
+		if st, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			fmt.Fprintf(&s, "%s %d %d;", name, st.Size(), st.ModTime().UnixNano())
+		}
+	}
+	return s.String()
 }
 
 // LabelNames lists the label names of the series sel picks within
