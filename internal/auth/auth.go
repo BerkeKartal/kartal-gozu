@@ -238,11 +238,14 @@ func (d *Directory) Lookup(token string) (User, bool) {
 	return found, ok
 }
 
-// ParseUsers reads "name:grant:token" entries separated by commas or
-// newlines, where grant is what ParseGrant reads; lines starting with # are
-// comments.
-func ParseUsers(raw string) (map[string]User, error) {
+// ParseUsers reads "name:grant:secret" entries separated by commas or
+// newlines, where grant is what ParseGrant reads and secret a token, or a
+// password hash (HashPassword) for someone who signs in with a name and
+// password; lines starting with # are comments. It returns the users by
+// token, and those with a password.
+func ParseUsers(raw string) (map[string]User, *Passwords, error) {
 	out := map[string]User{}
+	passwords := newPasswords()
 	names := map[string]bool{}
 	for _, entry := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' }) {
 		entry = strings.TrimSpace(entry)
@@ -253,25 +256,35 @@ func ParseUsers(raw string) (map[string]User, error) {
 		grantText, token, ok2 := strings.Cut(rest, ":")
 		name, token = strings.TrimSpace(name), strings.TrimSpace(token)
 		if !ok1 || !ok2 || name == "" || token == "" {
-			return nil, fmt.Errorf("user entry %q must look like name:grant:token, such as ayse:admin:… or ali:operator@production/payments:…", redactEntry(entry))
+			return nil, nil, fmt.Errorf("user entry %q must look like name:grant:token, such as ayse:admin:… or ali:operator@production/payments:…", redactEntry(entry))
 		}
 		g, err := ParseGrant(grantText)
 		if err != nil {
-			return nil, fmt.Errorf("user %q: %w", name, err)
+			return nil, nil, fmt.Errorf("user %q: %w", name, err)
+		}
+		// Names sign in regardless of case, so they must differ by more.
+		key := strings.ToLower(name)
+		if names[key] {
+			return nil, nil, fmt.Errorf("user %q is listed twice", name)
+		}
+		names[key] = true
+		if IsPasswordHash(token) {
+			h, err := parsePasswordHash(token)
+			if err != nil {
+				return nil, nil, fmt.Errorf("user %q: %w", name, err)
+			}
+			passwords.add(NewUser(name, []Grant{g}), h)
+			continue
 		}
 		if len(token) < MinTokenLength {
-			return nil, fmt.Errorf("the token of user %q is shorter than %d characters", name, MinTokenLength)
-		}
-		if names[name] {
-			return nil, fmt.Errorf("user %q is listed twice", name)
+			return nil, nil, fmt.Errorf("the token of user %q is shorter than %d characters", name, MinTokenLength)
 		}
 		if _, dup := out[token]; dup {
-			return nil, fmt.Errorf("two users share a token")
+			return nil, nil, fmt.Errorf("two users share a token")
 		}
-		names[name] = true
 		out[token] = NewUser(name, []Grant{g})
 	}
-	return out, nil
+	return out, passwords, nil
 }
 
 // redactEntry keeps a malformed entry's token out of error messages.

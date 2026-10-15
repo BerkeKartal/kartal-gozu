@@ -2,11 +2,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -36,6 +38,13 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
+		if err := hashPassword(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	log := logging.New(config.String("KARTAL_LOG_LEVEL", "info"))
 	if err := run(log); err != nil {
 		log.Error("server stopped", "err", err)
@@ -63,7 +72,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	users, err := auth.ParseUsers(rawUsers)
+	users, passwords, err := auth.ParseUsers(rawUsers)
 	if err != nil {
 		return fmt.Errorf("KARTAL_USERS: %w", err)
 	}
@@ -74,15 +83,23 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	login, err := directoryLogin(log)
+	directory, err := directoryLogin(log)
 	if err != nil {
 		return err
+	}
+	// Passwords of KARTAL_USERS first, then the directory.
+	var login auth.Chain
+	if passwords.Len() > 0 {
+		login = append(login, passwords)
+	}
+	if directory != nil {
+		login = append(login, directory)
 	}
 	sessionTTL, err := config.Duration("KARTAL_SESSION_TTL", 12*time.Hour)
 	if err != nil {
 		return err
 	}
-	if adminToken == "" && len(users) == 0 && login == nil && !anonymous {
+	if adminToken == "" && len(users) == 0 && len(login) == 0 && !anonymous {
 		return errors.New("set KARTAL_LDAP_URL, KARTAL_USERS or KARTAL_ADMIN_TOKEN (or KARTAL_ALLOW_ANONYMOUS=true for local testing)")
 	}
 	alerts, err := notifications(log)
@@ -140,8 +157,9 @@ func run(log *slog.Logger) error {
 		Dashboards:     dashboard.New(keeper),
 		SessionTTL:     sessionTTL,
 	}
-	if login != nil {
+	if len(login) > 0 {
 		cfg.Login = login
+		cfg.Directory = directory != nil
 	}
 	server := api.New(cfg, store.New(clusters...), log)
 	handler := logging.Requests(log, server)
@@ -185,7 +203,7 @@ func run(log *slog.Logger) error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	log.Info("kartal-server started", "version", version, "addr", srv.Addr, "clusters", clusters,
-		"users", len(users)+min(len(adminToken), 1), "notification_channels", alerts.Channels(), "settings", keeper.Where(),
+		"users", len(users)+min(len(adminToken), 1)+passwords.Len(), "notification_channels", alerts.Channels(), "settings", keeper.Where(),
 		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector))
 
 	select {
@@ -383,4 +401,20 @@ func directoryLogin(log *slog.Logger) (*ldap.Authenticator, error) {
 		log.Warn("KARTAL_LDAP_URL is plain ldap:// without KARTAL_LDAP_STARTTLS: passwords cross the network readable")
 	}
 	return a, nil
+}
+
+// hashPassword reads a password, one line, and writes the hash that goes in
+// KARTAL_USERS in place of a token (name:grant:hash): kartal-server
+// hash-password.
+func hashPassword(in io.Reader, out io.Writer) error {
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	hash, err := auth.HashPassword(strings.TrimRight(line, "\r\n"))
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, hash)
+	return err
 }

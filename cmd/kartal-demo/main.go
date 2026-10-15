@@ -137,6 +137,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 			return err
 		}
 		cfg.Login = login
+		cfg.Directory = true
 		// Signing in is needed then; the Prometheus source that is the demo
 		// server itself gets a token of its own, which sees everything.
 		if adminToken == "" {

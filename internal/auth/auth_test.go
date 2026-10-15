@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseUsers(t *testing.T) {
-	users, err := ParseUsers("ozan:admin:aaaaaaaaaaaaaaaa1\n# comment\nekip:viewer:bbbbbbbbbbbbbbbb2, nobet : operator : cccccccccccccccc3\n" +
+	users, _, err := ParseUsers("ozan:admin:aaaaaaaaaaaaaaaa1\n# comment\nekip:viewer:bbbbbbbbbbbbbbbb2, nobet : operator : cccccccccccccccc3\n" +
 		"takim:operator@production/team-a+staging/*:dddddddddddddddd4")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestParseUsersRejects(t *testing.T) {
 		"a:viewer@prod/team a:aaaaaaaaaaaaaaaa1",               // bad scope
 		"a:viewer@:aaaaaaaaaaaaaaaa1",                          // empty scope
 	} {
-		if _, err := ParseUsers(raw); err == nil {
+		if _, _, err := ParseUsers(raw); err == nil {
 			t.Errorf("%q was accepted", raw)
 		} else if strings.Contains(err.Error(), "aaaaaaaaaaaaaaaa1") {
 			t.Errorf("error reveals a token: %v", err)

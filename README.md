@@ -73,9 +73,10 @@ tunnel), and the server works under any URL path without configuration.
   what was changed since the last `kubectl apply`.
 - **Users, roles and an audit log.** Viewers look, operators act, admins also
   edit YAML and use the console, everywhere or only in the clusters and
-  namespaces you choose. People can sign in with Active Directory or another
-  LDAP directory, whose groups give them their roles. Every change is recorded
-  with who made it.
+  namespaces you choose. People sign in with a user name and password the
+  server keeps itself, or with Active Directory or another LDAP directory,
+  whose groups give them their roles. Every change is recorded with who made
+  it.
 - **Fast to get around.** A namespace picker scopes every view. Every column
   sorts. Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd> to jump anywhere. Star
   a namespace or any row to pin it to the top.
@@ -361,6 +362,33 @@ payments:operator@production/payments+staging/payments:77b2…
 
 `KARTAL_ADMIN_TOKEN` adds one more user, named `admin`. Tokens are at least
 16 characters.
+
+### Passwords
+
+Someone may sign in with a user name and password instead: their entry ends
+with the hash of the password rather than a token. `kartal-server
+hash-password` makes it, reading the password from its input; for instance,
+in the cluster, without the password reaching the screen or the shell's
+history:
+
+```sh
+read -rs P; printf '%s\n' "$P" | kubectl -n kartal-gozu exec -i deploy/kartal-server -- \
+  /usr/local/bin/kartal-server hash-password; unset P
+```
+
+```
+# name:grant:hash
+ali:operator@production/payments:pbkdf2-sha256$600000$…$…
+```
+
+Put the entries in the file of `KARTAL_USERS_FILE` (the Secret's `users`
+key), where the `$` signs stay as they are. The sign-in page then asks for a
+user name and password; tokens keep working next to them, for scripts.
+Passwords are at least 10 characters, and hashed with PBKDF2-SHA256 (600,000
+iterations, a random salt). Names match regardless of case. Sessions, the
+limit on failed attempts and the audit log work as with a directory (below);
+with a directory as well, these passwords are tried first. A changed list
+takes effect when the server restarts.
 
 ### Active Directory and LDAP
 
@@ -669,7 +697,7 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 |---|---|---|
 | `KARTAL_LISTEN` | `:8080` | Address to listen on |
 | `KARTAL_AGENT_TOKENS` / `_FILE` | — | `cluster=token` entries, separated by commas or newlines; `#` starts a comment. Tokens are at least 16 characters |
-| `KARTAL_USERS` / `_FILE` | — | `name:grant:token` entries; see [Users and roles](#users-and-roles) |
+| `KARTAL_USERS` / `_FILE` | — | `name:grant:token` entries, or `name:grant:hash` for a password; see [Users and roles](#users-and-roles) |
 | `KARTAL_ADMIN_TOKEN` / `_FILE` | — | One more user, named `admin`, with the admin role |
 | `KARTAL_LDAP_URL` | — | `ldaps://host:636` or `ldap://host:389`: sign in with a directory; see [Active Directory and LDAP](#active-directory-and-ldap) |
 | `KARTAL_LDAP_USER_BASE` | — | Where people are looked up, such as `OU=People,DC=example,DC=org` |

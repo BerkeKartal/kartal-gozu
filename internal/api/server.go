@@ -79,6 +79,10 @@ type Config struct {
 	// session of SessionTTL (12 hours when zero).
 	Login      Login
 	SessionTTL time.Duration
+	// Directory says Login asks a directory (Active Directory or LDAP), so
+	// the sign-in page says the password is the one of the person's
+	// computer account.
+	Directory bool
 }
 
 type Server struct {

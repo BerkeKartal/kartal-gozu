@@ -7734,7 +7734,7 @@ function openPalette() {
 // ---------------------------------------------------------------- sign-in, theme, language
 
 // loginMethods is what the server offers besides tokens: a user name and
-// password (its directory), asked for once.
+// password (its own users' or a directory's), asked for once.
 let loginMethods = null;
 
 async function showLogin(message) {
@@ -7803,7 +7803,9 @@ function renderLogin(message, mode) {
     // A password manager keeps the token under this name.
     : h('input', { type: 'text', name: 'username', autocomplete: 'username', value: 'Kartal Gözü', hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
   h('label', { class: 'field' }, withPassword ? t('password') : t('token'), secret),
-  h('div', { class: 'muted' }, withPassword ? t('passwordHelp') : t('tokenHelp')),
+  // The computer account's password only when a directory checks it.
+  !withPassword ? h('div', { class: 'muted' }, t('tokenHelp'))
+    : loginMethods && loginMethods.directory ? h('div', { class: 'muted' }, t('passwordHelp')) : null,
   h('label', null, remember, t('remember')),
   error, submit,
   loginMethods && loginMethods.password ? h('button', {

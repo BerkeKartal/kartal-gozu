@@ -12,8 +12,8 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 )
 
-// Login checks a user name and password, in practice against a directory
-// such as Active Directory.
+// Login checks a user name and password: against the passwords of
+// KARTAL_USERS, a directory such as Active Directory, or both (auth.Chain).
 type Login interface {
 	Login(ctx context.Context, user, password string) (auth.User, error)
 }
@@ -39,7 +39,7 @@ func (s *Server) lookup(token string) (auth.User, bool) {
 
 // loginMethods tells the sign-in page what to offer.
 func (s *Server) loginMethods(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"password": s.cfg.Login != nil})
+	writeJSON(w, http.StatusOK, map[string]bool{"password": s.cfg.Login != nil, "directory": s.cfg.Directory})
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

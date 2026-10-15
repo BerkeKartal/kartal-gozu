@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 )
@@ -96,5 +97,48 @@ func TestAccountKey(t *testing.T) {
 		if got := accountKey(name); got != "ayse" {
 			t.Errorf("%q: %q", name, got)
 		}
+	}
+}
+
+// Users of KARTAL_USERS with a password, without a directory.
+func TestLocalPasswordSignIn(t *testing.T) {
+	hash, err := auth.HashPassword("dogru-parola-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, passwords, err := auth.ParseUsers("ali:operator@demo/team-a:" + hash + "\nscript:viewer:aaaaaaaaaaaaaaaa1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{
+		AgentTokens: map[string]string{agentTok: "demo"},
+		StaleAfter:  time.Minute, MaxPollWait: time.Second, CommandTimeout: time.Second,
+		Users: tokens, Login: auth.Chain{passwords},
+	}, store.New("demo"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if rec := do(s, "GET", "/api/v1/login", "", ""); !strings.Contains(rec.Body.String(), `"directory":false`) || !strings.Contains(rec.Body.String(), `"password":true`) {
+		t.Errorf("methods: %s", rec.Body)
+	}
+	if rec := do(s, "GET", "/api/v1/clusters", "", ""); rec.Code != 401 {
+		t.Fatalf("anonymous: %d", rec.Code)
+	}
+	if rec := do(s, "POST", "/api/v1/login", "", `{"username":"ali","password":"yanlis-parola"}`); rec.Code != 401 {
+		t.Errorf("wrong password: %d %s", rec.Code, rec.Body)
+	}
+	rec := do(s, "POST", "/api/v1/login", "", `{"username":"Ali","password":"dogru-parola-1"}`)
+	var got struct{ Token, Name, Role string }
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if rec.Code != 200 || !strings.HasPrefix(got.Token, "kgs_") || got.Name != "ali" || got.Role != "operator" {
+		t.Fatalf("sign in: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, "GET", "/api/v1/me", got.Token, ""); !strings.Contains(rec.Body.String(), `"namespace":"team-a"`) {
+		t.Errorf("me: %s", rec.Body)
+	}
+	// Tokens keep working next to passwords, for scripts; a hash is no token.
+	if rec := do(s, "GET", "/api/v1/clusters", "aaaaaaaaaaaaaaaa1", ""); rec.Code != 200 {
+		t.Errorf("token user: %d", rec.Code)
+	}
+	if rec := do(s, "GET", "/api/v1/clusters", hash, ""); rec.Code != 401 {
+		t.Errorf("a password hash let a request in: %d", rec.Code)
 	}
 }
