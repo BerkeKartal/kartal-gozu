@@ -164,7 +164,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	volumeWarn, volumeCrit := s.cfg.Alerts.VolumeLevels()
 	diskWarn, diskCrit := s.cfg.Alerts.NodeDiskLevels()
 	certWarn, certCrit := s.cfg.Alerts.CertificateLevels()
+	// Users added in the UI change their own password there.
+	ownPassword := s.cfg.Accounts != nil && s.cfg.Accounts.Has(u.Name)
 	writeJSON(w, http.StatusOK, map[string]any{"name": u.Name, "role": u.Role.String(), "everywhere": u.Everywhere().String(), "grants": grants,
+		"ownPassword": ownPassword, "users": s.cfg.Accounts != nil,
 		"levels": map[string]any{"volumeWarning": volumeWarn, "volumeCritical": volumeCrit, "nodeDiskWarning": diskWarn, "nodeDiskCritical": diskCrit,
 			"certificateWarningDays": certWarn.Hours() / 24, "certificateCriticalDays": certCrit.Hours() / 24}})
 }

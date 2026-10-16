@@ -123,8 +123,16 @@ minutes, a new build of one app in production. Options:
 
 ## The web UI
 
-- **Top bar:** each cluster with its status (online, offline or never
-  connected) and a count of its problems. It also holds search
+The UI has two halves, each with a menu of its own: **Clusters**, the
+objects of every cluster (workloads, nodes, logs, YAML, versions, changes),
+and **Observe**, what is watched over time (dashboards, Explore, the metrics
+apps expose, alerts and URL checks, in an accent of their own). The address
+`#/` asks which one to open; the top bar switches between them, each opening
+where it was left.
+
+- **Top bar:** the Clusters | Observe switch, and each cluster with its
+  status (online, offline or never connected) and a count of its problems.
+  It also holds search
   (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>), who you are signed in as, the
   language switch (English and Turkish) and the light/dark theme switch.
 - **Sidebar**, from top to bottom:
@@ -134,16 +142,19 @@ minutes, a new build of one app in production. Options:
     warning events.
   - **Pinned:** your starred namespaces (with the same shortcuts) and objects.
   - **Navigation by kind:** each entry shows a count for the cluster or the
-    selected namespace, with a badge when something needs attention.
-    - Overview, Metrics, Explore, Dashboards
+    selected namespace, with a badge when something needs attention. In
+    Clusters:
+    - Overview
     - Workloads: Pods, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs
     - Networking: Services, Ingresses
     - Configuration: ConfigMaps, Secrets, Certificates
     - Storage: volume claims, with how full each one is
     - Applications: Helm releases, Versions
     - Cluster: Nodes, Namespaces, Events
-    - Operations: Alerts, URL checks, Changes, Audit log
+    - Operations: Changes, Audit log, Users (for admins)
     - All resources: a browser for every API type, including CRDs
+
+    In Observe: Dashboards, Explore, Metrics, Alerts, URL checks.
 - **Overview:** capacity, usage and requests, what needs attention, the
   cluster's usage over the last hour and recent warnings.
 - **Changes:** what changed in the cluster (or the selected namespace), newest
@@ -389,6 +400,22 @@ iterations, a random salt). Names match regardless of case. Sessions, the
 limit on failed attempts and the audit log work as with a directory (below);
 with a directory as well, these passwords are tried first. A changed list
 takes effect when the server restarts.
+
+### Users in the UI
+
+Admins of everything also manage users on the **Users** page (Clusters,
+under Operations): add someone with a user name, a grant and a password,
+change their grant or password, or remove them. It takes effect at once,
+without a restart, and a change ends the person's open sessions, so that
+their new role applies right away. The users are kept with the other
+settings (`KARTAL_SETTINGS_SECRET` or `KARTAL_SETTINGS_FILE`), only the
+password's hash, hashed as above. Their names cannot be those of
+`KARTAL_USERS` or `admin`, which the page lists but leaves alone. Someone
+added there changes their own password from their name in the top bar,
+giving the current one. Once a first user is added, the sign-in page asks
+for a user name and password; signing in tries `KARTAL_USERS`, then these
+users, then the directory. The page is there whenever the server has a user
+(a token, a password or a directory), not when it lets everyone in.
 
 ### Active Directory and LDAP
 
@@ -759,10 +786,15 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 
 | Method | Path | Role | Returns or does |
 |---|---|---|---|
-| GET | `/api/v1/login` | — | Whether directory sign-in is on: `{"password": true}` |
+| GET | `/api/v1/login` | — | Whether the sign-in page asks for a password, and whether a directory checks it: `{"password": true, "directory": false}` |
 | POST | `/api/v1/login` | — | Body: `{"username", "password"}`; returns a session token, the user and when the session ends |
 | POST | `/api/v1/logout` | viewer | Ends the session of the token used |
-| GET | `/api/v1/me` | viewer | The signed-in user, their role, their grants and the levels at which volumes and certificates need attention |
+| GET | `/api/v1/me` | viewer | The signed-in user, their role, their grants, whether they change their own password here (`ownPassword`) and the levels at which volumes and certificates need attention |
+| POST | `/api/v1/me/password` | viewer | Body: `{"current", "password"}`; changes the password of a user added in the UI |
+| GET | `/api/v1/users` | admin everywhere | The users added in the UI (no hashes), and the ones the server was started with |
+| POST | `/api/v1/users` | admin everywhere | Body: `{"name", "grant", "password"}`; adds a user |
+| PUT | `/api/v1/users/{name}` | admin everywhere | Body: `{"grant", "password"}`, either may be empty; changes a user and ends their sessions |
+| DELETE | `/api/v1/users/{name}` | admin everywhere | Removes a user and ends their sessions |
 | GET | `/api/v1/clusters` | viewer | Clusters, their status, capacity, requests, usage, summary counts, the actions their agent allows and their active alerts |
 | GET | `/api/v1/clusters/{c}` | viewer | One cluster's summary |
 | GET | `/api/v1/clusters/{c}/namespaces` | viewer | Namespaces with object counts, problems and warnings |

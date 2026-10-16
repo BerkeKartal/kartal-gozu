@@ -145,5 +145,6 @@ func (s Settings) clone() Settings {
 		s.Dashboards[i].Variables = slices.Clone(d.Variables)
 		s.Dashboards[i].Panels = slices.Clone(d.Panels)
 	}
+	s.Users = slices.Clone(s.Users)
 	return s
 }

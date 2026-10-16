@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/accounts"
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
 	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
@@ -87,19 +88,11 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// Passwords of KARTAL_USERS first, then the directory.
-	var login auth.Chain
-	if passwords.Len() > 0 {
-		login = append(login, passwords)
-	}
-	if directory != nil {
-		login = append(login, directory)
-	}
 	sessionTTL, err := config.Duration("KARTAL_SESSION_TTL", 12*time.Hour)
 	if err != nil {
 		return err
 	}
-	if adminToken == "" && len(users) == 0 && len(login) == 0 && !anonymous {
+	if adminToken == "" && len(users) == 0 && passwords.Len() == 0 && directory == nil && !anonymous {
 		return errors.New("set KARTAL_LDAP_URL, KARTAL_USERS or KARTAL_ADMIN_TOKEN (or KARTAL_ALLOW_ANONYMOUS=true for local testing)")
 	}
 	alerts, err := notifications(log)
@@ -128,6 +121,34 @@ func run(log *slog.Logger) error {
 	}
 	keeper.OnLoad(mail.Reload)
 	keeper.OnLoad(checks.Reload)
+	// The users the server was started with, whose names the users admins
+	// add in the UI cannot take.
+	var fixed []auth.User
+	for _, u := range users {
+		fixed = append(fixed, u)
+	}
+	fixed = append(fixed, passwords.Users()...)
+	if adminToken != "" {
+		fixed = append(fixed, auth.User{Name: "admin", Role: auth.Admin})
+	}
+	// Admins add users in the UI, unless the server lets everyone in
+	// without signing in.
+	var accts *accounts.Manager
+	if len(fixed) > 0 || directory != nil {
+		accts = accounts.New(keeper, fixed)
+	}
+	// Passwords of KARTAL_USERS first, then the UI's users, then the
+	// directory.
+	var login auth.Chain
+	if passwords.Len() > 0 {
+		login = append(login, passwords)
+	}
+	if accts != nil {
+		login = append(login, accts)
+	}
+	if directory != nil {
+		login = append(login, directory)
+	}
 	staleAfter, err := config.Duration("KARTAL_STALE_AFTER", time.Minute)
 	if err != nil {
 		return err
@@ -160,6 +181,10 @@ func run(log *slog.Logger) error {
 	if len(login) > 0 {
 		cfg.Login = login
 		cfg.Directory = directory != nil
+		cfg.FilePasswords = passwords.Len() > 0
+	}
+	if accts != nil {
+		cfg.Accounts = accts
 	}
 	server := api.New(cfg, store.New(clusters...), log)
 	handler := logging.Requests(log, server)
@@ -203,7 +228,8 @@ func run(log *slog.Logger) error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	log.Info("kartal-server started", "version", version, "addr", srv.Addr, "clusters", clusters,
-		"users", len(users)+min(len(adminToken), 1)+passwords.Len(), "notification_channels", alerts.Channels(), "settings", keeper.Where(),
+		"users", len(users)+min(len(adminToken), 1)+passwords.Len(), "ui_users", len(keeper.Get().Users),
+		"notification_channels", alerts.Channels(), "settings", keeper.Where(),
 		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector))
 
 	select {

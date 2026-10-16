@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/accounts"
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/appmetrics"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
@@ -83,6 +84,11 @@ type Config struct {
 	// the sign-in page says the password is the one of the person's
 	// computer account.
 	Directory bool
+	// FilePasswords says KARTAL_USERS has users with a password.
+	FilePasswords bool
+	// Accounts, when set, are the users admins manage in the UI; Login asks
+	// them too.
+	Accounts *accounts.Manager
 }
 
 type Server struct {
@@ -188,6 +194,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeDataSources(mux)
 	s.routePrometheus(mux)
 	s.routeDashboards(mux)
+	s.routeUsers(mux)
 	if cfg.DataSources != nil {
 		cfg.DataSources.Attach(s.ask)
 	}

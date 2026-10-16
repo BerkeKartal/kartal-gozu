@@ -39,7 +39,11 @@ func (s *Server) lookup(token string) (auth.User, bool) {
 
 // loginMethods tells the sign-in page what to offer.
 func (s *Server) loginMethods(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"password": s.cfg.Login != nil, "directory": s.cfg.Directory})
+	// The form asks for a password once someone has one: a directory, a
+	// password of KARTAL_USERS, or a user added in the UI.
+	password := s.cfg.Login != nil &&
+		(s.cfg.Directory || s.cfg.FilePasswords || (s.cfg.Accounts != nil && s.cfg.Accounts.Count() > 0))
+	writeJSON(w, http.StatusOK, map[string]bool{"password": password, "directory": s.cfg.Directory})
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

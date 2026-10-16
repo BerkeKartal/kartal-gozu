@@ -105,12 +105,27 @@ func pbkdf2SHA256(password, salt []byte, iterations, keyLen int) []byte {
 	return out[:keyLen]
 }
 
+// decoy is checked for names nobody has, so that how long a refusal takes
+// does not tell which names exist.
+var decoy = passwordHash{iterations: passwordIterations, salt: make([]byte, passwordSaltBytes), key: make([]byte, passwordKeyBytes)}
+
+// DecoyPassword takes as long as checking a password, for a name nobody has.
+func DecoyPassword(password string) { decoy.matches(password) }
+
+// CheckPassword tells whether a password matches a hash from HashPassword;
+// a damaged hash matches nothing.
+func CheckPassword(hash, password string) bool {
+	h, err := parsePasswordHash(hash)
+	if err != nil {
+		DecoyPassword(password)
+		return false
+	}
+	return h.matches(password)
+}
+
 // Passwords signs in the users of KARTAL_USERS that have a password.
 type Passwords struct {
 	byName map[string]passwordUser
-	// decoy is checked for names nobody has, so that how long a refusal
-	// takes does not tell which names exist.
-	decoy passwordHash
 }
 
 type passwordUser struct {
@@ -119,14 +134,20 @@ type passwordUser struct {
 }
 
 func newPasswords() *Passwords {
-	return &Passwords{
-		byName: map[string]passwordUser{},
-		decoy:  passwordHash{iterations: passwordIterations, salt: make([]byte, passwordSaltBytes), key: make([]byte, passwordKeyBytes)},
-	}
+	return &Passwords{byName: map[string]passwordUser{}}
 }
 
 // Len is how many users have a password.
 func (p *Passwords) Len() int { return len(p.byName) }
+
+// Users are the users with a password.
+func (p *Passwords) Users() []User {
+	out := make([]User, 0, len(p.byName))
+	for _, pu := range p.byName {
+		out = append(out, pu.user)
+	}
+	return out
+}
 
 func (p *Passwords) add(u User, h passwordHash) {
 	p.byName[strings.ToLower(u.Name)] = passwordUser{user: u, hash: h}
@@ -136,7 +157,7 @@ func (p *Passwords) add(u User, h passwordHash) {
 func (p *Passwords) Login(_ context.Context, name, password string) (User, error) {
 	pu, ok := p.byName[strings.ToLower(strings.TrimSpace(name))]
 	if !ok {
-		p.decoy.matches(password)
+		DecoyPassword(password)
 		return User{}, ErrInvalidCredentials
 	}
 	if !pu.hash.matches(password) {

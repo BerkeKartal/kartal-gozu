@@ -38,6 +38,7 @@ type Settings struct {
 	Collect     Collect      `json:"collect"`
 	DataSources []DataSource `json:"dataSources,omitempty"`
 	Dashboards  []Dashboard  `json:"dashboards,omitempty"`
+	Users       []User       `json:"users,omitempty"`
 }
 
 // maxRecipients keeps a mistake from mailing a whole address book.

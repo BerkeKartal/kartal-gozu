@@ -14,13 +14,13 @@ const TOKEN_KEY = 'kartal.token';
 
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
-  'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'resources'];
+  'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources'];
 // Views that are not about one namespace.
-const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards']);
+const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users']);
 // Views that show every cluster at once.
 const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards']);
-// Views of the server itself, which checks addresses on its own.
-const SERVER_VIEWS = new Set(['uptime']);
+// Views of the server itself: the addresses it checks, its users.
+const SERVER_VIEWS = new Set(['uptime', 'users']);
 // Views whose data the agent fetches live; they reload on demand only.
 const LIVE_VIEWS = new Set(['resources', 'helm', 'explore', 'dashboards']);
 const WORKLOAD_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet']);
@@ -40,19 +40,30 @@ const API_KIND = Object.fromEntries(Object.entries(KIND_API).map(([k, v]) => [v,
 // Views that show one kind of workload out of the workloads list.
 const VIEW_KIND = { deployments: 'Deployment', statefulsets: 'StatefulSet', daemonsets: 'DaemonSet' };
 
+// The UI has two halves, each with a menu of its own: the clusters'
+// objects, and what is watched over time (dashboards, Explore, the metrics
+// apps expose, alerts, URL checks). The top bar switches between them, and
+// #/ asks which one to open.
+const OBSERVE_VIEWS = new Set(['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime']);
+const spaceOf = view => (OBSERVE_VIEWS.has(view) ? 'observe' : 'cluster');
+const SPACE_HOME = { cluster: 'overview', observe: 'dashboards' };
+const LAST_VIEW_KEY = 'kartal.lastView.';
+
 // NAV is the sidebar: groups of views, each with its count from the
 // cluster's (or the selected namespace's) counts: [total, needs attention],
-// where what needs attention may add up several counts.
+// where what needs attention may add up several counts. The sidebar shows
+// the views of the half the current one is in.
 const NAV = [
-  { items: ['overview', 'appmetrics', 'explore', 'dashboards'] },
+  { items: ['overview'] },
   { group: 'workloads', items: ['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'] },
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
   { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
   { group: 'grpStorage', items: ['volumeclaims'] },
   { group: 'grpApps', items: ['helm', 'releases'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events'] },
-  { group: 'grpOps', items: ['alerts', 'uptime', 'changes', 'audit'] },
+  { group: 'grpOps', items: ['changes', 'audit', 'users'] },
   { items: ['resources'] },
+  { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -299,6 +310,20 @@ const STRINGS = {
     dsIndex: 'Index pattern', dsTimeField: 'Time field', dsMessageField: 'Message field',
     dsTest: 'Try', dsTesting: 'Asking…', dsTestOK: 'It answers: {0}', dsSaved: 'Data source saved.', dsRemove: 'Remove',
     dsRemoveTitle: 'Remove data source', dsRemoveConfirm: '{0} will no longer be queried. Remove it?', dsRemoved: 'Data source removed.',
+    users: 'Users', userAdd: 'Add user', userEdit: 'Change user', userRole: 'Role', userGrant: 'Access', userBy: 'Added by', userChanged: 'Changed',
+    userGrantHelp: 'viewer, operator or admin; only in some places: operator@production/payments+staging/*',
+    userPasswordHelp: 'At least 10 characters.', userPasswordKeep: 'Leave empty to keep the password.', userPasswordAgain: 'Password again',
+    userPasswordsDiffer: 'The passwords differ.', userAdded: 'User added.', userSaved: 'User saved; their open sessions ended.',
+    userRemoveTitle: 'Remove user', userRemoveConfirm: 'Remove {0}? Their open sessions end.', userRemoved: 'User removed.',
+    usersHint: 'People who sign in with a user name and a password kept here. A change applies at once, and ends the person’s open sessions.',
+    usersNone: 'No users yet. Add one, and the sign-in page asks for a user name and password.',
+    usersFixed: 'Users the server was started with', usersFixedHint: 'From KARTAL_USERS and the admin token; they are changed where they are set.',
+    usersDirectory: 'People in the directory (Active Directory or LDAP) sign in with their own account; their groups give them their roles.',
+    ownPassword: 'Change my password', currentPassword: 'Current password', newPassword: 'New password', ownPasswordSaved: 'Password changed.',
+    spaceCluster: 'Clusters', spaceObserve: 'Observe', spaceClusterTitle: 'Cluster management', spaceObserveTitle: 'Observability',
+    spaceClusterHelp: 'Workloads, nodes, logs, YAML, versions and changes, in every cluster.',
+    spaceObserveHelp: 'Dashboards, Explore, the metrics your apps expose, alerts and URL checks.',
+    chooseSpace: 'What would you like to open?',
     dashboards: 'Dashboards', exAddToDash: 'Add to dashboard', exApplyPanel: 'Apply to the panel',
     exEditingPanel: 'Editing the queries of the panel “{0}” of the dashboard {1}. Variables have the values picked there.',
     dbHint: 'Saved pages of charts, numbers, tables and logs of the store and the data sources. Each panel shows what the person looking may see.',
@@ -568,6 +593,20 @@ const STRINGS = {
     dsIndex: 'İndeks deseni', dsTimeField: 'Zaman alanı', dsMessageField: 'Mesaj alanı',
     dsTest: 'Dene', dsTesting: 'Soruluyor…', dsTestOK: 'Yanıt veriyor: {0}', dsSaved: 'Veri kaynağı kaydedildi.', dsRemove: 'Kaldır',
     dsRemoveTitle: 'Veri kaynağını kaldır', dsRemoveConfirm: '{0} artık sorgulanmayacak. Kaldırılsın mı?', dsRemoved: 'Veri kaynağı kaldırıldı.',
+    users: 'Kullanıcılar', userAdd: 'Kullanıcı ekle', userEdit: 'Kullanıcıyı düzenle', userRole: 'Rol', userGrant: 'Yetki', userBy: 'Ekleyen', userChanged: 'Değişiklik',
+    userGrantHelp: 'viewer, operator ya da admin; yalnızca bazı yerlerde: operator@production/payments+staging/*',
+    userPasswordHelp: 'En az 10 karakter.', userPasswordKeep: 'Boş bırakılırsa şifre değişmez.', userPasswordAgain: 'Şifre (tekrar)',
+    userPasswordsDiffer: 'Şifreler aynı değil.', userAdded: 'Kullanıcı eklendi.', userSaved: 'Kullanıcı kaydedildi; açık oturumları kapandı.',
+    userRemoveTitle: 'Kullanıcıyı sil', userRemoveConfirm: '{0} silinsin mi? Açık oturumları kapanır.', userRemoved: 'Kullanıcı silindi.',
+    usersHint: 'Kullanıcı adı ve burada tutulan bir şifreyle girenler. Değişiklik hemen geçerli olur ve kişinin açık oturumlarını kapatır.',
+    usersNone: 'Henüz kullanıcı yok. Bir tane eklendiğinde giriş ekranı kullanıcı adı ve şifre sorar.',
+    usersFixed: 'Sunucunun başlangıç kullanıcıları', usersFixedHint: 'KARTAL_USERS ve admin token’ından gelir; tanımlandıkları yerde değiştirilir.',
+    usersDirectory: 'Dizindeki (Active Directory ya da LDAP) kişiler kendi hesaplarıyla girer; rollerini grupları belirler.',
+    ownPassword: 'Şifremi değiştir', currentPassword: 'Mevcut şifre', newPassword: 'Yeni şifre', ownPasswordSaved: 'Şifre değiştirildi.',
+    spaceCluster: 'Küme', spaceObserve: 'Gözlem', spaceClusterTitle: 'Küme yönetimi', spaceObserveTitle: 'Gözlem',
+    spaceClusterHelp: 'Her cluster’ın iş yükleri, node’ları, logları, YAML’ı, sürümleri ve değişiklikleri.',
+    spaceObserveHelp: 'Panolar, Keşfet, uygulamaların yayınladığı metrikler, uyarılar ve URL kontrolleri.',
+    chooseSpace: 'Neyi açmak istersiniz?',
     dashboards: 'Panolar', exAddToDash: 'Panoya ekle', exApplyPanel: 'Panele uygula',
     exEditingPanel: '{1} panosundaki “{0}” panelinin sorgularını düzenliyorsunuz. Değişkenler orada seçilen değerleri alır.',
     dbHint: 'Deponun ve veri kaynaklarının grafik, sayı, tablo ve loglarından oluşan kayıtlı sayfalar. Her panel, bakan kişinin görebildiğini gösterir.',
@@ -932,6 +971,8 @@ function parseRoute() {
     cluster: '', view: 'overview', rest: [], ns: params.get('ns') || '', q: params.get('q') || '',
     problems: params.get('p') === '1', obj: params.get('o') || '', tab: params.get('t') || '',
     x: params.get('x') || '',
+    // #/ itself: the page that asks which half to open.
+    home: parts[0] !== 'c',
   };
   if (parts[0] === 'c') {
     r.cluster = parts[1] || '';
@@ -976,6 +1017,15 @@ function replaceRoute() {
 
 function onRoute() {
   const r = parseRoute();
+  if (r.home) {
+    renderChooser();
+    return;
+  }
+  // Coming from the chooser: the shell is built again.
+  if (!els.shell) {
+    startApp();
+    return;
+  }
   const key = keyOf(r);
   if (key === listKey && els.shell) {
     state.obj = r.obj;
@@ -998,7 +1048,12 @@ function onRoute() {
     favs = readFavs();
     if (state.cluster) writeStore('localStorage', 'kartal.cluster', state.cluster);
   }
-  if (els.shell) els.shell.classList.remove('side-open');
+  if (els.shell) {
+    els.shell.classList.remove('side-open');
+    els.shell.classList.toggle('space-observe', spaceOf(state.view) === 'observe');
+  }
+  // Each half opens again where it was left.
+  writeStore('localStorage', LAST_VIEW_KEY + spaceOf(state.view), state.view);
   document.title = (state.cluster ? t(state.view) + ' · ' + state.cluster + ' · ' : '') + 'Kartal Gözü';
   state.nsMenuOpen = false;
   renderTop();
@@ -1060,6 +1115,7 @@ async function api(path, { method = 'GET', body, raw, text = false, signal } = {
     throw new ApiError(res.status, message);
   }
   if (text) return res.text();
+  if (res.status === 204) return null;
   const etag = res.headers.get('ETag');
   if (!etag) return res.json();
   const hit = memo.get(path);
@@ -1226,6 +1282,8 @@ async function loadView(signal) {
     }
     case 'uptime':
       return { checks: await api('checks', { signal }) };
+    case 'users':
+      return await api('users', { signal });
     case 'appmetrics': {
       const q = new URLSearchParams({ hours: String(state.watchHours || 1) });
       if (state.ns) q.set('namespace', state.ns);
@@ -1311,14 +1369,21 @@ const toasts = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite'
 const els = {};
 
 function startApp() {
+  if (parseRoute().home) {
+    renderChooser();
+    return;
+  }
+  els.chooser = null;
   listKey = null;
   els.top = h('header', { class: 'top' });
+  els.spaceLabel = h('div', { class: 'space-label' });
   els.nsPicker = h('div', { class: 'ns-picker' });
   els.pinned = h('div');
   els.pinnedBox = h('div', { hidden: true }, h('h3', null, h('span', null, '★ ' + t('pinned'))), els.pinned);
   els.nav = h('nav', { class: 'nav', 'aria-label': t('menu') });
   navSig = '';
   els.side = h('aside', { class: 'side' },
+    els.spaceLabel,
     els.nsPicker,
     els.pinnedBox,
     els.nav);
@@ -1334,6 +1399,39 @@ function startApp() {
   resetDetail();
   fill(root, els.shell, toasts);
   onRoute();
+}
+
+// lastView is where a half was left, or its first page.
+function lastView(space) {
+  const v = readStore('localStorage', LAST_VIEW_KEY + space);
+  return VIEWS.includes(v) && spaceOf(v) === space ? v : SPACE_HOME[space];
+}
+
+// renderChooser asks which half of the UI to open: the clusters' objects,
+// or what is watched over time.
+function renderChooser() {
+  stopRefresh();
+  resetDetail();
+  els.shell = null;
+  els.top = els.side = els.head = els.banner = els.content = els.detail = els.filter = els.updated = null;
+  els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = null;
+  state.nsMenuOpen = false;
+  document.title = 'Kartal Gözü';
+  const cluster = readStore('localStorage', 'kartal.cluster') || '';
+  const card = (space, icon, items) => h('a', {
+    class: 'space-card ' + space, href: routeHash({ cluster, view: lastView(space), ns: '' }),
+  },
+  h('div', { class: 'space-icon', 'aria-hidden': 'true' }, icon),
+  h('h2', null, t(space === 'cluster' ? 'spaceClusterTitle' : 'spaceObserveTitle')),
+  h('p', { class: 'muted' }, t(space === 'cluster' ? 'spaceClusterHelp' : 'spaceObserveHelp')),
+  h('ul', null, items.map(id => h('li', null, t(id)))));
+  els.chooser = h('div', { class: 'chooser' },
+    h('h1', null, h('img', { src: '_ui/eagle.svg', alt: '' }), 'Kartal Gözü'),
+    h('p', { class: 'muted' }, t('chooseSpace')),
+    h('div', { class: 'space-cards' },
+      card('cluster', '⎈', ['overview', 'workloads', 'nodes', 'changes']),
+      card('observe', '∿', ['dashboards', 'explore', 'appmetrics', 'alerts'])));
+  fill(root, els.chooser, toasts);
 }
 
 function currentCluster() {
@@ -1353,11 +1451,22 @@ function renderTop() {
   fill(els.top,
     h('button', { type: 'button', class: 'icon-btn menu-btn', title: t('menu'), onclick: () => els.shell.classList.toggle('side-open') }, '☰'),
     h('a', { class: 'brand', href: '#/' }, h('img', { src: '_ui/eagle.svg', alt: '' }), h('span', { class: 'brand-name' }, 'Kartal Gözü')),
+    h('nav', { class: 'space-switch', 'aria-label': t('chooseSpace') }, ['cluster', 'observe'].map(space => {
+      const on = spaceOf(state.view) === space;
+      return h('a', {
+        class: on ? 'active' : null, 'aria-current': on ? 'page' : null,
+        href: on ? routeHash({ view: state.view, rest: state.rest }) : routeHash({ view: lastView(space) }),
+      }, t(space === 'cluster' ? 'spaceCluster' : 'spaceObserve'));
+    })),
     h('div', { class: 'clusters' }, (state.clusters || []).map(clusterChip)),
     h('button', { type: 'button', class: 'btn search-btn', title: t('searchTitle'), onclick: openPalette },
       '⌕', h('span', { class: 'label' }, t('search')), h('kbd', null, isMac ? '⌘K' : 'Ctrl K')),
-    state.me ? h('span', { class: 'user-chip', title: t('role.' + state.me.role) }, state.me.name,
-      h('span', { class: 'muted' }, ' · ' + t('role.' + state.me.role))) : null,
+    // Someone whose password is kept here changes it from their name.
+    state.me ? h(state.me.ownPassword ? 'button' : 'span', {
+      type: state.me.ownPassword ? 'button' : null, class: state.me.ownPassword ? 'user-chip clickable' : 'user-chip',
+      title: state.me.ownPassword ? t('ownPassword') : t('role.' + state.me.role),
+      onclick: state.me.ownPassword ? ownPasswordDialog : null,
+    }, state.me.name, h('span', { class: 'muted' }, ' · ' + t('role.' + state.me.role))) : null,
     h('button', { type: 'button', class: 'icon-btn', title: t('language'), onclick: toggleLang }, lang === 'tr' ? 'EN' : 'TR'),
     h('button', { type: 'button', class: 'icon-btn', title: t('theme'), onclick: toggleTheme }, theme() === 'dark' ? '☀' : '☾'),
     getToken() ? h('button', { type: 'button', class: 'icon-btn', title: t('logout'), onclick: logout }, '↪') : null);
@@ -1399,7 +1508,9 @@ function nsSummary(name) {
 
 function selectNamespace(ns) {
   state.nsMenuOpen = false;
-  const view = CLUSTER_SCOPED.has(state.view) ? 'overview' : state.view;
+  // A view of the whole cluster gives way to one of the namespace, in the
+  // same half of the UI.
+  const view = !CLUSTER_SCOPED.has(state.view) ? state.view : spaceOf(state.view) === 'observe' ? 'appmetrics' : 'overview';
   go({ view, ns, rest: view === 'resources' ? state.rest : [] });
 }
 
@@ -1461,8 +1572,9 @@ function renderNsMenuList() {
 function renderPinned() {
   if (!els.pinned) return;
   const rows = [...favs.ns.map(ns => namespaceRow(nsSummary(ns), true)), ...favs.obj.map(objectRow)];
-  // Nothing pinned yet: the section stays out of the way.
-  els.pinnedBox.hidden = !rows.length;
+  // Nothing pinned yet: the section stays out of the way. Pinned
+  // namespaces and objects belong to the clusters' half.
+  els.pinnedBox.hidden = !rows.length || spaceOf(state.view) === 'observe';
   fill(els.pinned, rows);
 }
 
@@ -1505,7 +1617,8 @@ function toggleGroup(section) {
 // dragged, or moved with the arrows, also into and out of the groups. The
 // order is remembered in this browser; views added later go to their usual
 // place.
-const NAV_LAYOUT_KEY = 'kartal.navLayout';
+// v2: the menu split in two halves; an order saved before does not fit.
+const NAV_LAYOUT_KEY = 'kartal.navLayout.v2';
 let navEntries = navLayout();
 let navEditing = false;
 let navDrag = null; // what is being dragged: { id } or { group }
@@ -1561,9 +1674,17 @@ function setNavEditing(on) {
   renderNav();
 }
 
-// The audit log is for operators; nodes are the whole cluster's.
+// viewAllowed tells whether the user may open a view: the audit log is for
+// operators; nodes are the whole cluster's; users are for admins of all of
+// it, on a server that keeps them.
+function viewAllowed(id) {
+  return (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0) &&
+    (id !== 'users' || (!!state.me && state.me.users && state.me.everywhere === 'admin'));
+}
+
+// The menu shows the views of the half the current one is in.
 function navShown(id) {
-  return (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0);
+  return spaceOf(id) === spaceOf(state.view) && viewAllowed(id);
 }
 
 // navRows lays the entries out as the menu shows them, a group's views
@@ -1695,6 +1816,7 @@ function renderNav() {
   const sig = JSON.stringify([state.cluster, state.view, state.ns, lang, counts, state.me]);
   if (sig === navSig) return;
   navSig = sig;
+  if (els.spaceLabel) els.spaceLabel.textContent = t(spaceOf(state.view) === 'observe' ? 'spaceObserveTitle' : 'spaceClusterTitle');
   if (navEditing) {
     renderNavEditor();
     return;
@@ -1781,7 +1903,8 @@ function renderHead() {
     },
   });
   els.updated = h('span', { class: 'muted' });
-  const scope = CLUSTER_SCOPED.has(v)
+  // The users are the server's, of no cluster or namespace.
+  const scope = v === 'users' ? null : CLUSTER_SCOPED.has(v)
     ? h('span', { class: 'muted' }, t(SERVER_VIEWS.has(v) ? 'fromServer' : ALL_CLUSTERS.has(v) ? 'allClusters' : 'clusterWide'))
     : state.ns
       ? h('span', { class: 'chip active' }, t('namespace') + ': ' + state.ns,
@@ -1837,6 +1960,7 @@ function renderContent() {
     case 'changes': body = renderChanges(state.data.items); break;
     case 'releases': body = renderReleases(state.data.items); break;
     case 'uptime': body = renderUptime(state.data.checks); break;
+    case 'users': body = renderUsers(state.data); break;
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
@@ -2701,6 +2825,132 @@ async function mailDialog() {
     fixed ? null : (buttons[2] = h('button', { type: 'submit', class: 'btn primary' }, t('save')))));
   const close = modal(form);
   (fixed ? buttons[1] : addr).focus();
+}
+
+// renderUsers lists the users admins manage here, and the ones the server
+// was started with, which are changed where they are set.
+function renderUsers({ users, fixed, directory, where }) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = users.filter(u => matches(words, [u.name, u.grant, u.by]));
+  return [
+    where ? null : h('div', { class: 'banner' }, t('mailNotKept')),
+    h('section', { class: 'panel' },
+      h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersHint')), h('span', { class: 'grow' }),
+        button('+ ' + t('userAdd'), () => userDialog(), 'primary')),
+      rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, h('th', null, t('userName')), h('th', null, t('userRole')), h('th', null, t('userGrant')),
+          h('th', null, t('userBy')), h('th', null, t('userChanged')), h('th'))),
+        h('tbody', null, rows.map(u => h('tr', null,
+          h('td', null, h('strong', null, u.name)),
+          h('td', null, t('role.' + u.role)),
+          h('td', null, mono(u.grant)),
+          h('td', null, u.by || '', u.created ? h('span', { class: 'muted' }, ' · ', age(u.created)) : null),
+          h('td', null, u.changed && when(u.changed) ? [age(u.changed), u.changedBy ? h('span', { class: 'muted' }, ' · ' + u.changedBy) : null] : '—'),
+          h('td', { class: 'actions-cell' },
+            button(t('edit'), () => userDialog(u)),
+            button(t('dsRemove'), () => removeUser(u), 'danger')))))))
+        : h('div', { class: 'empty-note' }, users.length ? t('noMatch') : t('usersNone'))),
+    fixed.length || directory ? panel(t('usersFixed'), [
+      h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersFixedHint'))),
+      fixed.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('tbody', null, fixed.map(u => h('tr', null, h('td', null, u.name), h('td', null, t('role.' + u.role))))))) : null,
+      directory ? h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersDirectory'))) : null,
+    ]) : null,
+  ];
+}
+
+// userDialog adds a user, or changes one: their access, their password or
+// both; an empty password keeps the one they have.
+function userDialog(u) {
+  const name = h('input', { type: 'text', maxlength: '64', autocomplete: 'off', spellcheck: 'false', value: u ? u.name : '', disabled: !!u });
+  const grant = h('input', { type: 'text', class: 'mono', autocomplete: 'off', spellcheck: 'false', value: u ? u.grant : 'viewer', list: 'user-grants' });
+  const grants = h('datalist', { id: 'user-grants' }, ['viewer', 'operator', 'admin'].map(g => h('option', { value: g })));
+  const pass = h('input', { type: 'password', autocomplete: 'new-password', required: !u });
+  const again = h('input', { type: 'password', autocomplete: 'new-password', required: !u });
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      if (pass.value !== again.value) {
+        note.say(t('userPasswordsDiffer'), 'bad');
+        return;
+      }
+      try {
+        if (u) {
+          const body = { grant: grant.value.trim() !== u.grant ? grant.value.trim() : '', password: pass.value };
+          // Nothing changed: saving would only end their sessions.
+          if (!body.grant && !body.password) {
+            close();
+            return;
+          }
+          await api('users/' + enc(u.name), { method: 'PUT', body });
+          toast(t('userSaved'));
+        } else {
+          await api('users', { method: 'POST', body: { name: name.value.trim(), grant: grant.value.trim(), password: pass.value } });
+          toast(t('userAdded'));
+        }
+        close();
+        refresh();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t(u ? 'userEdit' : 'userAdd')),
+  dialogField(t('userName'), name),
+  dialogField(t('userGrant'), grant, t('userGrantHelp')), grants,
+  dialogField(t('password'), pass, u ? t('userPasswordKeep') : t('userPasswordHelp')),
+  dialogField(t('userPasswordAgain'), again),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t(u ? 'save' : 'userAdd'))));
+  const close = modal(form);
+  (u ? grant : name).focus();
+}
+
+async function removeUser(u) {
+  const ok = await ask({ title: t('userRemoveTitle'), message: t('userRemoveConfirm', u.name), confirm: t('dsRemove'), danger: true });
+  if (!ok) return;
+  try {
+    await api('users/' + enc(u.name), { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t('userRemoved'));
+  refresh();
+}
+
+// ownPasswordDialog lets a user added in the UI change their password,
+// given the current one.
+function ownPasswordDialog() {
+  const current = h('input', { type: 'password', autocomplete: 'current-password', required: true });
+  const pass = h('input', { type: 'password', autocomplete: 'new-password', required: true });
+  const again = h('input', { type: 'password', autocomplete: 'new-password', required: true });
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      if (pass.value !== again.value) {
+        note.say(t('userPasswordsDiffer'), 'bad');
+        return;
+      }
+      try {
+        await api('me/password', { method: 'POST', body: { current: current.value, password: pass.value } });
+        close();
+        toast(t('ownPasswordSaved'));
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t('ownPassword')),
+  dialogField(t('currentPassword'), current),
+  dialogField(t('newPassword'), pass, t('userPasswordHelp')),
+  dialogField(t('userPasswordAgain'), again),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  current.focus();
 }
 
 function renderAudit(items) {
@@ -7653,8 +7903,7 @@ function paletteItems() {
     add('★ ' + kind, (ns ? ns + '/' : '') + name, () => (gvr ? openDetail({ gvr, ns, name }) : go({ view: KIND_VIEW[kind] || 'resources', ns, q: name })));
   }
   for (const id of VIEWS) {
-    if ((id === 'audit' && !roleAtLeast('operator')) || (id === 'nodes' && !roleIn(''))) continue;
-    add(t('view'), t(id), () => go({ view: id }));
+    if (viewAllowed(id)) add(t('view'), t(id), () => go({ view: id }));
   }
   for (const n of state.namespaces || []) {
     if (favs.ns.includes(n.name)) continue;
@@ -7734,7 +7983,8 @@ function openPalette() {
 // ---------------------------------------------------------------- sign-in, theme, language
 
 // loginMethods is what the server offers besides tokens: a user name and
-// password (its own users' or a directory's), asked for once.
+// password (its own users' or a directory's), asked for on every sign-in
+// page, as an admin may have added the first user meanwhile.
 let loginMethods = null;
 
 async function showLogin(message) {
@@ -7745,16 +7995,14 @@ async function showLogin(message) {
   resetDetail();
   els.shell = null;
   els.top = els.side = els.head = els.banner = els.content = els.detail = els.filter = els.updated = null;
-  els.nsPicker = els.nsMenuList = els.pinned = els.nav = null;
+  els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = els.chooser = null;
   state.nsMenuOpen = false;
   state.me = null;
-  if (!loginMethods) {
-    try {
-      const res = await fetch('api/v1/login', { headers: { Accept: 'application/json' }, cache: 'no-cache' });
-      loginMethods = res.ok ? await res.json() : { password: false };
-    } catch {
-      loginMethods = { password: false };
-    }
+  try {
+    const res = await fetch('api/v1/login', { headers: { Accept: 'application/json' }, cache: 'no-cache' });
+    loginMethods = res.ok ? await res.json() : { password: false };
+  } catch {
+    loginMethods = { password: false };
   }
   renderLogin(message, loginMethods.password ? 'password' : 'token');
 }
@@ -7870,7 +8118,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('mousedown', e => {
   if (state.nsMenuOpen && els.nsPicker && !els.nsPicker.contains(e.target)) closeNsMenu();
 });
-window.addEventListener('hashchange', () => { if (els.shell) onRoute(); });
+window.addEventListener('hashchange', () => { if (els.shell || els.chooser) onRoute(); });
 // Leaving the page with unsaved YAML edits asks first.
 window.addEventListener('beforeunload', e => {
   if (detail && detail.editing && detail.editing.text !== detail.editing.original) e.preventDefault();

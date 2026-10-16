@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -82,4 +83,19 @@ func (s *Sessions) End(token string) bool {
 	_, ok := s.all[token]
 	delete(s.all, token)
 	return ok
+}
+
+// EndUser signs every session of a user out, as when their account goes or
+// their role changes; it returns how many there were.
+func (s *Sessions) EndUser(name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for t, ses := range s.all {
+		if strings.EqualFold(ses.user.Name, name) {
+			delete(s.all, t)
+			n++
+		}
+	}
+	return n
 }

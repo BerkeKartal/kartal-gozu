@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/accounts"
 	"github.com/BerkeKartal/kartal-gozu/internal/agent"
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/api"
@@ -131,12 +132,21 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		Dashboards:     dashboard.New(keeper),
 	}
 	selfToken := adminToken
+	if withLDAP || adminToken != "" {
+		// Users admins add in the UI, signing in next to the directory.
+		var fixed []auth.User
+		if adminToken != "" {
+			fixed = append(fixed, auth.User{Name: "admin", Role: auth.Admin})
+		}
+		cfg.Accounts = accounts.New(keeper, fixed)
+		cfg.Login = auth.Chain{cfg.Accounts}
+	}
 	if withLDAP {
 		login, err := demoDirectory()
 		if err != nil {
 			return err
 		}
-		cfg.Login = login
+		cfg.Login = auth.Chain{cfg.Accounts, login}
 		cfg.Directory = true
 		// Signing in is needed then; the Prometheus source that is the demo
 		// server itself gets a token of its own, which sees everything.

@@ -28,7 +28,7 @@ func TestPasswordSignIn(t *testing.T) {
 	s := New(Config{
 		AgentTokens: map[string]string{agentTok: "demo"},
 		StaleAfter:  time.Minute, MaxPollWait: time.Second, CommandTimeout: time.Second,
-		Login: ldap.Authenticator{Config: ldap.Config{URL: url, UPNDomain: "example.org", UserBase: "DC=example,DC=org"}, Rules: rules},
+		Login: ldap.Authenticator{Config: ldap.Config{URL: url, UPNDomain: "example.org", UserBase: "DC=example,DC=org"}, Rules: rules}, Directory: true,
 	}, store.New("demo"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if rec := do(s, "GET", "/api/v1/clusters", "", ""); rec.Code != 401 {
@@ -113,7 +113,7 @@ func TestLocalPasswordSignIn(t *testing.T) {
 	s := New(Config{
 		AgentTokens: map[string]string{agentTok: "demo"},
 		StaleAfter:  time.Minute, MaxPollWait: time.Second, CommandTimeout: time.Second,
-		Users: tokens, Login: auth.Chain{passwords},
+		Users: tokens, Login: auth.Chain{passwords}, FilePasswords: true,
 	}, store.New("demo"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if rec := do(s, "GET", "/api/v1/login", "", ""); !strings.Contains(rec.Body.String(), `"directory":false`) || !strings.Contains(rec.Body.String(), `"password":true`) {
