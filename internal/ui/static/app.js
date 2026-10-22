@@ -102,6 +102,8 @@ const STRINGS = {
     'col.applied': 'Applied', 'col.now': 'Now', driftHint: 'Someone changed these after the last kubectl apply (kubectl edit, scale, another tool); the next apply will set them back.',
     grpNetwork: 'Networking', grpConfig: 'Configuration', grpStorage: 'Storage', grpCluster: 'Cluster',
     grpApps: 'Applications', grpOps: 'Operations',
+    navSearch: 'Search the menu…', navFavorites: 'Favorites', navFavAdd: 'Add to favorites', navFavRemove: 'Remove from favorites',
+    navCollapse: 'Close this group', navExpand: 'Open this group', navNeedsAttention: '{0} need attention',
     sizing: 'Right-sizing', rollouts: 'Rollouts',
     'sz.none': 'none', szNoMetrics: 'This cluster reports no usage (metrics-server is missing): nothing can be suggested.',
     szRisky: '{0} workloads at risk', szNoRisk: 'no workload at risk', szFree: '{0} CPU and {1} memory could be given back',
@@ -142,7 +144,7 @@ const STRINGS = {
     ncRun: 'Check', ncCopy: 'Copy as text', ncResults: 'Results', ncTarget: 'Address',
     ncWaiting: 'Waiting for {0} node(s): their pods are starting (the first time, the image is pulled).',
     ncLegend: 'timeout: nothing answered, a firewall probably drops the connection · refused: the host answered, nothing listens on the port · DNS: the name is not known there.',
-    ncNoAnswer: 'no answer',
+    ncNoAnswer: 'no answer', ncNoTargets: 'Write at least one host:port to try.', ncChooseFrom: 'Choose where to try from: the agent pod, nodes or both.',
     ncOff: 'This cluster’s agent does not run network checks. Set KARTAL_NETWORK_CHECKS to "true" and apply deploy/agent/rbac-network-checks.yaml.',
     'nc.ok': 'ok', 'nc.timeout': 'timeout', 'nc.refused': 'refused', 'nc.dns': 'DNS', 'nc.unreachable': 'no route', 'nc.error': 'error',
     npHint: 'The connection was dropped on the way: a NetworkPolicy may keep the API server out.', npLook: 'Check NetworkPolicies',
@@ -434,6 +436,8 @@ const STRINGS = {
     'col.applied': 'Uygulanan', 'col.now': 'Şu an', driftHint: 'Bunlar son kubectl apply’dan sonra değişti (kubectl edit, scale, başka bir araç); bir sonraki apply onları geri alır.',
     grpNetwork: 'Ağ', grpConfig: 'Yapılandırma', grpStorage: 'Depolama', grpCluster: 'Cluster',
     grpApps: 'Uygulamalar', grpOps: 'Operasyon',
+    navSearch: 'Menüde ara…', navFavorites: 'Sık kullanılanlar', navFavAdd: 'Sık kullanılanlara ekle', navFavRemove: 'Sık kullanılanlardan çıkar',
+    navCollapse: 'Bu grubu kapat', navExpand: 'Bu grubu aç', navNeedsAttention: '{0} tanesi ilgi bekliyor',
     sizing: 'Kaynak önerisi', rollouts: 'Dağıtımlar',
     'sz.none': 'yok', szNoMetrics: 'Bu cluster kullanım bildirmiyor (metrics-server yok): öneri yapılamaz.',
     szRisky: '{0} iş yükü risk altında', szNoRisk: 'risk altında iş yükü yok', szFree: '{0} CPU ve {1} bellek geri verilebilir',
@@ -474,7 +478,7 @@ const STRINGS = {
     ncRun: 'Dene', ncCopy: 'Metin olarak kopyala', ncResults: 'Sonuçlar', ncTarget: 'Adres',
     ncWaiting: '{0} node bekleniyor: pod’lar açılıyor (ilk seferde imaj çekilir).',
     ncLegend: 'zaman aşımı: yanıt yok, büyük olasılıkla bir firewall düşürüyor · reddedildi: sunucu yanıt verdi ama portta dinleyen yok · DNS: ad orada çözülemedi.',
-    ncNoAnswer: 'yanıt yok',
+    ncNoAnswer: 'yanıt yok', ncNoTargets: 'Denenecek en az bir host:port yazın.', ncChooseFrom: 'Nereden deneneceğini seçin: agent pod’u, node’lar ya da ikisi.',
     ncOff: 'Bu cluster’ın agent’ı bağlantı testi yapmıyor. KARTAL_NETWORK_CHECKS’i "true" yapın ve deploy/agent/rbac-network-checks.yaml’ı uygulayın.',
     'nc.ok': 'açık', 'nc.timeout': 'zaman aşımı', 'nc.refused': 'reddedildi', 'nc.dns': 'DNS', 'nc.unreachable': 'yol yok', 'nc.error': 'hata',
     npHint: 'Bağlantı yolda düşürüldü: bir NetworkPolicy API sunucusunu engelliyor olabilir.', npLook: 'NetworkPolicy’lere bak',
@@ -1515,10 +1519,31 @@ function startApp() {
   els.pinned = h('div');
   els.pinnedBox = h('div', { hidden: true }, h('h3', null, h('span', null, '★ ' + t('pinned'))), els.pinned);
   els.nav = h('nav', { class: 'nav', 'aria-label': t('menu') });
+  els.navSearch = h('input', {
+    type: 'search', class: 'nav-search', placeholder: t('navSearch'), 'aria-label': t('navSearch'), value: state.navQ || '',
+    oninput: e => { state.navQ = e.target.value; renderNav(); },
+    onkeydown: e => {
+      if (e.key === 'Escape') {
+        // Escape empties the search first; only then does it close things.
+        if (!e.target.value) return;
+        e.stopPropagation();
+        state.navQ = e.target.value = '';
+        renderNav();
+      } else if (e.key === 'Enter') {
+        const first = els.nav.querySelector('a.nav-item');
+        if (first) {
+          state.navQ = e.target.value = '';
+          location.hash = first.getAttribute('href');
+          els.shell.classList.remove('side-open');
+        }
+      }
+    },
+  });
   navSig = '';
   els.side = h('aside', { class: 'side' },
     els.spaceLabel,
     els.nsPicker,
+    els.navSearch,
     els.pinnedBox,
     els.nav);
   els.head = h('div');
@@ -1548,7 +1573,7 @@ function renderChooser() {
   resetDetail();
   els.shell = null;
   els.top = els.side = els.head = els.banner = els.content = els.detail = els.filter = els.updated = null;
-  els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = null;
+  els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = els.navSearch = null;
   state.nsMenuOpen = false;
   document.title = 'Kartal Gözü';
   const cluster = readStore('localStorage', 'kartal.cluster') || '';
@@ -1722,29 +1747,62 @@ function navCounts() {
     { nodes: cluster.nodes, nodesNotReady: cluster.nodesNotReady, namespaces: cluster.namespaces, alerts: cluster.alerts });
 }
 
-// The navigation's groups open and close with a click. The group holding
-// the current view opens by itself; the others stay as the user left them,
-// remembered in this browser.
-const NAV_OPEN_KEY = 'kartal.navOpen';
-const navOpen = new Set((readStore('localStorage', NAV_OPEN_KEY) || '').split(',').filter(Boolean));
+// The navigation's groups are open, so that every view is in sight; a click
+// on a group's heading closes it, and it stays closed, remembered in this
+// browser. The group holding the current view opens by itself.
+const NAV_CLOSED_KEY = 'kartal.navClosed';
+const navClosed = new Set((readStore('localStorage', NAV_CLOSED_KEY) || '').split(',').filter(Boolean));
 let navShutAt = null; // the view whose own group the user closed
 
 function groupOpen(section) {
   if (section.items.includes(state.view)) return navShutAt !== state.view;
-  return navOpen.has(section.group);
+  return !navClosed.has(section.group);
 }
 
 function toggleGroup(section) {
   if (groupOpen(section)) {
-    navOpen.delete(section.group);
+    navClosed.add(section.group);
     if (section.items.includes(state.view)) navShutAt = state.view;
   } else {
-    navOpen.add(section.group);
+    navClosed.delete(section.group);
     if (section.items.includes(state.view)) navShutAt = null;
   }
-  writeStore('localStorage', NAV_OPEN_KEY, [...navOpen].join(',') || null);
+  writeStore('localStorage', NAV_CLOSED_KEY, [...navClosed].join(',') || null);
   navSig = '';
   renderNav();
+}
+
+// Favorite views come first in the menu, in the order they were starred.
+const NAV_FAV_KEY = 'kartal.navFav';
+let navFavs = (() => {
+  try {
+    return strings(JSON.parse(readStore('localStorage', NAV_FAV_KEY) || '[]')).filter(id => VIEWS.includes(id));
+  } catch {
+    return [];
+  }
+})();
+
+function toggleNavFav(id) {
+  toggleIn(navFavs, id);
+  writeStore('localStorage', NAV_FAV_KEY, navFavs.length ? JSON.stringify(navFavs) : null);
+  navSig = '';
+  renderNav();
+}
+
+// navText is what the menu's search looks in: a view's name in both
+// languages, and its group's.
+function navText(id) {
+  const section = NAV.find(x => x.items.includes(id));
+  const group = section && section.group;
+  return [id, t(id), STRINGS.en[id], group && t(group), group && STRINGS.en[group]].filter(Boolean).join(' ').toLocaleLowerCase(lang);
+}
+
+// navResults are the views the menu's search finds, in both halves.
+function navResults(q, counts) {
+  const words = q.toLocaleLowerCase(lang).split(/\s+/).filter(Boolean);
+  const found = NAV.flatMap(x => x.items).filter(id => viewAllowed(id) && words.every(w => navText(id).includes(w)));
+  if (!found.length) return h('div', { class: 'nav-empty' }, t('noMatch'));
+  return found.map(id => navItem(id, counts, spaceOf(id) !== spaceOf(state.view)));
 }
 
 // The menu's order is the user's to change, in its edit mode: entries are
@@ -1948,7 +2006,8 @@ function renderNav() {
   // Redrawing would drop what is being dragged; it waits for the drop.
   if (!els.nav || navDrag) return;
   const counts = navCounts();
-  const sig = JSON.stringify([state.cluster, state.view, state.ns, lang, counts, state.me]);
+  const q = (state.navQ || '').trim();
+  const sig = JSON.stringify([state.cluster, state.view, state.ns, lang, counts, state.me, q, navFavs]);
   if (sig === navSig) return;
   navSig = sig;
   if (els.spaceLabel) els.spaceLabel.textContent = t(spaceOf(state.view) === 'observe' ? 'spaceObserveTitle' : 'spaceClusterTitle');
@@ -1956,22 +2015,34 @@ function renderNav() {
     renderNavEditor();
     return;
   }
-  fill(els.nav, navEntries.map(entry => {
-    if (typeof entry === 'string') return navShown(entry) ? navItem(entry, counts) : null;
-    const items = entry.items.filter(navShown);
-    if (!items.length) return null;
-    const open = groupOpen(entry);
-    // A closed group still shows that something inside needs attention.
-    const bad = open ? 0 : items.reduce((n, id) => n + (id === 'events' ? 0 : navProblems(id, counts)), 0);
-    const warn = open || bad || !items.includes('events') ? 0 : navProblems('events', counts);
-    return [
-      h('button', { type: 'button', class: 'nav-group', 'aria-expanded': String(open), onclick: () => toggleGroup(entry) },
-        h('span', { class: 'caret', 'aria-hidden': 'true' }, '›'),
+  if (q) {
+    fill(els.nav, navResults(q, counts));
+    return;
+  }
+  const favorites = navFavs.filter(navShown);
+  fill(els.nav,
+    favorites.length ? h('div', { class: 'nav-section' },
+      h('div', { class: 'nav-heading' }, h('span', { class: 'nav-label' }, '★ ' + t('navFavorites'))),
+      favorites.map(id => navItem(id, counts))) : null,
+    favorites.length ? h('div', { class: 'nav-sep' }) : null,
+    navEntries.map(entry => {
+      if (typeof entry === 'string') return navShown(entry) ? navItem(entry, counts) : null;
+      const items = entry.items.filter(navShown);
+      if (!items.length) return null;
+      const open = groupOpen(entry);
+      // A closed group still shows, with a dot, that something inside needs
+      // attention: red for problems, amber for warning events.
+      const bad = items.some(id => id !== 'events' && navProblems(id, counts) > 0);
+      const warn = !bad && items.includes('events') && navProblems('events', counts) > 0;
+      return h('div', { class: 'nav-section' },
+        h('button', { type: 'button', class: 'nav-heading', 'aria-expanded': String(open), onclick: () => toggleGroup(entry),
+          title: t(open ? 'navCollapse' : 'navExpand') },
         h('span', { class: 'nav-label' }, t(entry.group)),
-        bad ? h('span', { class: 'badge bad' }, bad) : warn ? h('span', { class: 'badge warn' }, warn) : null),
-      open ? h('div', { class: 'nav-sub' }, items.map(id => navItem(id, counts))) : null,
-    ];
-  }), h('button', { type: 'button', class: 'nav-edit', onclick: () => setNavEditing(true) }, '⇅ ' + t('navEdit')));
+        !open && (bad || warn) ? h('span', { class: 'nav-dot ' + (bad ? 'bad' : 'warn') }) : null,
+        h('span', { class: 'caret', 'aria-hidden': 'true' }, '▾')),
+        open ? items.map(id => navItem(id, counts)) : null);
+    }),
+    h('button', { type: 'button', class: 'nav-edit', onclick: () => setNavEditing(true) }, '⇅ ' + t('navEdit')));
 }
 
 function navProblems(id, counts) {
@@ -1979,16 +2050,99 @@ function navProblems(id, counts) {
   return [].concat(problemKey || []).reduce((n, k) => n + (counts[k] || 0), 0);
 }
 
-function navItem(id, counts) {
+// navItem is one view in the menu: its icon and name, how many need
+// attention (red, or amber for warning events) and how many there are, and
+// a star, on hover, to keep it among the favorites. other marks a view of
+// the other half, which the search finds.
+function navItem(id, counts, other) {
   const totalKey = (NAV_COUNT[id] || [])[0];
   const total = totalKey ? counts[totalKey] : null;
   const problems = navProblems(id, counts);
   const active = id === state.view;
-  return h('a', { class: active ? 'nav-item active' : 'nav-item', href: routeHash({ view: id }), 'aria-current': active ? 'page' : null },
-    h('span', { class: 'nav-label' }, t(id)),
-    problems ? h('span', { class: id === 'events' ? 'badge warn' : 'badge bad' }, problems) : null,
-    total != null ? h('span', { class: 'nav-count' }, total) : null);
+  const fav = navFavs.includes(id);
+  return h('div', { class: 'nav-row' },
+    h('a', {
+      class: active ? 'nav-item active' : 'nav-item', href: routeHash({ view: id }), 'aria-current': active ? 'page' : null,
+      // A view found by the search is opened: the menu comes back whole.
+      onclick: () => {
+        if (!state.navQ) return;
+        state.navQ = '';
+        if (els.navSearch) els.navSearch.value = '';
+        navSig = '';
+      },
+    },
+      navIcon(id),
+      h('span', { class: 'nav-label' }, t(id)),
+      other ? h('span', { class: 'nav-other' }, t(spaceOf(id) === 'observe' ? 'spaceObserve' : 'spaceCluster')) : null,
+      problems ? h('span', { class: 'nav-alert ' + (id === 'events' ? 'warn' : 'bad'), title: t('navNeedsAttention', problems) }, problems) : null,
+      total != null ? h('span', { class: 'nav-count' }, total) : null),
+    h('button', {
+      type: 'button', class: fav ? 'nav-star on' : 'nav-star', title: t(fav ? 'navFavRemove' : 'navFavAdd'),
+      'aria-label': t(fav ? 'navFavRemove' : 'navFavAdd') + ': ' + t(id), 'aria-pressed': String(fav),
+      onclick: e => { e.preventDefault(); toggleNavFav(id); },
+    }, fav ? '★' : '☆'));
 }
+// ---------------------------------------------------------------- menu icons
+
+// NAV_ICONS draws each view's icon on a 24-unit grid, in lines: paths (a
+// string) and circles ([x, y, r]) and rectangles ([x, y, w, h, r]).
+const NAV_ICONS = {
+  overview: [[3.5, 3.5, 7, 7, 1.5], [13.5, 3.5, 7, 7, 1.5], [3.5, 13.5, 7, 7, 1.5], [13.5, 13.5, 7, 7, 1.5]],
+  pods: ['M12 3l8 4.5v9L12 21l-8-4.5v-9z', 'M4 7.5l8 4.5 8-4.5', 'M12 12v9'],
+  deployments: ['M12 4l8 4-8 4-8-4z', 'M4 12l8 4 8-4', 'M4 16l8 4 8-4'],
+  statefulsets: ['M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3z', 'M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6', 'M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3'],
+  daemonsets: [[2.5, 8, 5, 8, 1], [9.5, 8, 5, 8, 1], [16.5, 8, 5, 8, 1]],
+  jobs: [[12, 12, 9], 'M10 8.5v7l6-3.5z'],
+  cronjobs: [[12, 12, 9], 'M12 7v5l3.5 2'],
+  services: [[5.5, 12, 2.5], [18.5, 5.5, 2.5], [18.5, 18.5, 2.5], 'M7.8 10.9l8.4-4.3', 'M7.8 13.1l8.4 4.3'],
+  ingresses: [[12, 12, 9], 'M3 12h18', 'M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9', 'M12 3c-2.5 2.7-3.8 5.7-3.8 9s1.3 6.3 3.8 9'],
+  configmaps: ['M4 6h9', 'M17 6h3', 'M4 12h3', 'M11 12h9', 'M4 18h11', 'M19 18h1', [15, 6, 2], [9, 12, 2], [17, 18, 2]],
+  secrets: [[8, 12, 4], 'M12 12h9', 'M18 12v3', 'M15 12v2'],
+  certificates: ['M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z', 'M8.5 12l2.5 2.5 4.5-5'],
+  volumeclaims: [[3, 13, 18, 7, 2], 'M3 13l3-8h12l3 8', 'M7 16.5h.01'],
+  helm: [[12, 12, 7], [12, 12, 2], 'M12 3v4', 'M12 17v4', 'M3 12h4', 'M17 12h4', 'M5.6 5.6l2.9 2.9', 'M15.5 15.5l2.9 2.9', 'M5.6 18.4l2.9-2.9', 'M15.5 8.5l2.9-2.9'],
+  releases: ['M3 12V4h8l10 10-8 8z', [7.5, 8, 1.3]],
+  rollouts: ['M12 20V7', 'M6.5 12.5L12 7l5.5 5.5', 'M5 4h14'],
+  sizing: ['M4 18a8 8 0 1 1 16 0', 'M12 18l4-6', [12, 18, 1.2]],
+  nodes: [[3, 4, 18, 7, 2], [3, 13, 18, 7, 2], 'M7 7.5h.01', 'M7 16.5h.01'],
+  namespaces: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+  events: ['M13 3L5 13h6l-1 8 8-10h-6z'],
+  placement: ['M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z', [12, 10, 2.5]],
+  netcheck: ['M4 8h14', 'M14 4l4 4-4 4', 'M20 16H6', 'M10 12l-4 4 4 4'],
+  changes: ['M3.5 12a8.5 8.5 0 1 0 2.5-6', 'M3 4v5h5', 'M12 8v4l3 2'],
+  audit: [[5.5, 4, 13, 17, 2], 'M9 4V3h6v1', 'M9 10h6', 'M9 14h6', 'M9 18h3'],
+  users: [[12, 8, 4], 'M4 21c0-4 3.6-7 8-7s8 3 8 7'],
+  resources: ['M9 6h12', 'M9 12h12', 'M9 18h12', 'M4 6h.01', 'M4 12h.01', 'M4 18h.01'],
+  dashboards: [[3, 3, 18, 18, 2], 'M3 9h18', 'M10 9v12'],
+  explore: [[12, 12, 9], 'M15.5 8.5l-2 5-5 2 2-5z'],
+  appmetrics: ['M3 20h18', 'M5 16l4-5 4 3 6-8'],
+  alerts: ['M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z', 'M10 20a2 2 0 0 0 4 0'],
+  uptime: ['M3 12h4l2.5-6 4 12 2.5-6H21'],
+};
+
+function navIcon(id) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  const attrs = { viewBox: '0 0 24 24', width: '16', height: '16', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8',
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'nav-icon', 'aria-hidden': 'true' };
+  for (const [k, v] of Object.entries(attrs)) svg.setAttribute(k, v);
+  for (const part of NAV_ICONS[id] || [[12, 12, 3]]) {
+    let el;
+    if (typeof part === 'string') {
+      el = document.createElementNS(ns, 'path');
+      el.setAttribute('d', part);
+    } else if (part.length === 3) {
+      el = document.createElementNS(ns, 'circle');
+      ['cx', 'cy', 'r'].forEach((k, i) => el.setAttribute(k, part[i]));
+    } else {
+      el = document.createElementNS(ns, 'rect');
+      ['x', 'y', 'width', 'height', 'rx'].forEach((k, i) => el.setAttribute(k, part[i]));
+    }
+    svg.append(el);
+  }
+  return svg;
+}
+
 
 // namespaceRow is one namespace with its Pods and Events shortcuts.
 function namespaceRow(n, pinned) {
@@ -3241,6 +3395,10 @@ async function startNetCheck() {
   const targets = nc.targets.value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
   writeStore('localStorage', NETCHECK_KEY, nc.targets.value);
   const nodes = [...nc.nodes].sort();
+  if (!targets.length || (!nc.agent && !nodes.length)) {
+    toast(t(targets.length ? 'ncChooseFrom' : 'ncNoTargets'), true);
+    return;
+  }
   const my = ++nc.poll;
   nc.run = { busy: true, targets, nodes, agent: nc.agent, started: null, status: null, error: '', since: Date.now() };
   renderContent();
@@ -8685,7 +8843,7 @@ async function showLogin(message) {
   resetDetail();
   els.shell = null;
   els.top = els.side = els.head = els.banner = els.content = els.detail = els.filter = els.updated = null;
-  els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = els.chooser = null;
+  els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = els.navSearch = els.chooser = null;
   state.nsMenuOpen = false;
   state.me = null;
   try {

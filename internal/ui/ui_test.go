@@ -47,6 +47,7 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
 	}
 	files["chart.js"] = strings.Replace(files["chart.js"], "'http://www.w3.org/2000/svg'", "", 1)
+	files["app.js"] = strings.Replace(files["app.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	files["plot.js"] = strings.Replace(files["plot.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	for name, body := range files {
 		for _, bad := range []string{"http://", "https://", "//cdn", "@import"} {

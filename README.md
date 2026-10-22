@@ -141,9 +141,15 @@ where it was left.
     shortcuts, a red badge counting its unhealthy pods, and a count of its
     warning events.
   - **Pinned:** your starred namespaces (with the same shortcuts) and objects.
-  - **Navigation by kind:** each entry shows a count for the cluster or the
-    selected namespace, with a badge when something needs attention. In
-    Clusters:
+  - **Menu search:** type part of a view's name, in English or Turkish, to
+    find it in either half; <kbd>Enter</kbd> opens the first match.
+  - **Favorites:** the star that shows on an entry when the pointer is over
+    it keeps the view at the top of the menu.
+  - **Navigation by kind:** each entry has an icon and a count for the
+    cluster or the selected namespace, and a tinted number when some need
+    attention. The groups are open; a click on a group's heading closes it
+    (remembered in this browser), and a closed group shows a dot when
+    something inside needs attention. In Clusters:
     - Overview
     - Workloads: Pods, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs
     - Networking: Services, Ingresses (with Traefik's IngressRoutes)

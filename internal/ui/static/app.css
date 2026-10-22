@@ -160,23 +160,55 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 .ns-menu-list { max-height: 60vh; overflow-y: auto; }
 .ns-sep { border-top: 1px solid var(--line); margin: 4px 6px; }
 
-.nav { margin-top: 6px; }
-button.nav-group {
-  display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; padding: 6px 10px;
-  border: 0; border-radius: 6px; background: none; cursor: pointer; text-align: left; font-weight: 600;
+.nav { margin-top: 2px; }
+/* The menu's search, above the favorites and the groups. */
+input.nav-search { width: calc(100% - 8px); margin: 4px 4px 2px; padding: 5px 9px; font-size: 13px; }
+/* A group's heading reads as a section title, not as a link; a click closes
+   or opens it, and a closed one shows a dot when something inside needs
+   attention. */
+.nav-section { margin-top: 10px; }
+.nav-heading {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 10px 3px; border: 0; background: none;
+  font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); text-align: left;
 }
-button.nav-group:hover { background: var(--panel-2); }
-.nav-group .caret { width: 10px; color: var(--muted); transition: transform .15s; }
-.nav-group[aria-expanded="true"] .caret { transform: rotate(90deg); }
-.nav-sub a.nav-item { padding-left: 28px; }
+button.nav-heading { cursor: pointer; border-radius: 6px; }
+button.nav-heading:hover { color: var(--text); }
+.nav-heading .caret { font-size: 10px; opacity: 0; transition: transform .15s, opacity .15s; }
+button.nav-heading:hover .caret, .nav-heading[aria-expanded="false"] .caret { opacity: 1; }
+.nav-heading[aria-expanded="false"] .caret { transform: rotate(-90deg); }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.nav-dot.bad { background: var(--bad); }
+.nav-dot.warn { background: var(--warn); }
+.nav-row { position: relative; }
 a.nav-item {
-  display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px;
-  text-decoration: none; color: inherit;
+  display: flex; align-items: center; gap: 9px; padding: 4px 28px 4px 10px; border-radius: 6px;
+  text-decoration: none; color: inherit; line-height: 20px;
 }
 a.nav-item:hover { background: var(--panel-2); }
 a.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-icon { flex: none; color: var(--muted); }
+a.nav-item:hover .nav-icon { color: var(--text); }
+a.nav-item.active .nav-icon { color: var(--accent); }
 .nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 22px; text-align: right; font-weight: 400; }
+/* How many need attention: a soft tint, not a filled badge. */
+.nav-alert { font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 9px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.nav-alert.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, transparent); }
+.nav-alert.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.nav-other { font-size: 10.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; line-height: 15px; }
+.nav-star {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 2px 4px;
+  border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; opacity: 0;
+}
+.nav-row:hover .nav-star, .nav-star:focus-visible { opacity: 1; }
+/* Without a pointer that hovers, the star stays in sight, faintly. */
+@media (hover: none) {
+  .nav-star { opacity: .45; }
+}
+.nav-star.on { color: var(--accent); }
+.nav-star:hover { color: var(--accent); }
+.nav-empty { padding: 8px 10px; color: var(--muted); font-size: 13px; }
+.nav-sep { border-top: 1px solid var(--line); margin: 10px 8px 0; }
 button.nav-edit {
   display: block; width: 100%; margin-top: 10px; padding: 5px 10px; border: 0; border-radius: 6px;
   background: none; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer;

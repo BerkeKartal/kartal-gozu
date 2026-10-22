@@ -411,19 +411,20 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // collections lists every fixture by the path of its cluster-wide list.
 func (f *Server) collections(x extra) map[string][]string {
 	return map[string][]string{
-		"/api/v1/namespaces":                   append([]string{nsDemo, nsKubeSystem}, x.namespaces...),
-		"/api/v1/nodes":                        {nodeCP, nodeWorker},
-		"/api/v1/pods":                         append([]string{podAPI, podExporter}, x.pods...),
-		"/api/v1/services":                     {svcAPI},
-		"/api/v1/persistentvolumeclaims":       append([]string{pvcData}, x.pvcs...),
-		"/apis/apps/v1/deployments":            append([]string{deployAPI}, x.deployments...),
-		"/apis/apps/v1/daemonsets":             {dsExporter},
-		"/apis/networking.k8s.io/v1/ingresses": {ingAPI},
-		"/apis/batch/v1/jobs":                  {jobBackup},
-		"/apis/batch/v1/cronjobs":              {cronBackup},
-		"/apis/apps/v1/replicasets":            {rsAPICurrent, rsAPIPrevious},
-		"/api/v1/secrets":                      helmSecrets(),
-		"/api/v1/configmaps":                   {configApp},
+		"/api/v1/namespaces":                      append([]string{nsDemo, nsKubeSystem}, x.namespaces...),
+		"/api/v1/nodes":                           {nodeCP, nodeWorker},
+		"/api/v1/pods":                            append([]string{podAPI, podExporter}, x.pods...),
+		"/api/v1/services":                        {svcAPI},
+		"/api/v1/persistentvolumeclaims":          append([]string{pvcData}, x.pvcs...),
+		"/apis/apps/v1/deployments":               append([]string{deployAPI}, x.deployments...),
+		"/apis/apps/v1/daemonsets":                {dsExporter},
+		"/apis/networking.k8s.io/v1/ingresses":    {ingAPI},
+		"/apis/batch/v1/jobs":                     {jobBackup},
+		"/apis/batch/v1/cronjobs":                 {cronBackup},
+		"/apis/apps/v1/replicasets":               {rsAPICurrent, rsAPIPrevious},
+		"/api/v1/secrets":                         helmSecrets(),
+		"/api/v1/configmaps":                      {configApp},
+		"/apis/traefik.io/v1alpha1/ingressroutes": {routeWeb, routeAdmin, routeStatus},
 	}
 }
 
@@ -431,7 +432,7 @@ var kinds = map[string]string{
 	"namespaces": "Namespace", "nodes": "Node", "pods": "Pod", "services": "Service",
 	"persistentvolumeclaims": "PersistentVolumeClaim", "deployments": "Deployment", "daemonsets": "DaemonSet",
 	"replicasets": "ReplicaSet", "secrets": "Secret", "configmaps": "ConfigMap",
-	"ingresses": "Ingress", "jobs": "Job", "cronjobs": "CronJob",
+	"ingresses": "Ingress", "jobs": "Job", "cronjobs": "CronJob", "ingressroutes": "IngressRoute",
 }
 
 // find returns the fixture a single-object path such as
