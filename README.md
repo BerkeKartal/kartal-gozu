@@ -146,11 +146,12 @@ where it was left.
     Clusters:
     - Overview
     - Workloads: Pods, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs
-    - Networking: Services, Ingresses
+    - Networking: Services, Ingresses (with Traefik's IngressRoutes)
     - Configuration: ConfigMaps, Secrets, Certificates
     - Storage: volume claims, with how full each one is
-    - Applications: Helm releases, Versions
-    - Cluster: Nodes, Namespaces, Events
+    - Applications: Helm releases, Versions, Rollouts, Right-sizing
+    - Cluster: Nodes, Namespaces, Events, Placement, Network check (for
+      admins)
     - Operations: Changes, Audit log, Users (for admins)
     - All resources: a browser for every API type, including CRDs
 
@@ -167,6 +168,56 @@ where it was left.
 - **Versions:** every app's images in every cluster, side by side. Rows whose
   versions differ are marked, and "Only differences" keeps those and the apps
   missing from a cluster. A cell opens the app in that cluster.
+- **Rollouts:** each new version of a Deployment, StatefulSet or DaemonSet,
+  from the snapshot that first shows it until every replica runs it and is
+  ready: from which tag to which, how long it took, and who started it when
+  it came from Kartal Gözü (a restart, a rollback, saved YAML). A rollout
+  that is not done after 10 minutes is stuck, with what its pods say
+  (`ImagePullBackOff`, `CrashLoopBackOff`...), and raises an alert; a newer
+  version replaces one still under way. The server keeps the last 2,000 in
+  memory.
+- **Right-sizing:** what each workload's pods used, minute by minute, over
+  up to a week, and the requests and limits that suggests: requests at the
+  95th percentile plus 10% (CPU) or 15% (memory), a memory limit 30% above
+  the highest use, and a CPU limit only where there is one. A memory limit is
+  not lowered unless it is more than twice what is suggested, since short
+  peaks fall between the samples, and one that killed a pod for memory
+  (`OOMKilled`, in the last week) is raised by a quarter. Workloads at risk
+  come first: killed for memory, near their memory limit, throttled near
+  their CPU limit, using more than they request, or requesting nothing.
+  Then those asking for at least twice what they use, with the CPU and
+  memory they would give back. Each suggestion copies as a `resources:`
+  block. A limit that only some of a pod's containers have is no limit of
+  the pod. The usage is kept in `KARTAL_DATA_DIR` (`sizing.json`, written
+  every ten minutes and on stopping), or in memory without it; a workload
+  needs an hour of it before anything is suggested.
+- **Placement:** where the pods run, by a label of the nodes (such as
+  `env=test` and `env=prod`; the page offers the labels that split the
+  nodes). A namespace whose pods run in more than one group of nodes is
+  marked mixed, and so is each workload with pods outside its namespace's
+  group. So are the workloads that ask for no group in their node selector or
+  required node affinity: when the nodes have no taints, nothing keeps the
+  scheduler from putting them anywhere. DaemonSets are left out, as they
+  belong on every node.
+- **Network check** (for admins of the whole cluster): tries TCP connections
+  to up to 32 `host:port` addresses (a database, another service, something
+  behind a firewall) from the agent's pod and from a short-lived pod on each
+  node chosen, and shows the results side by side: connected, with how long
+  it took; timeout (nothing answered, usually a firewall dropping it); refused
+  (the host answered, but nothing listens on the port); or the name not
+  found. Only a connection is opened and closed; nothing is sent. The results
+  copy as text, for a message to the network team. The agent needs
+  `KARTAL_NETWORK_CHECKS` and `rbac-network-checks.yaml`, and each check is
+  written to the audit log.
+- **Ingresses** lists Traefik's IngressRoutes too (`traefik.io`, or
+  `traefik.containo.us` before Traefik 3), with their hosts, entry points
+  and services. **Certificates** adds the hosts served over TLS, by Ingress
+  or IngressRoute, with the certificate that serves each as far as the
+  cluster tells: the Secret named for it, or one whose names cover it (such
+  as Traefik's default wildcard certificate). A certificate that comes from
+  an ACME resolver or a load balancer is not in the cluster; one click adds a
+  URL check of the host, which watches the certificate the host really
+  serves.
 - **Lists:** click a column header to sort (again to reverse, a third time for
   the natural order); the choice is remembered. "Problems only" keeps what
   needs attention. Starred objects come first, then everything in a starred
@@ -310,6 +361,7 @@ kind of action, set its variable to `"true"` and enable its RBAC file in
 | `rbac-volumes.yaml` | `KARTAL_VOLUME_STATS` | How full volume claims and the nodes' disks are, and how much disk each pod uses (ephemeral storage: writable layers, logs, `emptyDir`), asked from each node's kubelet once a minute |
 | `rbac-certificates.yaml` | `KARTAL_TLS_SECRETS` | When the certificates of `kubernetes.io/tls` Secrets expire, read every five minutes |
 | `rbac-pod-metrics.yaml` | `KARTAL_POD_METRICS` | The metrics that pods expose, read through the API server: a pod's page on request, the watched metrics every 30 seconds, and the collected workloads |
+| `rbac-network-checks.yaml` | `KARTAL_NETWORK_CHECKS` | Network checks: starting short-lived pods from the agent's own image in its namespace, on the nodes chosen, reading their logs and removing them |
 
 Three of these grant more than their feature needs, because Kubernetes
 cannot grant less: `rbac-volumes.yaml` gives `get` on `nodes/proxy`, which
@@ -441,7 +493,13 @@ in Active Directory, as the person themselves (`KARTAL_LDAP_UPN_DOMAIN`, such
 as `example.org`, which makes `user@example.org`). Use `ldaps://`, or
 `ldap://` with `KARTAL_LDAP_STARTTLS=true`; a private CA goes in
 `KARTAL_LDAP_CA_FILE`. Groups come from `memberOf`, which lists the groups a
-person is directly in.
+person is directly in. With `KARTAL_LDAP_NESTED_GROUPS=true`, Active
+Directory is also asked for every group someone is in through other groups
+(its `LDAP_MATCHING_RULE_IN_CHAIN`), under `KARTAL_LDAP_GROUP_BASE`, by
+default the domain of `KARTAL_LDAP_USER_BASE`; a rule for a parent group
+then covers the members of the groups inside it. Someone whose groups match
+no rule is told which groups the directory gave (so is the audit log), for
+whoever writes the rules.
 
 People may write their name as `ayse`, `EXAMPLE\ayse` or, in Active
 Directory, `ayse@example.org`; the audit log names them as the directory
@@ -486,6 +544,7 @@ on are sent as soon as one is.
 | Certificate expiring | a TLS Secret's certificate, or that of an address a URL check asks, expires within 14 days (a warning) or 3 days (critical), or has expired |
 | Address not answering | a URL check fails: no answer, an error status, the wrong status or text, or a certificate that cannot be trusted |
 | Metric past its limit | a watched metric's latest value is above or below the limit set for it |
+| Rollout stuck | a new version is not out after 10 minutes: not every replica runs it and is ready |
 
 The levels can be changed with `KARTAL_ALERT_VOLUME_WARNING` and
 `KARTAL_ALERT_VOLUME_CRITICAL` (percent), `KARTAL_ALERT_NODE_DISK_WARNING`
@@ -573,7 +632,14 @@ labels added: `cluster`, `namespace`, `pod` and `workload` (a label of the
 pod's own with one of those names is kept as `exported_<name>`), and an `up`
 series says whether the pod answered. The **Metrics** page lists the
 collected workloads with how many pods answered, how many samples they gave
-and any error.
+and any error. When the connection to a pod was dropped on the way
+(`i/o timeout`, `context deadline exceeded`), the row offers to check the
+NetworkPolicies of the pod's namespace: those that select the pod, their
+rules and what each lets reach the port. The API server reads a pod's
+metrics from the nodes' network, so a policy that lets in only pods (a
+`namespaceSelector` or `podSelector`) keeps it out; for that case the page
+writes a policy to apply that lets every source reach that port of the
+workload's pods, next to the others.
 
 Admins set how often to read (every 10 seconds to every hour, 30 seconds by
 default) and how long to keep the data: by default until someone deletes it.
@@ -729,6 +795,8 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_LDAP_URL` | — | `ldaps://host:636` or `ldap://host:389`: sign in with a directory; see [Active Directory and LDAP](#active-directory-and-ldap) |
 | `KARTAL_LDAP_USER_BASE` | — | Where people are looked up, such as `OU=People,DC=example,DC=org` |
 | `KARTAL_LDAP_USER_ATTR` | `sAMAccountName` | The attribute that holds the user name |
+| `KARTAL_LDAP_NESTED_GROUPS` | `false` | Also count the groups someone is in through other groups (Active Directory) |
+| `KARTAL_LDAP_GROUP_BASE` | *(the domain of the user base)* | Where those groups are searched for |
 | `KARTAL_LDAP_BIND_DN`, `KARTAL_LDAP_BIND_PASSWORD` / `_FILE` | — | A service account to look people up with |
 | `KARTAL_LDAP_UPN_DOMAIN` | — | Active Directory without a service account: people bind as `user@domain` |
 | `KARTAL_LDAP_GROUPS` / `_FILE` | — | `group => grant` rules, one per line |
@@ -750,7 +818,7 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_SMTP_ADDR`, `_FROM`, `_TO`, `_USERNAME`, `_PASSWORD` / `_PASSWORD_FILE` | — | E-mail notifications; when set, the UI cannot change them |
 | `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI (e-mail, URL checks) |
 | `KARTAL_SETTINGS_FILE` | — | File that keeps them instead, outside Kubernetes |
-| `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store); without it there is none |
+| `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store), and of the workloads' usage behind right-sizing (`sizing.json`); without it there is no store and the usage is kept in memory |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ### Agent
@@ -769,6 +837,8 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_VOLUME_STATS` | `false` | Report how full volume claims and node disks are, and the pods' disk use (with `rbac-volumes.yaml`) |
 | `KARTAL_TLS_SECRETS` | `false` | Report when the certificates of TLS Secrets expire (with `rbac-certificates.yaml`) |
 | `KARTAL_POD_METRICS` | `false` | Read the metrics that pods expose (with `rbac-pod-metrics.yaml`) |
+| `KARTAL_NETWORK_CHECKS` | `false` | Allow network checks from the agent and from pods on the nodes (with `rbac-network-checks.yaml`) |
+| `KARTAL_NETWORK_CHECK_IMAGE` | *(the agent's own)* | Image of the check pods; it must hold `/usr/local/bin/kartal-agent` |
 | `KARTAL_DATASOURCE_URLS` | — | Base URLs of the Prometheus and Elasticsearch servers that Explore may query through this agent, separated by commas |
 | `KARTAL_CA_FILE` | — | Extra CA file, if the server uses a private CA |
 | `KARTAL_INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (testing only) |
@@ -831,6 +901,12 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | POST | `/api/v1/checks/try` | admin | Same body; asks the address once, without saving anything |
 | GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/scrape?port=&path=` | viewer | The metrics a pod exposes, by name, with their samples |
 | GET | `/api/v1/clusters/{c}/metric-sources?namespace=` | viewer | Asks one running pod of each workload, at its likely ports (not those of databases and other servers that do not speak HTTP), whether it exposes metrics; returns where and how many, within 15 seconds |
+| GET | `/api/v1/clusters/{c}/routes?namespace=` | viewer | Traefik's IngressRoutes: hosts, entry points, services and where their certificate comes from |
+| GET | `/api/v1/clusters/{c}/sizing?namespace=` | viewer | For each workload: its requests and limits, its usage (p50, p95, peak), the requests and limits suggested, its issues and what it would give back |
+| GET | `/api/v1/rollouts?cluster=&namespace=&kind=&name=&state=&limit=` | viewer | The rollouts, newest first: versions, state (`progressing`, `done`, `stuck`, `replaced`, `deleted`), how long they took and, for operators, who started them through Kartal Gözü |
+| GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/network-policies?port=` | viewer | The NetworkPolicies that select the pod, their rules and what each lets reach the port; a `verdict` (`none`, `open`, `maybe` or `blocked`) and, unless open, a policy that would open the port |
+| POST | `/api/v1/clusters/{c}/net-checks` | admin | Body: `{"targets": ["db.example.org:5432"], "agent": true, "nodes": ["worker1"]}`; returns the agent's own results at once, and the `id` of the nodes' part |
+| GET | `/api/v1/clusters/{c}/net-checks/{id}` | admin | Where the nodes' check pods are, and what the finished ones found; once all are done, the pods are removed |
 | GET | `/api/v1/clusters/{c}/watches?namespace=&hours=1..24` | viewer | The watched metrics with their values, averaged down to at most 360 points |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/watches` | operator | Body: `{"name", "target", "port", "path", "metric", "labels", "rate", "aggregate", "above", "below"}`; `target` is `Deployment/web` (each of its running pods), a StatefulSet, a DaemonSet or `Pod/web-1`; `aggregate` is `sum`, `avg`, `max` or `min`. A name that another watch of the namespace has gets a number, such as `requests (2)` |
 | PUT | `/api/v1/clusters/{c}/namespaces/{ns}/watches/{id}` | operator | Same body; changes a watch of that namespace |
@@ -898,6 +974,11 @@ are `api/v1/`, `agent/v1/` and `_ui/`.
   tokens held in memory.
 - Console commands have a 15-second limit and their output is capped. Each
   command is recorded in the audit log.
+- The pods of network checks run the agent's own image as a non-root user,
+  with no service account token, no privileges and a two-minute limit. They
+  only open TCP connections to the addresses given and print the results;
+  the agent removes them once it has read them, and any left behind after
+  ten minutes.
 - The UI is served with a strict Content-Security-Policy: same-origin only, no
   inline code except one hashed line, and no framing. The token stays in the
   browser. It is kept in session storage, or in local storage when "Remember

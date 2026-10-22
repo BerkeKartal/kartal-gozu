@@ -39,10 +39,14 @@ type Server struct {
 	// Variant is added to the image tags of every other generated team, so
 	// a second cluster can run other versions than the first.
 	Variant string
+	// NetCheckDelay is how long the pods of network checks take to finish.
+	NetCheckDelay time.Duration
 
 	mu       sync.Mutex
 	patches  []Patch
 	logQuery url.Values
+	netSeq   int
+	netPods  map[string]*netPod
 }
 
 func (f *Server) Patches() []Patch {
@@ -60,13 +64,13 @@ func (f *Server) LogQuery() url.Values {
 const (
 	nsDemo       = `{"metadata":{"name":"demo"},"status":{"phase":"Active"}}`
 	nsKubeSystem = `{"metadata":{"name":"kube-system"},"status":{"phase":"Active"}}`
-	nodeCP       = `{"metadata":{"name":"cp1","labels":{"node-role.kubernetes.io/control-plane":""}},
+	nodeCP       = `{"metadata":{"name":"cp1","labels":{"node-role.kubernetes.io/control-plane":"","kubernetes.io/hostname":"cp1","env":"prod"}},
 		"spec":{"taints":[{"key":"node-role.kubernetes.io/control-plane","effect":"NoSchedule"}]},
 		"status":{"capacity":{"cpu":"4","memory":"8Gi","pods":"110","ephemeral-storage":"98Gi"},"allocatable":{"cpu":"3800m","memory":"7Gi","pods":"110","ephemeral-storage":"88Gi"},
 			"conditions":[{"type":"MemoryPressure","status":"False"},{"type":"Ready","status":"True"}],
 			"addresses":[{"type":"Hostname","address":"cp1"},{"type":"InternalIP","address":"10.0.0.1"}],
 			"nodeInfo":{"kubeletVersion":"v1.30.14","osImage":"Ubuntu 22.04","containerRuntimeVersion":"containerd://1.7"}}}`
-	nodeWorker = `{"metadata":{"name":"worker1"},"spec":{},
+	nodeWorker = `{"metadata":{"name":"worker1","labels":{"kubernetes.io/hostname":"worker1","env":"test"}},"spec":{},
 		"status":{"capacity":{"cpu":"8","memory":"16Gi","pods":"110","ephemeral-storage":"196Gi"},"allocatable":{"cpu":"8","memory":"15Gi","pods":"110","ephemeral-storage":"176Gi"},
 			"conditions":[{"type":"MemoryPressure","status":"True"},{"type":"Ready","status":"False"}]}}`
 	deployAPI = `{"metadata":{"name":"api","namespace":"demo","uid":"uid-deploy-api","creationTimestamp":"2026-09-01T10:00:00Z",
@@ -93,7 +97,7 @@ const (
 		"spec":{"type":"ClusterIP","clusterIP":"10.96.0.10","selector":{"app":"api"},
 			"ports":[{"name":"http","port":80,"targetPort":"http","protocol":"TCP"},{"name":"https","port":443,"targetPort":8443,"protocol":"TCP"}]}}`
 	ingAPI = `{"metadata":{"name":"api","namespace":"demo"},
-		"spec":{"ingressClassName":"traefik","tls":[{"hosts":["demo.example.org"]}],
+		"spec":{"ingressClassName":"traefik","tls":[{"hosts":["demo.example.org"],"secretName":"api-tls"}],
 			"rules":[{"host":"demo.example.org","http":{"paths":[{"path":"/","backend":{"service":{"name":"api","port":{"number":80}}}}]}}]}}`
 	pvcData = `{"metadata":{"name":"data","namespace":"demo"},
 		"spec":{"storageClassName":"local","volumeName":"pv-1","accessModes":["ReadWriteOnce"]},
@@ -124,7 +128,17 @@ const (
 		{"name":"apps","preferredVersion":{"groupVersion":"apps/v1","version":"v1"}},
 		{"name":"traefik.io","preferredVersion":{"groupVersion":"traefik.io/v1alpha1","version":"v1alpha1"}},
 		{"name":"broken.example.org","preferredVersion":{"groupVersion":"broken.example.org/v1","version":"v1"}}]}`
-	appsResources    = `{"groupVersion":"apps/v1","resources":[{"name":"deployments","namespaced":true,"kind":"Deployment","verbs":["get","list"]}]}`
+	appsResources = `{"groupVersion":"apps/v1","resources":[{"name":"deployments","namespaced":true,"kind":"Deployment","verbs":["get","list"]}]}`
+	// Traefik's routes: one on its default certificate, one with a
+	// certificate from ACME, one without TLS.
+	routeWeb = `{"metadata":{"name":"web","namespace":"demo","creationTimestamp":"2026-09-02T10:00:00Z"},
+		"spec":{"entryPoints":["websecure"],"routes":[{"match":"Host(` + "`shop.example.org`" + `) && PathPrefix(` + "`/`" + `)",
+			"services":[{"name":"api","port":80}]}],"tls":{}}}`
+	routeAdmin = `{"metadata":{"name":"admin","namespace":"demo","creationTimestamp":"2026-09-03T10:00:00Z"},
+		"spec":{"entryPoints":["websecure"],"routes":[{"match":"Host(` + "`admin.example.org`" + `) || Host(` + "`ops.example.org`" + `)",
+			"services":[{"name":"api","port":"http"}]}],"tls":{"certResolver":"letsencrypt"}}}`
+	routeStatus = `{"metadata":{"name":"status","namespace":"demo","creationTimestamp":"2026-09-04T10:00:00Z"},
+		"spec":{"entryPoints":["web"],"routes":[{"match":"Host(` + "`status.example.org`" + `)","services":[{"name":"api","port":80}]}]}}`
 	traefikResources = `{"groupVersion":"traefik.io/v1alpha1","resources":[{"name":"ingressroutes","namespaced":true,"kind":"IngressRoute","verbs":["get","list"]}]}`
 )
 
@@ -177,29 +191,46 @@ func (f *Server) extra() extra {
 			// demo's timeline has something to show.
 			tag += fmt.Sprintf(".%d", time.Now().Unix()/120%100)
 		}
+		// Even teams keep to the test nodes; the others run wherever there
+		// is room, on prod's node too.
+		selector := `{}`
+		if i%2 == 0 {
+			selector = `{"env":"test"}`
+		}
+		// team-02's new builds take most of a minute to get out.
+		updated := 3
+		if f.Live && i == 2 && time.Now().Unix()%120 < 45 {
+			updated = 1
+		}
 		e.deployments = append(e.deployments, fmt.Sprintf(`{"metadata":{"name":"web","namespace":%q,"creationTimestamp":"2026-09-%02dT10:00:00Z"},
-			"spec":{"replicas":3,"template":{"spec":{"containers":[{"name":"web","image":"registry.example.org/%s/web:%s"}]}}},
-			"status":{"readyReplicas":%d,"updatedReplicas":3}}`, ns, 1+i%28, ns, tag, ready))
+			"spec":{"replicas":3,"template":{"spec":{"nodeSelector":%s,"containers":[{"name":"web","image":"registry.example.org/%s/web:%s"}]}}},
+			"status":{"readyReplicas":%d,"updatedReplicas":%d}}`, ns, 1+i%28, selector, ns, tag, ready, updated))
 		for r := 1; r <= 3; r++ {
 			name := fmt.Sprintf("web-5d8c-%02d%d", i, r)
 			node := []string{"cp1", "worker1"}[r%2]
-			state, isReady, restarts := `{"running":{}}`, true, 0
+			if i%2 == 0 {
+				node = "worker1"
+			}
+			state, isReady, restarts, last := `{"running":{}}`, true, 0, `{}`
 			if broken && r == 3 {
 				state, isReady, restarts = `{"waiting":{"reason":"CrashLoopBackOff"}}`, false, 7+i
+				// It ran out of memory a little while ago.
+				last = fmt.Sprintf(`{"terminated":{"reason":"OOMKilled","exitCode":137,"finishedAt":%q}}`,
+					time.Now().UTC().Add(-25*time.Minute).Format(time.RFC3339))
 				e.events = append(e.events, fmt.Sprintf(`{"metadata":{"namespace":%q},
 					"involvedObject":{"kind":"Pod","name":%q,"namespace":%q},
 					"reason":"BackOff","message":"Back-off restarting failed container web","type":"Warning","count":%d,
 					"lastTimestamp":"2026-09-29T08:%02d:00Z"}`, ns, name, ns, restarts, i%60))
 			}
-			e.pods = append(e.pods, fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q,"labels":{"pod-template-hash":"5d8c"},
+			e.pods = append(e.pods, fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q,"labels":{"app":"web","pod-template-hash":"5d8c"},
 				"annotations":{"prometheus.io/scrape":"true","prometheus.io/port":"9100"},
 				"ownerReferences":[{"kind":"ReplicaSet","name":"web-5d8c","controller":true}]},
 				"spec":{"nodeName":%q,"containers":[
 					{"name":"web","image":"x","ports":[{"name":"http","containerPort":8080},{"name":"metrics","containerPort":9100}],"resources":{"requests":{"cpu":"50m","memory":"64Mi","ephemeral-storage":"100Mi"},"limits":{"cpu":"250m","memory":"256Mi","ephemeral-storage":"1Gi"}}},
 					{"name":"proxy","image":"y","resources":{"requests":{"cpu":"10m","memory":"32Mi"}}}]},
 				"status":{"phase":"Running","podIP":"10.1.%d.%d","startTime":"2026-09-2%dT08:00:00Z",
-				"containerStatuses":[{"name":"web","ready":%t,"restartCount":%d,"state":%s},{"name":"proxy","ready":true,"restartCount":0,"state":{"running":{}}}]}}`,
-				name, ns, node, i, r, r, isReady, restarts, state))
+				"containerStatuses":[{"name":"web","ready":%t,"restartCount":%d,"state":%s,"lastState":%s},{"name":"proxy","ready":true,"restartCount":0,"state":{"running":{}}}]}}`,
+				name, ns, node, i, r, r, isReady, restarts, state, last))
 			e.podMetrics = append(e.podMetrics, fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q},
 				"containers":[{"usage":{"cpu":"%dm","memory":"%dMi"}}]}`, name, ns, f.drift(20+i*7+r*3, i*3+r), f.drift(90+i*11+r*5, i*5+r)))
 		}
@@ -236,6 +267,9 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(p, "/exec") {
 		f.serveExec(w, r)
+		return
+	}
+	if f.serveNetPods(w, r) {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -356,8 +390,10 @@ func (f *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/apis/broken.example.org/v1":
 		writeStatus(w, http.StatusServiceUnavailable, "ServiceUnavailable", "aggregated API is down")
 	case "/apis/traefik.io/v1alpha1/namespaces/demo/ingressroutes", "/apis/traefik.io/v1alpha1/ingressroutes":
-		if requireMeta() {
-			io.WriteString(w, list(metaItem("demo", "web"), metaItem("demo", "admin")))
+		if metaOnly {
+			io.WriteString(w, list(metaItem("demo", "web"), metaItem("demo", "admin"), metaItem("demo", "status")))
+		} else {
+			io.WriteString(w, list(routeWeb, routeAdmin, routeStatus))
 		}
 	case "/api/v1/namespaces/demo/secrets/db":
 		io.WriteString(w, secretDB)

@@ -16,6 +16,9 @@ type Fake struct {
 	BindDN       string // an optional service account
 	BindPassword string
 	People       map[string]FakePerson // by sign-in name
+	// Nested lists, by group DN, the groups that group is a member of, for
+	// the searches of groups in a chain.
+	Nested map[string][]string
 
 	ln   net.Listener
 	wg   sync.WaitGroup
@@ -142,6 +145,11 @@ func (f *Fake) serve(c net.Conn) {
 				return
 			}
 			kv, _ := args[6].kids()
+			if args[6].tag == tagAnd {
+				for _, g := range f.groupsInChain(kv) {
+					reply(id, seq(tagSearchEntry, octets(tagOctetString, g), seq(tagSequence)))
+				}
+			}
 			if len(kv) == 2 && args[6].tag == tagEqualityMatch {
 				attr, value := kv[0].str(), kv[1].str()
 				// Like Active Directory, names match whatever their case.
@@ -167,4 +175,49 @@ func (f *Fake) serve(c net.Conn) {
 			reply(id, done(tagExtendedResponse, 2, "not supported here"))
 		}
 	}
+}
+
+// groupsInChain answers (&(objectClass=group)(member:<in chain>:=dn)): the
+// groups of the person dn names, and the groups those are in, and so on.
+func (f *Fake) groupsInChain(filters []packet) []string {
+	dn := ""
+	for _, flt := range filters {
+		if flt.tag != tagExtensibleMatch {
+			continue
+		}
+		parts, _ := flt.kids()
+		rule := ""
+		for _, p := range parts {
+			switch p.tag {
+			case tagMatchingRule:
+				rule = p.str()
+			case tagMatchValue:
+				dn = p.str()
+			}
+		}
+		if rule != inChain {
+			return nil
+		}
+	}
+	var start []string
+	for name, p := range f.People {
+		if strings.EqualFold(f.DN(name), dn) {
+			start = p.Groups
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	var walk func(groups []string)
+	walk = func(groups []string) {
+		for _, g := range groups {
+			if seen[strings.ToLower(g)] {
+				continue
+			}
+			seen[strings.ToLower(g)] = true
+			out = append(out, g)
+			walk(f.Nested[g])
+		}
+	}
+	walk(start)
+	return out
 }

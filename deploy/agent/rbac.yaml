@@ -21,7 +21,13 @@ rules:
     resources: ["jobs", "cronjobs"]
     verbs: ["get", "list"]
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
+    # NetworkPolicies say why a pod's metrics cannot be read.
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list"]
+  # Traefik's IngressRoutes, shown next to the Ingresses; a cluster without
+  # Traefik simply has none.
+  - apiGroups: ["traefik.io", "traefik.containo.us"]
+    resources: ["ingressroutes"]
     verbs: ["get", "list"]
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes", "pods"]

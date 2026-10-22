@@ -13,23 +13,25 @@ import (
 // Snapshot is the periodic summary an agent sends about its cluster. It
 // carries names and status only; object contents are fetched on demand.
 type Snapshot struct {
-	Cluster          string        `json:"cluster"`
-	AgentVersion     string        `json:"agentVersion"`
-	KubeVersion      string        `json:"kubeVersion"`
-	CollectedAt      time.Time     `json:"collectedAt"`
-	MetricsAvailable bool          `json:"metricsAvailable"`
-	Nodes            []Node        `json:"nodes"`
-	Namespaces       []Namespace   `json:"namespaces"`
-	Workloads        []Workload    `json:"workloads"`
-	Pods             []Pod         `json:"pods"`
-	Services         []Service     `json:"services"`
-	Ingresses        []Ingress     `json:"ingresses"`
-	ConfigMaps       []ObjectRef   `json:"configMaps"`
-	Secrets          []ObjectRef   `json:"secrets,omitempty"`
-	VolumeClaims     []VolumeClaim `json:"volumeClaims"`
-	Jobs             []Job         `json:"jobs"`
-	CronJobs         []CronJob     `json:"cronJobs"`
-	Events           []Event       `json:"events"`
+	Cluster          string      `json:"cluster"`
+	AgentVersion     string      `json:"agentVersion"`
+	KubeVersion      string      `json:"kubeVersion"`
+	CollectedAt      time.Time   `json:"collectedAt"`
+	MetricsAvailable bool        `json:"metricsAvailable"`
+	Nodes            []Node      `json:"nodes"`
+	Namespaces       []Namespace `json:"namespaces"`
+	Workloads        []Workload  `json:"workloads"`
+	Pods             []Pod       `json:"pods"`
+	Services         []Service   `json:"services"`
+	Ingresses        []Ingress   `json:"ingresses"`
+	// Routes are Traefik's IngressRoutes, when the cluster has them.
+	Routes       []Route       `json:"routes,omitempty"`
+	ConfigMaps   []ObjectRef   `json:"configMaps"`
+	Secrets      []ObjectRef   `json:"secrets,omitempty"`
+	VolumeClaims []VolumeClaim `json:"volumeClaims"`
+	Jobs         []Job         `json:"jobs"`
+	CronJobs     []CronJob     `json:"cronJobs"`
+	Events       []Event       `json:"events"`
 	// Certificates are those of TLS Secrets, when the agent may read them
 	// (KARTAL_TLS_SECRETS).
 	Certificates []Certificate `json:"certificates,omitempty"`
@@ -58,6 +60,10 @@ const (
 	// agent allows (KARTAL_DATASOURCE_URLS): Prometheus and Elasticsearch
 	// servers that only the cluster reaches.
 	CapabilityDataSource = "datasource"
+	// CapabilityNetCheck covers trying TCP connections to addresses that
+	// people give, from the agent and from short-lived pods on the nodes
+	// (KARTAL_NETWORK_CHECKS).
+	CapabilityNetCheck = "netcheck"
 )
 
 // Resources is an amount of CPU (millicores), memory (bytes), pod slots and
@@ -120,6 +126,8 @@ type Node struct {
 	// are on a file system of their own. They need KARTAL_VOLUME_STATS.
 	Disk      *Disk `json:"disk,omitempty"`
 	ImageDisk *Disk `json:"imageDisk,omitempty"`
+	// Labels are the node's labels, by which workloads pick nodes.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 type Namespace struct {
@@ -141,6 +149,23 @@ type Workload struct {
 	// Generation counts spec changes; one without a change of images or
 	// replicas is a change of the pod template, such as a restart.
 	Generation int64 `json:"generation,omitempty"`
+	// ObservedGeneration is the generation the controller has acted on; until
+	// it reaches Generation, Ready and Updated describe the spec before.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// ManualRollout says new pods replace old ones only as someone deletes
+	// them (an OnDelete or partitioned update strategy).
+	ManualRollout bool `json:"manualRollout,omitempty"`
+	// NodeSelector and NodeAffinity say which nodes the pods may run on:
+	// the pod template's node selector, and the node labels its required
+	// node affinity names.
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	NodeAffinity []string          `json:"nodeAffinity,omitempty"`
+}
+
+// RolledOut reports whether every replica runs the current spec and is
+// ready, as the controller has seen that spec.
+func (w Workload) RolledOut() bool {
+	return w.ObservedGeneration >= w.Generation && w.Updated >= w.Desired && w.Ready >= w.Desired
 }
 
 // Degraded reports whether fewer replicas are ready than desired.
@@ -167,6 +192,14 @@ type Pod struct {
 	// DiskBytes is the ephemeral storage the pod uses (writable layers,
 	// logs, emptyDir), as its kubelet reports; it needs KARTAL_VOLUME_STATS.
 	DiskBytes *int64 `json:"diskBytes,omitempty"`
+	// LastTermination is why a container of the pod last stopped, such as
+	// OOMKilled, and LastTerminatedAt when; empty when none restarted.
+	LastTermination  string     `json:"lastTermination,omitempty"`
+	LastTerminatedAt *time.Time `json:"lastTerminatedAt,omitempty"`
+	// Unlimited names the resources ("cpu", "memory") that some of the
+	// pod's containers have no limit for: the pod as a whole has none then,
+	// whatever Limits adds up.
+	Unlimited []string `json:"unlimited,omitempty"`
 }
 
 // Healthy reports whether the pod is running with all containers ready, or
@@ -225,6 +258,26 @@ type Ingress struct {
 	TLS       bool          `json:"tls"`
 	Rules     []IngressRule `json:"rules"`
 	CreatedAt time.Time     `json:"createdAt"`
+	// TLSHosts and TLSSecrets are the hosts served over TLS and the Secrets
+	// that hold their certificates.
+	TLSHosts   []string `json:"tlsHosts,omitempty"`
+	TLSSecrets []string `json:"tlsSecrets,omitempty"`
+}
+
+// Route is a Traefik IngressRoute: the hosts its rules match, where it
+// listens, and where its certificate comes from.
+type Route struct {
+	Namespace   string   `json:"namespace"`
+	Name        string   `json:"name"`
+	Hosts       []string `json:"hosts,omitempty"`
+	EntryPoints []string `json:"entryPoints,omitempty"`
+	Services    []string `json:"services,omitempty"`
+	TLS         bool     `json:"tls"`
+	// TLSSecret holds the certificate; CertResolver gets one (from ACME,
+	// say); with neither, Traefik serves its default certificate.
+	TLSSecret    string    `json:"tlsSecret,omitempty"`
+	CertResolver string    `json:"certResolver,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 // ObjectRef identifies an object without any of its contents.
@@ -419,7 +472,98 @@ const (
 	// CommandCollect reads every metric of each of Pods (in Namespace) at
 	// Port and Path for the server's store, and returns []PodMetrics.
 	CommandCollect = "collect"
+	// CommandNetCheck tries the TCP connections of the NetCheckRequest in
+	// Body and returns NetCheckStarted: the agent's own results at once, and
+	// the nodes' later, from CommandNetCheckStatus.
+	CommandNetCheck = "net-check"
+	// CommandNetCheckStatus returns the NetCheckStatus of the check Name.
+	CommandNetCheckStatus = "net-check-status"
+	// CommandNetworkPolicies returns the PolicyReport of a pod (Namespace,
+	// Name): the NetworkPolicies that decide who may reach its Port.
+	CommandNetworkPolicies = "network-policies"
 )
+
+// Limits of one network check.
+const (
+	MaxNetCheckTargets = 32
+	MaxNetCheckNodes   = 64
+)
+
+// NetCheckRequest asks to try TCP connections to Targets ("host:port")
+// from the agent's pod (Agent) and from a pod on each of Nodes.
+type NetCheckRequest struct {
+	Targets []string `json:"targets"`
+	Agent   bool     `json:"agent,omitempty"`
+	Nodes   []string `json:"nodes,omitempty"`
+}
+
+// Reach is how one connection attempt went. Result is "ok", or why it
+// failed: "timeout" (nothing answered; often a firewall dropping it),
+// "refused" (the host answered, nothing listens on the port), "dns" (the
+// name was not found), "unreachable" (no route) or "error".
+type Reach struct {
+	Target string `json:"target"`
+	Result string `json:"result"`
+	// Address is the IP address tried; Millis how long the attempt took.
+	Address string `json:"address,omitempty"`
+	Millis  int64  `json:"millis"`
+	Error   string `json:"error,omitempty"`
+}
+
+// NetCheckStarted is the answer to CommandNetCheck: the agent's own results,
+// and the check whose nodes' results CommandNetCheckStatus brings.
+type NetCheckStarted struct {
+	// Targets are the ones tried, in their usual spelling and without
+	// repeats, in the order of the results.
+	Targets []string `json:"targets"`
+	ID      string   `json:"id,omitempty"`
+	Agent   []Reach  `json:"agent,omitempty"`
+	Nodes   []string `json:"nodes,omitempty"`
+	// Errors are the nodes on which the check could not be started.
+	Errors map[string]string `json:"errors,omitempty"`
+}
+
+// NetCheckStatus is where a network check's pods are.
+type NetCheckStatus struct {
+	Nodes []NodeReach `json:"nodes"`
+	// Done says every pod finished; they are then removed.
+	Done bool `json:"done"`
+}
+
+// NodeReach is one node's part of a network check. State is "waiting",
+// "done" or "failed"; Detail says what it waits for, or why it failed.
+type NodeReach struct {
+	Node    string  `json:"node"`
+	State   string  `json:"state"`
+	Detail  string  `json:"detail,omitempty"`
+	Results []Reach `json:"results,omitempty"`
+}
+
+// PolicyReport tells whether the NetworkPolicies of a pod's namespace let
+// connections reach its Port from outside the pods: from the API server's
+// proxy, the nodes or other networks.
+type PolicyReport struct {
+	Pod  string `json:"pod"`
+	Port string `json:"port"`
+	// Verdict is "none" (no policy limits who reaches the pod), "open" (a
+	// policy admits every source on the port), "maybe" (only address ranges
+	// admit it), or "blocked" (only pods may reach it).
+	Verdict  string        `json:"verdict"`
+	Policies []PolicyMatch `json:"policies"`
+	// Suggestion is a NetworkPolicy that would admit every source on the
+	// port, to apply if that is wanted.
+	Suggestion string `json:"suggestion,omitempty"`
+}
+
+// PolicyMatch is one NetworkPolicy that selects the pod for incoming
+// connections, with its rules written out.
+type PolicyMatch struct {
+	Name  string   `json:"name"`
+	Rules []string `json:"rules"`
+	// Admits is what the policy lets reach the port: "all", "ranges",
+	// "pods" or "nothing".
+	Admits string `json:"admits"`
+}
 
 // HTTPRequest is a request to a data source, made by an agent.
 type HTTPRequest struct {

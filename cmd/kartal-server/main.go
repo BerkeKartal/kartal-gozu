@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
+	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
@@ -119,6 +121,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// What each workload used, day by day, for the requests and limits
+	// suggested: next to the metric store, or in memory without one.
+	usage := sizing.New()
+	if dir := config.String("KARTAL_DATA_DIR", ""); dir != "" {
+		if usage, err = sizing.Open(filepath.Join(dir, "sizing.json")); err != nil {
+			log.Warn("the workloads' usage could not be read; it starts over", "err", err)
+		}
+	}
 	keeper.OnLoad(mail.Reload)
 	keeper.OnLoad(checks.Reload)
 	// The users the server was started with, whose names the users admins
@@ -174,6 +184,7 @@ func run(log *slog.Logger) error {
 		Checks:         checks,
 		Watches:        watches,
 		Collect:        collector,
+		Sizing:         usage,
 		DataSources:    datasource.NewManager(keeper),
 		Dashboards:     dashboard.New(keeper),
 		SessionTTL:     sessionTTL,
@@ -213,6 +224,26 @@ func run(log *slog.Logger) error {
 	}
 	// Settings that could not be read at the start are read again.
 	go keeper.Retry(ctx, time.Minute)
+	// The workloads' usage is written every ten minutes, and on the way out.
+	go func() {
+		t := time.NewTicker(10 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := usage.Save(); err != nil {
+					log.Warn("saving the workloads' usage", "err", err)
+				}
+			}
+		}
+	}()
+	defer func() {
+		if err := usage.Save(); err != nil {
+			log.Warn("saving the workloads' usage", "err", err)
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              config.String("KARTAL_LISTEN", ":8080"),
@@ -405,6 +436,10 @@ func directoryLogin(log *slog.Logger) (*ldap.Authenticator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("KARTAL_LDAP_GROUPS: %w", err)
 	}
+	nested, err := config.Bool("KARTAL_LDAP_NESTED_GROUPS", false)
+	if err != nil {
+		return nil, err
+	}
 	a := &ldap.Authenticator{Rules: rules, Config: ldap.Config{
 		URL:          url,
 		StartTLS:     startTLS,
@@ -414,6 +449,8 @@ func directoryLogin(log *slog.Logger) (*ldap.Authenticator, error) {
 		UPNDomain:    config.String("KARTAL_LDAP_UPN_DOMAIN", ""),
 		UserBase:     config.String("KARTAL_LDAP_USER_BASE", ""),
 		UserAttr:     config.String("KARTAL_LDAP_USER_ATTR", "sAMAccountName"),
+		NestedGroups: nested,
+		GroupBase:    config.String("KARTAL_LDAP_GROUP_BASE", ""),
 	}}
 	switch {
 	case a.Config.UserBase == "":

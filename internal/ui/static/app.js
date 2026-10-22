@@ -14,15 +14,17 @@ const TOKEN_KEY = 'kartal.token';
 
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
-  'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources'];
+  'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources',
+  'placement', 'netcheck', 'sizing', 'rollouts'];
 // Views that are not about one namespace.
-const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users']);
+const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users',
+  'placement', 'netcheck']);
 // Views that show every cluster at once.
 const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards']);
 // Views of the server itself: the addresses it checks, its users.
 const SERVER_VIEWS = new Set(['uptime', 'users']);
 // Views whose data the agent fetches live; they reload on demand only.
-const LIVE_VIEWS = new Set(['resources', 'helm', 'explore', 'dashboards']);
+const LIVE_VIEWS = new Set(['resources', 'helm', 'explore', 'dashboards', 'netcheck']);
 const WORKLOAD_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet']);
 const KIND_VIEW = {
   Pod: 'pods', Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets',
@@ -35,6 +37,7 @@ const KIND_API = {
   DaemonSet: 'apps/v1/daemonsets', Service: 'core/v1/services', Ingress: 'networking.k8s.io/v1/ingresses',
   ConfigMap: 'core/v1/configmaps', Secret: 'core/v1/secrets', PersistentVolumeClaim: 'core/v1/persistentvolumeclaims',
   Job: 'batch/v1/jobs', CronJob: 'batch/v1/cronjobs', Node: 'core/v1/nodes', Namespace: 'core/v1/namespaces',
+  IngressRoute: 'traefik.io/v1alpha1/ingressroutes',
 };
 const API_KIND = Object.fromEntries(Object.entries(KIND_API).map(([k, v]) => [v, k]));
 // Views that show one kind of workload out of the workloads list.
@@ -59,8 +62,8 @@ const NAV = [
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
   { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
   { group: 'grpStorage', items: ['volumeclaims'] },
-  { group: 'grpApps', items: ['helm', 'releases'] },
-  { group: 'grpCluster', items: ['nodes', 'namespaces', 'events'] },
+  { group: 'grpApps', items: ['helm', 'releases', 'rollouts', 'sizing'] },
+  { group: 'grpCluster', items: ['nodes', 'namespaces', 'events', 'placement', 'netcheck'] },
   { group: 'grpOps', items: ['changes', 'audit', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
@@ -99,6 +102,58 @@ const STRINGS = {
     'col.applied': 'Applied', 'col.now': 'Now', driftHint: 'Someone changed these after the last kubectl apply (kubectl edit, scale, another tool); the next apply will set them back.',
     grpNetwork: 'Networking', grpConfig: 'Configuration', grpStorage: 'Storage', grpCluster: 'Cluster',
     grpApps: 'Applications', grpOps: 'Operations',
+    sizing: 'Right-sizing', rollouts: 'Rollouts',
+    'sz.none': 'none', szNoMetrics: 'This cluster reports no usage (metrics-server is missing): nothing can be suggested.',
+    szRisky: '{0} workloads at risk', szNoRisk: 'no workload at risk', szFree: '{0} CPU and {1} memory could be given back',
+    szLearning: '{0} still being learned',
+    szHint: 'What each workload’s pods used, minute by minute, over up to 7 days ({0}). Suggested: requests at the 95th percentile plus 10% (CPU) or 15% (memory), and a memory limit 30% above the highest use; a CPU limit only where there is one now.',
+    szKept: 'kept next to the metric store', szMemory: 'kept in memory: a restart starts over',
+    'sz.col.namespace': 'Namespace', 'sz.col.workload': 'Workload', 'sz.col.cpu': 'CPU', 'sz.col.memory': 'Memory', 'sz.col.issues': 'Issues',
+    szPods: '{0} pods', 'sz.request': 'request', 'sz.limit': 'limit', szUse: 'used: p95 {0} · peak {1}',
+    'sz.oom': 'killed for memory', 'sz.memory-near-limit': 'memory near its limit', 'sz.no-requests': 'no requests',
+    'sz.memory-under': 'memory under-requested', 'sz.cpu-near-limit': 'CPU throttled', 'sz.cpu-under': 'CPU under-requested',
+    'sz.memory-over': 'memory over-requested', 'sz.cpu-over': 'CPU over-requested', 'sz.little-data': 'learning',
+    szSince: 'watched for {0}', szCopy: 'Copy YAML', szAllFine: 'No workload needs a change.', szNothing: 'No workloads here.',
+    szPerPod: 'Values are per pod. A pod with several containers shares them out among its containers.',
+    'ro.done': 'out in {0}', 'ro.wasStuck': 'was stuck', 'ro.progressing': '{0} · {1} of {2} ready', 'ro.stuck': 'stuck for {0} · {1} of {2} ready',
+    'ro.replaced': 'replaced by a newer version', 'ro.deleted': 'workload deleted',
+    'ro.manual': 'OnDelete or partitioned: new pods come as old ones are deleted by hand',
+    roNone: 'No rollouts seen yet. The server follows each new version from the snapshot that shows it; the first one after a start is only the baseline.',
+    'ro.col.started': 'Started', 'ro.col.namespace': 'Namespace', 'ro.col.workload': 'Workload', 'ro.col.version': 'Version',
+    'ro.col.state': 'Rollout', 'ro.col.by': 'By', 'ro.template': 'new pods', 'ro.new': 'new:',
+    roHint: 'A rollout is done when every replica runs the new version and is ready; after 10 minutes it is stuck, which raises an alert. Kept in memory: the last 2000.',
+    hostsTitle: 'Hosts served over TLS',
+    hostsHint: 'The hosts of the Ingresses and Traefik IngressRoutes, with the certificate that serves them as far as the cluster tells: the Secret they name, or one whose names cover them. A certificate from a resolver or from a load balancer is seen only by a URL check.',
+    'hosts.col.host': 'Host', 'hosts.col.servedBy': 'Served by', 'hosts.col.certificate': 'Certificate', 'hosts.col.expires': 'Expires',
+    'hosts.col.urlCheck': 'URL check', 'hosts.secret': '(named)', 'hosts.names': '(covers the name)',
+    hostsResolver: 'from the {0} resolver', hostsUnknown: 'not in the cluster', hostsAddCheck: 'Check',
+    placement: 'Placement', netcheck: 'Network check', 'what.net-check': 'network check',
+    placeKey: 'Group nodes by', placeSystem: 'kube-* namespaces', placeSummary: '{0} namespaces mixed · {1} workloads off their place',
+    placeLooseCount: '{0} not pinned',
+    placeHint: 'Nodes are grouped by their {0} label. A namespace should keep to one group: a workload whose pods run outside its namespace’s group is marked, and so is one that does not ask for a group in its node selector or affinity, which the scheduler may put anywhere.',
+    placeNoLabel: 'no {0} label', placeNodes: '{0} nodes', placeNamespaces: 'Namespaces', placeWhere: 'Pods on', placeMixed: 'mixed',
+    placeWorkload: 'Workload', placePinned: 'Asks for', placeAffinity: 'node affinity', placeLoose: 'anywhere',
+    placeOff: '{0} pods outside {1}', placeLooseHint: 'no {0} in its node selector', placeNsFine: 'Every namespace keeps to one group.',
+    placeWlFine: 'Every workload is where its namespace is, and asks for it.',
+    placeNoKeys: 'The nodes have no labels to group them by (such as env=test). Label them, then pin workloads with a node selector.',
+    ncTargets: 'Addresses to try', ncTargetsHelp: 'host:port, one per line (up to 32). A TCP connection is opened and closed; nothing is sent.',
+    ncFrom: 'From', ncAgent: 'Agent pod', ncAllNodes: 'All nodes', ncNoNodes: 'None',
+    ncNodesHelp: 'A short-lived pod starts on each node chosen; its connections leave the node like any pod’s. The pods are removed afterwards.',
+    ncRun: 'Check', ncCopy: 'Copy as text', ncResults: 'Results', ncTarget: 'Address',
+    ncWaiting: 'Waiting for {0} node(s): their pods are starting (the first time, the image is pulled).',
+    ncLegend: 'timeout: nothing answered, a firewall probably drops the connection · refused: the host answered, nothing listens on the port · DNS: the name is not known there.',
+    ncNoAnswer: 'no answer',
+    ncOff: 'This cluster’s agent does not run network checks. Set KARTAL_NETWORK_CHECKS to "true" and apply deploy/agent/rbac-network-checks.yaml.',
+    'nc.ok': 'ok', 'nc.timeout': 'timeout', 'nc.refused': 'refused', 'nc.dns': 'DNS', 'nc.unreachable': 'no route', 'nc.error': 'error',
+    npHint: 'The connection was dropped on the way: a NetworkPolicy may keep the API server out.', npLook: 'Check NetworkPolicies',
+    npTitle: 'Who may reach {0} on port {1}', npPod: 'Pod {0}', npNoPod: 'No running pod of this workload was found.',
+    'np.none': 'No NetworkPolicy limits who reaches this pod. Look elsewhere: a firewall on the node, or whether the pod listens on port {0}.',
+    'np.blocked': 'The NetworkPolicies below let only pods reach port {0}. The API server reads metrics from the nodes’ network, so they keep it out.',
+    'np.maybe': 'Only address ranges may reach port {0}: unless they include the nodes and the API server, the connection is dropped.',
+    'np.open': 'A NetworkPolicy lets every source reach port {0}; the cause is elsewhere, such as a firewall on the node.',
+    'npAdmits.all': 'admits all', 'npAdmits.ranges': 'address ranges', 'npAdmits.pods': 'pods only', 'npAdmits.nothing': 'not this port',
+    npNoRules: 'No rules: nothing may connect.',
+    npSuggest: 'This policy would let every source reach port {0} of these pods. Policies add up: the others stay as they are.',
     chooseNamespace: 'Choose the namespace every view shows',
     pinned: 'Pinned', namespaces: 'Namespaces', namespace: 'Namespace', allNamespaces: 'All namespaces',
     filterNamespaces: 'Filter namespaces',
@@ -221,7 +276,7 @@ const STRINGS = {
     'alert.AgentOffline': 'Agent offline', 'alert.NodeNotReady': 'Node not ready', 'alert.NodePressure': 'Node under pressure', 'alert.NodeDiskFilling': 'Node disk filling up', 'alert.PodFailing': 'Pod failing',
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
     'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
-    'alert.MetricLimit': 'Metric past its limit',
+    'alert.MetricLimit': 'Metric past its limit', 'alert.RolloutStuck': 'Rollout stuck',
     appmetrics: 'Metrics', 'tab.scrape': 'App metrics', 'capMissing.scrape': 'This cluster’s agent does not read the metrics of pods (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Applications often expose metrics of their own, such as requests, errors or queue lengths, at an address like :9100/metrics. Choose the port and read them.',
     readMetrics: 'Read', port: 'Port', path: 'Path', metricsFilter: 'Filter metrics', nSeries: '{0} series', moreSeries: '… and {0} more series',
@@ -379,6 +434,58 @@ const STRINGS = {
     'col.applied': 'Uygulanan', 'col.now': 'Şu an', driftHint: 'Bunlar son kubectl apply’dan sonra değişti (kubectl edit, scale, başka bir araç); bir sonraki apply onları geri alır.',
     grpNetwork: 'Ağ', grpConfig: 'Yapılandırma', grpStorage: 'Depolama', grpCluster: 'Cluster',
     grpApps: 'Uygulamalar', grpOps: 'Operasyon',
+    sizing: 'Kaynak önerisi', rollouts: 'Dağıtımlar',
+    'sz.none': 'yok', szNoMetrics: 'Bu cluster kullanım bildirmiyor (metrics-server yok): öneri yapılamaz.',
+    szRisky: '{0} iş yükü risk altında', szNoRisk: 'risk altında iş yükü yok', szFree: '{0} CPU ve {1} bellek geri verilebilir',
+    szLearning: '{0} henüz öğreniliyor',
+    szHint: 'Her iş yükünün pod’larının dakika dakika kullanımı, en çok 7 gün ({0}). Öneri: istek, 95. yüzdelik artı %10 (CPU) ya da %15 (bellek); bellek limiti en yüksek kullanımın %30 üstü; CPU limiti yalnızca şu an limiti olanlara.',
+    szKept: 'metrik deposunun yanında saklanır', szMemory: 'bellekte tutulur: yeniden başlatınca sıfırlanır',
+    'sz.col.namespace': 'Namespace', 'sz.col.workload': 'İş yükü', 'sz.col.cpu': 'CPU', 'sz.col.memory': 'Bellek', 'sz.col.issues': 'Durum',
+    szPods: '{0} pod', 'sz.request': 'istek', 'sz.limit': 'limit', szUse: 'kullanım: p95 {0} · en çok {1}',
+    'sz.oom': 'bellekten öldürüldü', 'sz.memory-near-limit': 'bellek limitine yakın', 'sz.no-requests': 'istek yok',
+    'sz.memory-under': 'bellek isteği az', 'sz.cpu-near-limit': 'CPU kısılıyor', 'sz.cpu-under': 'CPU isteği az',
+    'sz.memory-over': 'bellek isteği fazla', 'sz.cpu-over': 'CPU isteği fazla', 'sz.little-data': 'öğreniliyor',
+    szSince: '{0} süredir izleniyor', szCopy: 'YAML kopyala', szAllFine: 'Değişiklik gereken iş yükü yok.', szNothing: 'Burada iş yükü yok.',
+    szPerPod: 'Değerler pod başınadır. Birden çok container’lı pod’da bunları container’lar arasında paylaştırın.',
+    'ro.done': '{0} içinde çıktı', 'ro.wasStuck': 'takılmıştı', 'ro.progressing': '{0} · {1}/{2} hazır', 'ro.stuck': '{0} süredir takılı · {1}/{2} hazır',
+    'ro.replaced': 'yerine daha yeni sürüm geldi', 'ro.deleted': 'iş yükü silindi',
+    'ro.manual': 'OnDelete ya da partition: yeni pod’lar eskiler elle silindikçe gelir',
+    roNone: 'Henüz dağıtım görülmedi. Sunucu her yeni sürümü onu gösteren ilk snapshot’tan izler; açılıştan sonraki ilk snapshot yalnızca başlangıçtır.',
+    'ro.col.started': 'Başladı', 'ro.col.namespace': 'Namespace', 'ro.col.workload': 'İş yükü', 'ro.col.version': 'Sürüm',
+    'ro.col.state': 'Dağıtım', 'ro.col.by': 'Yapan', 'ro.template': 'yeni pod’lar', 'ro.new': 'yeni:',
+    roHint: 'Her replika yeni sürümü çalıştırıp hazır olduğunda dağıtım biter; 10 dakika içinde bitmezse takılmış sayılır ve uyarı üretir. Bellekte tutulur: son 2000.',
+    hostsTitle: 'TLS ile sunulan host’lar',
+    hostsHint: 'Ingress’lerin ve Traefik IngressRoute’larının host’ları ve cluster’ın söyleyebildiği kadarıyla onları sunan sertifika: adı verilen Secret ya da adları host’u kapsayan bir sertifika. Bir resolver’dan ya da load balancer’dan gelen sertifikayı yalnızca URL kontrolü görür.',
+    'hosts.col.host': 'Host', 'hosts.col.servedBy': 'Sunan', 'hosts.col.certificate': 'Sertifika', 'hosts.col.expires': 'Bitiş',
+    'hosts.col.urlCheck': 'URL kontrolü', 'hosts.secret': '(adıyla)', 'hosts.names': '(adı kapsıyor)',
+    hostsResolver: '{0} resolver’ından', hostsUnknown: 'cluster’da yok', hostsAddCheck: 'Kontrol ekle',
+    placement: 'Yerleşim', netcheck: 'Bağlantı testi', 'what.net-check': 'bağlantı testi',
+    placeKey: 'Node gruplama etiketi', placeSystem: 'kube-* namespace’leri', placeSummary: '{0} namespace karışık · {1} iş yükü yerinin dışında',
+    placeLooseCount: '{0} sabitlenmemiş',
+    placeHint: 'Node’lar {0} etiketine göre gruplanır. Bir namespace tek gruba bağlı kalmalı: pod’ları namespace’inin grubu dışında çalışan iş yükleri işaretlenir; nodeSelector ya da affinity ile grup istemeyenler de, çünkü zamanlayıcı onları her yere koyabilir.',
+    placeNoLabel: '{0} etiketi yok', placeNodes: '{0} node', placeNamespaces: 'Namespace’ler', placeWhere: 'Pod’ların yeri', placeMixed: 'karışık',
+    placeWorkload: 'İş yükü', placePinned: 'İstediği', placeAffinity: 'node affinity', placeLoose: 'her yer',
+    placeOff: '{0} pod {1} dışında', placeLooseHint: 'nodeSelector’da {0} yok', placeNsFine: 'Her namespace tek gruba bağlı.',
+    placeWlFine: 'Her iş yükü namespace’inin grubunda ve bunu istiyor.',
+    placeNoKeys: 'Node’larda gruplanacak etiket yok (env=test gibi). Önce node’ları etiketleyin, sonra iş yüklerini nodeSelector ile sabitleyin.',
+    ncTargets: 'Denenecek adresler', ncTargetsHelp: 'host:port, her satıra bir tane (en çok 32). Yalnızca TCP bağlantısı açılıp kapatılır; veri gönderilmez.',
+    ncFrom: 'Nereden', ncAgent: 'Agent pod’u', ncAllNodes: 'Tüm node’lar', ncNoNodes: 'Hiçbiri',
+    ncNodesHelp: 'Seçilen her node’da kısa ömürlü bir pod açılır; bağlantıları node’dan her pod’unki gibi çıkar. Pod’lar sonra silinir.',
+    ncRun: 'Dene', ncCopy: 'Metin olarak kopyala', ncResults: 'Sonuçlar', ncTarget: 'Adres',
+    ncWaiting: '{0} node bekleniyor: pod’lar açılıyor (ilk seferde imaj çekilir).',
+    ncLegend: 'zaman aşımı: yanıt yok, büyük olasılıkla bir firewall düşürüyor · reddedildi: sunucu yanıt verdi ama portta dinleyen yok · DNS: ad orada çözülemedi.',
+    ncNoAnswer: 'yanıt yok',
+    ncOff: 'Bu cluster’ın agent’ı bağlantı testi yapmıyor. KARTAL_NETWORK_CHECKS’i "true" yapın ve deploy/agent/rbac-network-checks.yaml’ı uygulayın.',
+    'nc.ok': 'açık', 'nc.timeout': 'zaman aşımı', 'nc.refused': 'reddedildi', 'nc.dns': 'DNS', 'nc.unreachable': 'yol yok', 'nc.error': 'hata',
+    npHint: 'Bağlantı yolda düşürüldü: bir NetworkPolicy API sunucusunu engelliyor olabilir.', npLook: 'NetworkPolicy’lere bak',
+    npTitle: '{0} pod’larına {1} portundan kim ulaşabilir', npPod: 'Pod {0}', npNoPod: 'Bu iş yükünün çalışan pod’u bulunamadı.',
+    'np.none': 'Bu pod’a kimin ulaşacağını sınırlayan bir NetworkPolicy yok. Başka yere bakın: node’daki firewall ya da pod’un {0} portunu dinleyip dinlemediği.',
+    'np.blocked': 'Aşağıdaki NetworkPolicy’ler {0} portuna yalnızca pod’ların ulaşmasına izin veriyor. API sunucusu metrikleri node ağından okuduğu için dışarıda kalıyor.',
+    'np.maybe': '{0} portuna yalnızca belirli adres aralıkları ulaşabiliyor: bunlar node’ları ve API sunucusunu kapsamıyorsa bağlantı düşürülür.',
+    'np.open': 'Bir NetworkPolicy {0} portuna her kaynaktan izin veriyor; neden başka yerde, örneğin node’daki firewall.',
+    'npAdmits.all': 'herkese açık', 'npAdmits.ranges': 'adres aralıkları', 'npAdmits.pods': 'yalnızca pod’lar', 'npAdmits.nothing': 'bu port kapalı',
+    npNoRules: 'Kural yok: hiçbir bağlantıya izin verilmez.',
+    npSuggest: 'Bu politika bu pod’ların {0} portuna her kaynaktan izin verir. Politikalar toplanır: diğerleri olduğu gibi kalır.',
     chooseNamespace: 'Tüm görünümlerin gösterdiği namespace’i seç',
     pinned: 'Sabitlenenler', namespaces: 'Namespace’ler', namespace: 'Namespace',
     allNamespaces: 'Tüm namespace’ler', filterNamespaces: 'Namespace ara',
@@ -504,7 +611,7 @@ const STRINGS = {
     'alert.AgentOffline': 'Agent çevrimdışı', 'alert.NodeNotReady': 'Node hazır değil', 'alert.NodePressure': 'Node’da kaynak sıkıntısı', 'alert.NodeDiskFilling': 'Node diski doluyor', 'alert.PodFailing': 'Pod hata veriyor',
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
     'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
-    'alert.MetricLimit': 'Metrik sınırı aştı',
+    'alert.MetricLimit': 'Metrik sınırı aştı', 'alert.RolloutStuck': 'Dağıtım takıldı',
     appmetrics: 'Metrikler', 'tab.scrape': 'Metrikler', 'capMissing.scrape': 'Bu cluster’ın agent’ı podların metriklerini okumuyor (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Uygulamalar çoğu zaman istek, hata ya da kuyruk uzunluğu gibi kendi metriklerini :9100/metrics gibi bir adreste yayınlar. Portu seçip okuyun.',
     readMetrics: 'Oku', port: 'Port', path: 'Yol', metricsFilter: 'Metriklerde ara', nSeries: '{0} seri', moreSeries: '… ve {0} seri daha',
@@ -1240,7 +1347,9 @@ function sameData(a, b) {
     if (k === 'summary') return shown(a.summary) === shown(b.summary);
     // Alerts, the audit log, changes, versions and checks have no ETag; they
     // are small.
-    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime', 'appmetrics'].includes(state.view)) return JSON.stringify(a[k]) === JSON.stringify(b[k]);
+    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime', 'appmetrics', 'rollouts', 'ingresses', 'certificates'].includes(state.view)) {
+      return JSON.stringify(a[k]) === JSON.stringify(b[k]);
+    }
     return false;
   });
 }
@@ -1284,6 +1393,31 @@ async function loadView(signal) {
       return { checks: await api('checks', { signal }) };
     case 'users':
       return await api('users', { signal });
+    case 'placement': {
+      const [nodes, workloads, pods] = await Promise.all([api(c + '/nodes', { signal }), api(c + '/workloads', { signal }), api(c + '/pods', { signal })]);
+      return { nodes, workloads, pods };
+    }
+    case 'netcheck':
+      return { nodes: await api(c + '/nodes', { signal }) };
+    case 'sizing':
+      return await api(c + '/sizing' + nsq, { signal });
+    case 'rollouts': {
+      const q = new URLSearchParams({ cluster: state.cluster });
+      if (state.ns) q.set('namespace', state.ns);
+      return { items: await api('rollouts?' + q, { signal }) };
+    }
+    case 'ingresses': {
+      // Traefik's IngressRoutes are listed with the Ingresses.
+      const [ingresses, routes] = await Promise.all([api(c + '/ingresses' + nsq, { signal }), api(c + '/routes' + nsq, { signal })]);
+      return { items: ingressList(ingresses, routes) };
+    }
+    case 'certificates': {
+      // Next to the certificates, the hosts served over TLS and where their
+      // certificates are known from; URL checks need no cluster role.
+      const [certs, ingresses, routes, checks] = await Promise.all([api(c + '/certificates' + nsq, { signal }),
+        api(c + '/ingresses' + nsq, { signal }), api(c + '/routes' + nsq, { signal }), api('checks', { signal }).then(r => (r && r.checks) || [], () => [])]);
+      return { items: certs, hosts: { ingresses, routes, checks, certs } };
+    }
     case 'appmetrics': {
       const q = new URLSearchParams({ hours: String(state.watchHours || 1) });
       if (state.ns) q.set('namespace', state.ns);
@@ -1678,8 +1812,9 @@ function setNavEditing(on) {
 // operators; nodes are the whole cluster's; users are for admins of all of
 // it, on a server that keeps them.
 function viewAllowed(id) {
-  return (id !== 'audit' || roleAtLeast('operator')) && (id !== 'nodes' || roleIn('') > 0) &&
-    (id !== 'users' || (!!state.me && state.me.users && state.me.everywhere === 'admin'));
+  return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
+    (id !== 'users' || (!!state.me && state.me.users && state.me.everywhere === 'admin')) &&
+    (id !== 'netcheck' || canIn('admin', ''));
 }
 
 // The menu shows the views of the half the current one is in.
@@ -1913,7 +2048,7 @@ function renderHead() {
   fill(els.head,
     h('div', { class: 'toolbar' },
       h('h1', null, t(v)), scope,
-      (table && table.problem) || v === 'releases' ? h('button', {
+      (table && table.problem) || v === 'releases' || v === 'rollouts' ? h('button', {
         type: 'button', class: state.problems ? 'chip active' : 'chip',
         onclick: () => {
           state.problems = !state.problems;
@@ -1961,11 +2096,16 @@ function renderContent() {
     case 'releases': body = renderReleases(state.data.items); break;
     case 'uptime': body = renderUptime(state.data.checks); break;
     case 'users': body = renderUsers(state.data); break;
+    case 'placement': body = renderPlacement(state.data); break;
+    case 'netcheck': body = renderNetCheck(state.data); break;
+    case 'sizing': body = renderSizing(state.data); break;
+    case 'rollouts': body = renderRollouts(state.data.items); break;
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
     case 'certificates':
-      body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays))];
+      body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays)),
+        state.data.hosts ? hostsPanel(state.data.hosts) : null];
       break;
     default: body = renderTable(state.view, state.data.items || []);
   }
@@ -2003,12 +2143,17 @@ function objectLink(ns, object) {
   if (i < 0 || !gvr || !name) return object || '—';
   return h('button', { type: 'button', class: 'link-button', onclick: () => openDetail({ gvr, ns: kind === 'Node' ? '' : ns, name }) }, object);
 }
+// siteURL is the address of a host the cluster serves; it throws for a
+// host that cannot be one.
+function siteURL(host, path, tls) {
+  return new URL((tls ? 'https://' : 'http://') + host + (path && path.startsWith('/') ? path : '/'));
+}
 function hostLink(host, path, tls) {
   const label = (host || '*') + (path || '');
   if (!host || host.includes('*')) return h('span', { class: 'mono' }, label);
   let url;
   try {
-    url = new URL((tls ? 'https://' : 'http://') + host + (path && path.startsWith('/') ? path : '/'));
+    url = siteURL(host, path, tls);
   } catch {
     return h('span', { class: 'mono' }, label);
   }
@@ -2212,17 +2357,18 @@ const TABLES = {
     actions: s => [detailButton('Service', s.namespace, s.name)],
   },
   ingresses: {
-    key: i => 'Ingress/' + i.namespace + '/' + i.name,
-    text: i => [i.namespace, i.name, i.class, ...(i.rules || []).map(r => r.host + r.path + ' ' + r.backend)],
+    key: i => (i.kind || 'Ingress') + '/' + i.namespace + '/' + i.name,
+    text: i => [i.namespace, i.name, i.class, i.kind, ...(i.entryPoints || []), ...(i.rules || []).map(r => r.host + r.path + ' ' + r.backend)],
     columns: [
-      ['name', i => nameLink('Ingress', i.namespace, i.name), i => i.name],
+      ['name', i => nameLink(i.kind || 'Ingress', i.namespace, i.name), i => i.name],
       ['namespace', i => nsLink(i.namespace), i => i.namespace],
-      ['class', i => i.class || '—', i => i.class],
+      ['class', i => [i.class || '—', i.kind ? h('div', { class: 'muted small-text' }, i.kind + (i.entryPoints && i.entryPoints.length ? ' · ' + i.entryPoints.join(', ') : '')) : null],
+        i => i.class],
       ['rules', i => (i.rules || []).map(r => h('div', null, hostLink(r.host, r.path, i.tls), h('span', { class: 'muted' }, ' → ' + r.backend)))],
       ['tls', i => (i.tls ? '✓' : '—')],
       ['age', i => age(i.createdAt), i => ageOf(i.createdAt)],
     ],
-    actions: i => [detailButton('Ingress', i.namespace, i.name)],
+    actions: i => [detailButton(i.kind || 'Ingress', i.namespace, i.name)],
   },
   configmaps: refTable('ConfigMap'),
   secrets: refTable('Secret'),
@@ -2920,6 +3066,549 @@ async function removeUser(u) {
   refresh();
 }
 
+// ---------------------------------------------------------------- placement
+
+// Placement checks that pods stay on the nodes meant for them: the nodes are
+// grouped by one of their labels (env=test, env=prod...), each namespace
+// should keep to one group, and workloads should say so in their node
+// selector or affinity, or the scheduler may put them anywhere.
+const PLACEMENT_KEY = 'kartal.placementKey';
+const SYSTEM_LABEL = /^(kubernetes\.io\/|beta\.kubernetes\.io\/|node\.kubernetes\.io\/|node-role\.kubernetes\.io\/|feature\.node\.kubernetes\.io\/)/;
+const NO_VALUE = '∅';
+
+// placementKeys are the node labels worth grouping by: those that split the
+// nodes, or mark some of them.
+function placementKeys(nodes) {
+  const values = {};
+  const count = {};
+  for (const n of nodes) {
+    for (const [k, v] of Object.entries(n.labels || {})) {
+      if (SYSTEM_LABEL.test(k)) continue;
+      (values[k] = values[k] || new Set()).add(v);
+      count[k] = (count[k] || 0) + 1;
+    }
+  }
+  return Object.keys(values).filter(k => values[k].size >= 2 || count[k] < nodes.length)
+    .sort((a, b) => count[b] - count[a] || values[a].size - values[b].size || a.localeCompare(b));
+}
+
+function bump(map, key, value) {
+  const m = map[key] || (map[key] = {});
+  m[value] = (m[value] || 0) + 1;
+}
+// mainOf is the value most of the counts fall on.
+function mainOf(counts) {
+  const top = Object.entries(counts || {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  return top ? top[0] : undefined;
+}
+
+function placementOf(data, key) {
+  const valueOf = new Map(data.nodes.map(n => [n.name, n.labels && key in n.labels ? n.labels[key] : NO_VALUE]));
+  const byValue = {};
+  for (const n of data.nodes) (byValue[valueOf.get(n.name)] = byValue[valueOf.get(n.name)] || []).push(n);
+  const nsWhere = {};
+  const wlWhere = {};
+  for (const p of data.pods) {
+    // DaemonSets belong on every node; finished pods hold no place.
+    if (!p.node || p.phase === 'Succeeded' || p.phase === 'Failed' || (p.owner || '').startsWith('DaemonSet/')) continue;
+    const v = valueOf.has(p.node) ? valueOf.get(p.node) : NO_VALUE;
+    bump(nsWhere, p.namespace, v);
+    if (p.owner) bump(wlWhere, p.namespace + '/' + p.owner, v);
+  }
+  const namespaces = Object.keys(nsWhere).sort().map(ns => ({ ns, where: nsWhere[ns], main: mainOf(nsWhere[ns]) }));
+  const mainIn = Object.fromEntries(namespaces.map(x => [x.ns, x.main]));
+  const workloads = data.workloads.filter(w => w.kind !== 'DaemonSet').map(w => {
+    const where = wlWhere[w.namespace + '/' + w.kind + '/' + w.name] || {};
+    const pinned = w.nodeSelector && key in w.nodeSelector ? key + '=' + w.nodeSelector[key]
+      : (w.nodeAffinity || []).includes(key) ? 'affinity' : '';
+    const main = mainIn[w.namespace];
+    const off = Object.entries(where).filter(([v]) => v !== main).reduce((n, [, c]) => n + c, 0);
+    return { w, where, pinned, off, main };
+  });
+  return { byValue, namespaces, workloads };
+}
+
+function whereChips(where, main) {
+  return h('div', { class: 'chips' }, Object.entries(where).sort((a, b) => b[1] - a[1]).map(([v, n]) =>
+    h('span', { class: 'label-chip' + (main != null && v !== main ? ' off' : '') }, v, h('span', { class: 'muted' }, ' × ' + n))));
+}
+
+function renderPlacement(data) {
+  const keys = placementKeys(data.nodes);
+  if (!keys.length) return emptyState(t('placeNoKeys'));
+  const saved = state.placeKey || readStore('localStorage', PLACEMENT_KEY);
+  const key = keys.includes(saved) ? saved : keys[0];
+  const { byValue, namespaces, workloads } = placementOf(data, key);
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const system = ns => /^kube-/.test(ns);
+  const showSystem = !!state.placeSystem;
+  const onlyProblems = state.placeAll !== true;
+  const nsRows = namespaces.filter(x => (showSystem || !system(x.ns)) && (!onlyProblems || Object.keys(x.where).length > 1) && matches(words, [x.ns]));
+  const wlRows = workloads.filter(x => (showSystem || !system(x.w.namespace)) && (!onlyProblems || x.off || !x.pinned) &&
+    matches(words, [x.w.namespace, x.w.name, x.pinned])).sort((a, b) => b.off - a.off || a.w.namespace.localeCompare(b.w.namespace) || a.w.name.localeCompare(b.w.name));
+  const select = h('select', {
+    'aria-label': t('placeKey'),
+    onchange: e => {
+      state.placeKey = e.target.value;
+      writeStore('localStorage', PLACEMENT_KEY, e.target.value);
+      renderContent();
+    },
+  }, keys.map(k => h('option', { value: k, selected: k === key }, k)));
+  const toggle = (label, on, flip) => h('button', { type: 'button', class: on ? 'chip active' : 'chip', onclick: () => { flip(); renderContent(); } }, label);
+  const mixed = namespaces.filter(x => !system(x.ns) && Object.keys(x.where).length > 1).length;
+  const off = workloads.filter(x => !system(x.w.namespace) && x.off).length;
+  const loose = workloads.filter(x => !system(x.w.namespace) && !x.pinned).length;
+  return [
+    h('section', { class: 'panel' },
+      h('div', { class: 'db-list-head' },
+        h('label', { class: 'inline-field' }, h('span', { class: 'muted' }, t('placeKey')), select),
+        toggle('⚠ ' + t('problemsOnly'), onlyProblems, () => { state.placeAll = onlyProblems; }),
+        toggle(t('placeSystem'), showSystem, () => { state.placeSystem = !showSystem; }),
+        h('span', { class: 'grow' }),
+        h('span', { class: mixed || off ? 'status-bad' : 'status-ok' }, t('placeSummary', mixed, off)),
+        loose ? h('span', { class: 'status-warn' }, ' · ' + t('placeLooseCount', loose)) : null),
+      h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' }, t('placeHint', key)))),
+      h('div', { class: 'place-groups' }, Object.keys(byValue).sort().map(v => h('div', { class: 'place-group' },
+        h('div', null, h('strong', { class: 'mono' }, v === NO_VALUE ? t('placeNoLabel', key) : key + '=' + v),
+          h('span', { class: 'muted' }, ' · ' + t('placeNodes', byValue[v].length))),
+        h('div', { class: 'chips' }, byValue[v].map(n => h('span', { class: n.ready ? 'label-chip' : 'label-chip down', title: [n.internalIP, n.ready ? '' : t('notReady')].filter(Boolean).join(' · ') || null }, n.name))))))),
+    panel(t('placeNamespaces'), nsRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, h('th', null, t('namespace')), h('th', null, t('placeWhere')), h('th', null, t('col.status')))),
+      h('tbody', null, nsRows.map(x => h('tr', null,
+        h('td', null, nsLink(x.ns)),
+        h('td', null, whereChips(x.where, x.main)),
+        h('td', null, Object.keys(x.where).length > 1 ? pill('⚠ ' + t('placeMixed'), 'bad') : pill('✓ ' + x.main, 'ok')))))))
+      : h('div', { class: 'empty-note' }, onlyProblems ? t('placeNsFine') : t('noMatch'))),
+    panel(t('workloads'), wlRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, h('th', null, t('namespace')), h('th', null, t('placeWorkload')), h('th', null, t('placeWhere')),
+        h('th', null, t('placePinned')), h('th', null, t('col.status')))),
+      h('tbody', null, wlRows.map(x => h('tr', null,
+        h('td', null, nsLink(x.w.namespace)),
+        h('td', null, nameLink(x.w.kind, x.w.namespace, x.w.name), h('span', { class: 'muted' }, ' ' + x.w.kind)),
+        h('td', null, Object.keys(x.where).length ? whereChips(x.where, x.main) : h('span', { class: 'muted' }, '—')),
+        h('td', null, x.pinned ? mono(x.pinned === 'affinity' ? t('placeAffinity') : x.pinned) : h('span', { class: 'status-warn' }, t('placeLoose'))),
+        h('td', { class: 'small-text' }, x.off ? h('span', { class: 'status-bad' }, t('placeOff', x.off, x.main))
+          : !x.pinned ? h('span', { class: 'status-warn' }, t('placeLooseHint', key)) : pill('✓', 'ok')))))))
+      : h('div', { class: 'empty-note' }, onlyProblems ? t('placeWlFine') : t('noMatch'))),
+  ];
+}
+
+// ---------------------------------------------------------------- network check
+
+// A network check tries TCP connections to addresses from the agent's pod and
+// from a short-lived pod on each node chosen. What the form holds lives here,
+// across redraws.
+const NETCHECK_KEY = 'kartal.netcheck.targets';
+const nc = { targets: null, nodes: null, agent: true, run: null, poll: 0, cluster: '' };
+
+function netcheckForm(nodes) {
+  if (nc.cluster !== state.cluster) {
+    Object.assign(nc, { nodes: null, run: null, cluster: state.cluster });
+  }
+  if (!nc.targets) {
+    nc.targets = h('textarea', { class: 'mono netcheck-targets', rows: '6', spellcheck: 'false', placeholder: 'db.example.org:5432\n10.0.0.5:1521' });
+    nc.targets.value = readStore('localStorage', NETCHECK_KEY) || '';
+  }
+  if (!nc.nodes) nc.nodes = new Set();
+  const keys = placementKeys(nodes);
+  const key = keys[0];
+  const groups = {};
+  if (key) for (const n of nodes) if (n.labels && key in n.labels) (groups[n.labels[key]] = groups[n.labels[key]] || []).push(n.name);
+  const box = (checked, label, onchange, title) => h('label', { class: 'check-chip', title: title || null },
+    h('input', { type: 'checkbox', checked, onchange }), label);
+  const pick = names => { nc.nodes = new Set(names); renderContent(); };
+  return h('section', { class: 'panel' },
+    h('div', { class: 'netcheck-form' },
+      h('label', { class: 'field' }, h('span', null, t('ncTargets')), nc.targets, h('span', { class: 'muted small-text' }, t('ncTargetsHelp'))),
+      h('div', { class: 'field' },
+        h('span', null, t('ncFrom')),
+        h('div', { class: 'chips' }, box(nc.agent, t('ncAgent'), e => { nc.agent = e.target.checked; })),
+        h('div', { class: 'chips' },
+          button(t('ncAllNodes'), () => pick(nodes.map(n => n.name)), 'small'),
+          Object.keys(groups).sort().map(v => button(key + '=' + v, () => pick(groups[v]), 'small')),
+          button(t('ncNoNodes'), () => pick([]), 'small')),
+        h('div', { class: 'chips' }, nodes.map(n => box(nc.nodes.has(n.name), n.name, e => {
+          if (e.target.checked) nc.nodes.add(n.name);
+          else nc.nodes.delete(n.name);
+        }, [n.internalIP, ...Object.entries(n.labels || {}).filter(([k]) => !SYSTEM_LABEL.test(k)).map(([k, v]) => k + '=' + v)].filter(Boolean).join('\n')))),
+        h('span', { class: 'muted small-text' }, t('ncNodesHelp')))),
+    h('div', { class: 'dialog-actions netcheck-actions' },
+      nc.run && nc.run.text ? button(t('ncCopy'), () => copyText(nc.run.text())) : null,
+      h('button', { type: 'button', class: 'btn primary', disabled: !!(nc.run && nc.run.busy), onclick: startNetCheck }, t('ncRun'))));
+}
+
+async function startNetCheck() {
+  const targets = nc.targets.value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+  writeStore('localStorage', NETCHECK_KEY, nc.targets.value);
+  const nodes = [...nc.nodes].sort();
+  const my = ++nc.poll;
+  nc.run = { busy: true, targets, nodes, agent: nc.agent, started: null, status: null, error: '', since: Date.now() };
+  renderContent();
+  try {
+    const started = await api(clusterPath() + '/net-checks', { method: 'POST', body: { targets, agent: nc.agent, nodes } });
+    if (my !== nc.poll) return;
+    nc.run.started = started;
+    // The agent wrote the targets in their usual spelling, without repeats.
+    if (started.targets && started.targets.length) nc.run.targets = started.targets;
+    nc.run.busy = !!started.id;
+    renderContent();
+    while (started.id && my === nc.poll && Date.now() - nc.run.since < 180000) {
+      await new Promise(r => setTimeout(r, 2000));
+      if (my !== nc.poll) return;
+      const st = await api(clusterPath() + '/net-checks/' + enc(started.id));
+      if (my !== nc.poll) return;
+      // Once done, the agent removes the pods: the last answer is kept.
+      if (st.nodes.length || !nc.run.status) nc.run.status = st;
+      if (st.done) break;
+      if (state.view === 'netcheck') renderContent();
+    }
+    nc.run.busy = false;
+  } catch (e) {
+    if (my !== nc.poll) return;
+    nc.run.busy = false;
+    if (e.status !== 401) nc.run.error = e.message;
+  }
+  if (state.view === 'netcheck') renderContent();
+}
+
+const REACH_TEXT = { ok: '✓', timeout: '✗', refused: '✗', dns: '?', unreachable: '✗', error: '✗' };
+
+function reachCell(r) {
+  if (!r) return h('td', { class: 'muted' }, '…');
+  const text = r.result === 'ok' ? '✓ ' + r.millis + ' ms' : REACH_TEXT[r.result] + ' ' + t('nc.' + r.result);
+  return h('td', { class: r.result === 'ok' ? 'status-ok' : r.result === 'refused' || r.result === 'dns' ? 'status-warn' : 'status-bad',
+    title: [r.address, r.error].filter(Boolean).join('\n') || null }, text);
+}
+
+function netcheckResults() {
+  const run = nc.run;
+  if (!run) return null;
+  const started = run.started || {};
+  const byNode = Object.fromEntries(((run.status && run.status.nodes) || []).map(n => [n.node, n]));
+  const errors = started.errors || {};
+  const cols = [];
+  if (run.agent) cols.push({ name: t('ncAgent'), results: started.agent, state: run.started ? 'done' : 'waiting' });
+  for (const node of run.nodes) {
+    const n = byNode[node];
+    if (errors[node]) cols.push({ name: node, state: 'failed', detail: errors[node] });
+    else if (n) cols.push({ name: node, state: n.state, detail: n.detail, results: n.results });
+    else cols.push({ name: node, state: run.busy ? 'waiting' : 'failed', detail: run.busy ? '' : t('ncNoAnswer') });
+  }
+  const resultOf = (col, i) => (col.results || []).find(r => r.target === run.targets[i]) || (col.results || [])[i];
+  // The results as text, for a message to the network team.
+  run.text = () => [[t('ncTarget'), ...cols.map(c => c.name)].join('\t'),
+    ...run.targets.map((target, i) => [target, ...cols.map(c => {
+      const r = resultOf(c, i);
+      return r ? (r.result === 'ok' ? 'ok ' + r.millis + 'ms' : r.result) : c.state === 'failed' ? '-' : '…';
+    })].join('\t'))].join('\n');
+  const waiting = cols.filter(c => c.state === 'waiting').length;
+  return panel(t('ncResults'), [
+    run.error ? h('div', { class: 'issue' }, h('div', { class: 'what status-bad' }, run.error)) : null,
+    h('div', { class: 'table-wrap' }, h('table', { class: 'flat netcheck-matrix' },
+      h('thead', null, h('tr', null, h('th', null, t('ncTarget')), cols.map(c => h('th', { title: c.detail || null },
+        c.name, c.state === 'failed' ? h('div', { class: 'status-bad small-text' }, '✗ ' + (c.detail || t('failed'))) : null,
+        c.state === 'waiting' && c.detail ? h('div', { class: 'muted small-text' }, c.detail) : null)))),
+      h('tbody', null, run.targets.map((target, i) => h('tr', null, h('td', { class: 'mono' }, target),
+        cols.map(c => c.state === 'failed' ? h('td', { class: 'muted' }, '—') : c.state === 'waiting' && !c.results ? h('td', { class: 'muted' }, '…') : reachCell(resultOf(c, i)))))))),
+    h('div', { class: 'more-note' }, waiting ? t('ncWaiting', waiting) : t('ncLegend')),
+  ]);
+}
+
+function renderNetCheck(data) {
+  const off = !agentAllows('netcheck');
+  // The results first: they set what "Copy as text" copies, which the form
+  // offers.
+  const results = netcheckResults();
+  return [
+    off ? h('div', { class: 'banner' }, t('ncOff')) : null,
+    netcheckForm(data.nodes || []),
+    results,
+  ];
+}
+
+// ---------------------------------------------------------------- sizing
+
+// cpuQ and memQ write requests and limits as a manifest would.
+function cpuQ(m) {
+  return m >= 1000 && m % 1000 === 0 ? String(m / 1000) : m + 'm';
+}
+function memQ(b) {
+  const gi = 1024 ** 3;
+  const mi = 1024 ** 2;
+  return b >= gi && b % gi === 0 ? b / gi + 'Gi' : Math.ceil(b / mi) + 'Mi';
+}
+// sizingYAML is the resources block a workload's pods would get.
+function sizingYAML(a) {
+  const s = a.suggested;
+  const lines = ['resources:', '  requests:', '    cpu: ' + cpuQ(s.cpuRequest), '    memory: ' + memQ(s.memoryRequest), '  limits:'];
+  if (s.cpuLimit) lines.push('    cpu: ' + cpuQ(s.cpuLimit));
+  lines.push('    memory: ' + memQ(s.memoryLimit));
+  return lines.join('\n') + '\n';
+}
+
+const SIZE_ORDER = ['oom', 'memory-near-limit', 'no-requests', 'memory-under', 'cpu-near-limit', 'cpu-under', 'memory-over', 'cpu-over', 'little-data'];
+const RISKY = new Set(['oom', 'memory-near-limit', 'no-requests', 'memory-under', 'cpu-near-limit', 'cpu-under']);
+
+function sizeRank(a) {
+  const i = Math.min(...a.issues.map(x => SIZE_ORDER.indexOf(x)).filter(x => x >= 0), SIZE_ORDER.length);
+  return i;
+}
+
+function renderSizing({ workloads, metrics, kept }) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = state.sizeAll === true;
+  const rows = workloads.filter(a => (all || a.issues.some(x => x !== 'little-data')) &&
+    matches(words, [a.namespace, a.name, a.kind, ...a.issues.map(x => t('sz.' + x))]))
+    .sort((a, b) => sizeRank(a) - sizeRank(b) || (b.freeCPU + b.freeMemory / 2 ** 20) - (a.freeCPU + a.freeMemory / 2 ** 20) ||
+      a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name));
+  const freeCPU = workloads.reduce((n, a) => n + (a.freeCPU || 0), 0);
+  const freeMem = workloads.reduce((n, a) => n + (a.freeMemory || 0), 0);
+  const risky = workloads.filter(a => a.issues.some(x => RISKY.has(x))).length;
+  const learning = workloads.filter(a => a.issues.includes('little-data')).length;
+  const pair = (now, sug, fmt) => [now ? fmt(now) : h('span', { class: 'muted' }, t('sz.none')),
+    sug != null ? [h('span', { class: 'muted' }, ' → '), h('strong', null, fmt(sug))] : null];
+  return [
+    metrics ? null : h('div', { class: 'banner' }, t('szNoMetrics')),
+    h('section', { class: 'panel' },
+      h('div', { class: 'db-list-head' },
+        h('button', { type: 'button', class: all ? 'chip' : 'chip active', onclick: () => { state.sizeAll = !all; renderContent(); } }, '⚠ ' + t('problemsOnly')),
+        h('span', { class: 'grow' }),
+        risky ? h('span', { class: 'status-bad' }, t('szRisky', risky)) : h('span', { class: 'status-ok' }, '✓ ' + t('szNoRisk')),
+        freeCPU || freeMem ? h('span', { class: 'status-warn' }, ' · ' + t('szFree', cpu(freeCPU), bytes(freeMem))) : null,
+        learning ? h('span', { class: 'muted' }, ' · ' + t('szLearning', learning)) : null),
+      h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' }, t('szHint', kept ? t('szKept') : t('szMemory'))))),
+      rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat sizing' },
+        h('thead', null, h('tr', null, ['namespace', 'workload', 'cpu', 'memory', 'issues'].map(k => h('th', null, t('sz.col.' + k))), h('th'))),
+        h('tbody', null, rows.map(a => {
+          const s = a.suggested;
+          const req = a.requests || {};
+          const lim = a.limits || {};
+          return h('tr', null,
+            h('td', null, nsLink(a.namespace)),
+            h('td', null, nameLink(a.kind, a.namespace, a.name), h('div', { class: 'muted small-text' }, a.kind + ' · ' + t('szPods', a.pods))),
+            h('td', null,
+              h('div', null, t('sz.request'), ' ', pair(req.cpuMilli, s && s.cpuRequest, cpuQ)),
+              lim.cpuMilli ? h('div', null, t('sz.limit'), ' ', pair(lim.cpuMilli, s && s.cpuLimit, cpuQ)) : null,
+              a.minutes ? h('div', { class: 'muted small-text' }, t('szUse', cpuQ(a.cpu.p95), cpuQ(a.cpu.max))) : null),
+            h('td', null,
+              h('div', null, t('sz.request'), ' ', pair(req.memoryBytes, s && s.memoryRequest, memQ)),
+              h('div', null, t('sz.limit'), ' ', pair(lim.memoryBytes, s && s.memoryLimit, memQ)),
+              a.minutes ? h('div', { class: 'muted small-text' }, t('szUse', memQ(a.memory.p95), memQ(a.memory.max))) : null),
+            h('td', { class: 'small-text' }, h('div', { class: 'chips' }, a.issues.map(x => h('span', {
+              class: 'label-chip ' + (RISKY.has(x) ? 'off' : x === 'little-data' ? '' : 'warn'),
+              title: x === 'oom' && a.lastOOM ? new Date(when(a.lastOOM)).toLocaleString() : x === 'little-data' ? t('szSince', ago(a.since)) : null,
+            }, t('sz.' + x))))),
+            h('td', { class: 'actions-cell' }, s ? button(t('szCopy'), () => copyText(sizingYAML(a)), 'small') : null));
+        })))) : h('div', { class: 'empty-note' }, workloads.length ? (all ? t('noMatch') : t('szAllFine')) : t('szNothing')),
+      h('div', { class: 'more-note' }, t('szPerPod'))),
+  ];
+}
+
+// ---------------------------------------------------------------- rollouts
+
+// tags shortens images to what tells versions apart: their tags.
+function tags(images) {
+  if (!images) return '—';
+  return images.split(', ').map(img => {
+    const at = img.indexOf('@');
+    if (at >= 0) return img.slice(at + 1, at + 20);
+    const slash = img.lastIndexOf('/');
+    const colon = img.lastIndexOf(':');
+    return colon > slash ? img.slice(colon + 1) : 'latest';
+  }).join(', ');
+}
+
+function rolloutState(r) {
+  const took = r.finished ? span(when(r.finished) - when(r.started)) : span(Date.now() - when(r.started));
+  const problems = (r.problems || []).join(', ');
+  switch (r.state) {
+    case 'done':
+      return h('span', { class: r.wasStuck ? 'status-warn' : 'status-ok' }, '✓ ' + t('ro.done', took), r.wasStuck ? ' · ' + t('ro.wasStuck') : '');
+    case 'progressing':
+      return h('span', { class: 'status-warn' }, '⏳ ' + t('ro.progressing', took, r.ready, r.desired), problems ? ' · ' + problems : '',
+        r.manual ? h('div', { class: 'muted small-text' }, t('ro.manual')) : null);
+    case 'stuck':
+      return h('span', { class: 'status-bad' }, '⚠ ' + t('ro.stuck', took, r.ready, r.desired), problems ? ' · ' + problems : '');
+    case 'replaced':
+      return h('span', { class: 'muted' }, '↷ ' + t('ro.replaced'));
+    default:
+      return h('span', { class: 'muted' }, '✕ ' + t('ro.deleted'));
+  }
+}
+
+function renderRollouts(items) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = items.filter(r => (!state.problems || r.state === 'stuck' || r.wasStuck || r.state === 'progressing') &&
+    matches(words, [r.namespace, r.name, r.kind, r.from, r.to, r.state, r.by, ...(r.problems || [])]));
+  if (!items.length) return emptyState(t('roNone'));
+  return [
+    h('section', { class: 'panel' },
+      h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, ['started', 'namespace', 'workload', 'version', 'state', 'by'].map(k => h('th', null, t('ro.col.' + k))))),
+        h('tbody', null, rows.map(r => h('tr', { class: r.state === 'stuck' ? 'problem' : null },
+          h('td', null, age(r.started), h('div', { class: 'muted small-text' }, new Date(when(r.started)).toLocaleString())),
+          h('td', null, nsLink(r.namespace)),
+          h('td', null, nameLink(r.kind, r.namespace, r.name), h('span', { class: 'muted' }, ' ' + r.kind)),
+          h('td', { class: 'mono small-text', title: [r.from, r.to].filter(Boolean).join('\n→ ') || null },
+            r.cause === 'template' ? h('span', { class: 'muted' }, t('ro.template') + ' · ') : null,
+            r.from ? [tags(r.from), h('span', { class: 'muted' }, ' → ')] : h('span', { class: 'muted' }, t('ro.new') + ' '), h('strong', null, tags(r.to))),
+          h('td', null, rolloutState(r)),
+          h('td', null, r.by || h('span', { class: 'muted' }, '—'))))))),
+      rows.length ? null : h('div', { class: 'empty-note' }, t('noMatch'))),
+    h('div', { class: 'more-note' }, t('roHint')),
+  ];
+}
+
+// ---------------------------------------------------------------- routes and hosts
+
+// routeAsIngress shows a Traefik IngressRoute in the Ingresses' list.
+function routeAsIngress(r) {
+  const backend = (r.services || []).join(', ');
+  return {
+    kind: 'IngressRoute', namespace: r.namespace, name: r.name, class: 'traefik', tls: r.tls, createdAt: r.createdAt,
+    entryPoints: r.entryPoints, tlsSecrets: r.tlsSecret ? [r.tlsSecret] : [], resolver: r.certResolver,
+    rules: (r.hosts && r.hosts.length ? r.hosts : ['']).map(host => ({ host, path: '', backend })),
+  };
+}
+
+// hostMatches tells whether a certificate's name covers a host; a wildcard
+// covers one label.
+function hostMatches(name, host) {
+  name = (name || '').toLowerCase();
+  if (name === host) return true;
+  return name.startsWith('*.') && host.endsWith(name.slice(1)) && !host.slice(0, -name.length + 1).includes('.');
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+// tlsHosts lists every host served over TLS, with where its certificate is
+// known from: the Secret the route names, a certificate in the cluster
+// whose names cover it, or a URL check of it.
+function tlsHosts(ingresses, routes, certs, checks) {
+  const out = new Map();
+  const add = (host, from, secret, resolver) => {
+    host = (host || '').toLowerCase();
+    if (!host || host.includes('*')) return;
+    const x = out.get(host) || { host, from: [], secrets: [], resolver: '' };
+    x.from.push(from);
+    if (secret && !x.secrets.some(s => s.ns === from.namespace && s.name === secret)) x.secrets.push({ ns: from.namespace, name: secret });
+    if (resolver) x.resolver = resolver;
+    out.set(host, x);
+  };
+  for (const i of ingresses) {
+    if (!i.tls) continue;
+    const hosts = (i.tlsHosts && i.tlsHosts.length) ? i.tlsHosts : (i.rules || []).map(r => r.host);
+    for (const host of hosts) add(host, { kind: 'Ingress', namespace: i.namespace, name: i.name }, (i.tlsSecrets || [])[0]);
+  }
+  for (const r of routes) {
+    if (!r.tls) continue;
+    for (const host of r.hosts || []) add(host, { kind: 'IngressRoute', namespace: r.namespace, name: r.name }, r.tlsSecret, r.certResolver);
+  }
+  return [...out.values()].sort((a, b) => a.host.localeCompare(b.host)).map(x => {
+    let cert = null;
+    let how = '';
+    for (const s of x.secrets) {
+      cert = certs.find(c => c.namespace === s.ns && c.secret === s.name);
+      if (cert) { how = 'secret'; break; }
+    }
+    if (!cert) {
+      const covering = certs.filter(c => !c.error && (c.dnsNames || []).some(n => hostMatches(n, x.host)));
+      cert = covering.find(c => x.from.some(f => f.namespace === c.namespace)) || covering[0] || null;
+      if (cert) how = 'names';
+    }
+    const check = checks.find(c => hostOf(c.url) === x.host && c.url.startsWith('https:'));
+    return Object.assign(x, { cert, how, check, checkCert: check && check.last && check.last.cert });
+  });
+}
+
+function hostsPanel({ ingresses, routes, certs, checks }) {
+  const list = tlsHosts(ingresses || [], routes || [], certs || [], checks || []);
+  if (!list.length) return null;
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = list.filter(x => matches(words, [x.host, ...x.from.map(f => f.namespace + '/' + f.name)]));
+  const admin = canEverywhere('admin');
+  return panel(t('hostsTitle'), [
+    h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' }, t('hostsHint')))),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, ['host', 'servedBy', 'certificate', 'expires', 'urlCheck'].map(k => h('th', null, t('hosts.col.' + k))))),
+      h('tbody', null, rows.map(x => {
+        const notAfter = x.checkCert ? x.checkCert.notAfter : x.cert ? x.cert.notAfter : null;
+        return h('tr', null,
+          h('td', null, hostLink(x.host, '', true)),
+          h('td', { class: 'small-text' }, x.from.map(f => h('div', null, nsLink(f.namespace), ' / ', f.kind === 'Ingress' ? nameLink('Ingress', f.namespace, f.name) : mono(f.name),
+            h('span', { class: 'muted' }, ' ' + f.kind)))),
+          h('td', { class: 'small-text' },
+            x.cert ? [nameLink('Secret', x.cert.namespace, x.cert.secret), h('span', { class: 'muted' }, ' ' + t('hosts.' + x.how))]
+              : x.resolver ? h('span', { class: 'muted' }, t('hostsResolver', x.resolver))
+                : h('span', { class: 'status-warn' }, t('hostsUnknown'))),
+          h('td', null, notAfter ? expiresCell(notAfter) : '—'),
+          h('td', { class: 'small-text' }, x.check ? [x.check.last ? pill(t(x.check.last.ok ? 'check.up' : 'check.down'), x.check.last.ok ? 'ok' : 'bad') : pill(t('check.waiting'), 'warn'),
+            h('span', { class: 'muted' }, ' ' + x.check.name)]
+            : admin ? button('+ ' + t('hostsAddCheck'), () => checkDialog(null, { name: x.host, url: siteURL(x.host, '/', true).href }), 'small')
+              : h('span', { class: 'muted' }, '—')));
+      })))),
+  ], 'hosts');
+}
+
+// ingressList puts the IngressRoutes after the Ingresses, as one list.
+function ingressList(ingresses, routes) {
+  const memo = ingressList.memo;
+  if (memo && memo.ingresses === ingresses && memo.routes === routes) return memo.out;
+  const out = ingresses.concat((routes || []).map(routeAsIngress));
+  ingressList.memo = { ingresses, routes, out };
+  return out;
+}
+
+// ---------------------------------------------------------------- network policies
+
+// unreachable tells whether a failed read of a pod's metrics looks like a
+// connection that was dropped on the way, as NetworkPolicies do.
+function unreachable(err) {
+  return /deadline exceeded|i\/o timeout|timed out|Client\.Timeout/i.test(err || '');
+}
+
+async function podOfTarget(ns, target, err) {
+  const m = (err || '').match(/\/pods\/([a-z0-9][a-z0-9.-]*?)(?::\d+)?\/proxy/);
+  if (m) return m[1];
+  if (target.startsWith('Pod/')) return target.slice(4);
+  const pods = await api(clusterPath() + '/pods?namespace=' + enc(ns));
+  const mine = pods.filter(p => p.owner === target);
+  return (mine.find(p => p.phase === 'Running') || mine[0] || {}).name;
+}
+
+function policyHint(ns, target, port, err) {
+  if (!unreachable(err)) return null;
+  return h('div', { class: 'muted small-text policy-hint' }, t('npHint'), ' ',
+    h('button', { type: 'button', class: 'link-button', onclick: () => policyDialog(ns, target, port, err) }, t('npLook')));
+}
+
+async function policyDialog(ns, target, port, err) {
+  const body = h('div', { class: 'np-body' }, h('p', null, t('loading')));
+  const actions = h('div', { class: 'dialog-actions' }, button(t('close'), () => close()));
+  const close = modal(h('div', { class: 'dialog wide' }, h('h2', null, t('npTitle', target, port)), body, actions));
+  try {
+    const pod = await podOfTarget(ns, target, err);
+    if (!pod) throw new Error(t('npNoPod'));
+    const rep = await api(clusterPath() + '/namespaces/' + enc(ns) + '/pods/' + enc(pod) + '/network-policies?port=' + enc(port));
+    fill(body,
+      h('p', { class: rep.verdict === 'open' || rep.verdict === 'none' ? 'note' : 'note warn' }, t('np.' + rep.verdict, port)),
+      h('p', { class: 'muted small-text' }, t('npPod', ns + '/' + rep.pod)),
+      rep.policies.map(p => h('div', { class: 'np-policy' },
+        h('div', null, h('strong', null, p.name), ' ', pill(t('npAdmits.' + p.admits), p.admits === 'all' ? 'ok' : p.admits === 'ranges' ? 'warn' : 'bad')),
+        h('ul', { class: 'small-text' }, p.rules.length ? p.rules.map(r => h('li', { class: 'mono' }, r)) : h('li', null, t('npNoRules'))))),
+      rep.suggestion ? [h('p', { class: 'note' }, t('npSuggest', port)), h('pre', { class: 'yaml np-yaml' }, rep.suggestion)] : null);
+    if (rep.suggestion) actions.prepend(button(t('copy'), () => copyText(rep.suggestion)));
+  } catch (e) {
+    if (e.status !== 401) fill(body, h('p', { class: 'note bad' }, e.message));
+  }
+}
+
 // ownPasswordDialog lets a user added in the UI change their password,
 // given the current one.
 function ownPasswordDialog() {
@@ -3168,11 +3857,11 @@ async function removeCheck(c) {
 }
 
 // checkDialog adds a check, or changes c; it can try the address first.
-function checkDialog(c) {
+function checkDialog(c, preset) {
   const field = (label, input, help) => h('label', { class: 'field' }, h('span', null, label), input,
     help ? h('span', { class: 'muted small-text' }, help) : null);
-  const name = h('input', { type: 'text', value: c ? c.name : '', maxlength: '100', autocomplete: 'off', spellcheck: 'false' });
-  const url = h('input', { type: 'text', inputmode: 'url', value: c ? c.url : '', placeholder: 'portal.example.org/healthz', autocomplete: 'off', spellcheck: 'false' });
+  const name = h('input', { type: 'text', value: c ? c.name : (preset && preset.name) || '', maxlength: '100', autocomplete: 'off', spellcheck: 'false' });
+  const url = h('input', { type: 'text', inputmode: 'url', value: c ? c.url : (preset && preset.url) || '', placeholder: 'portal.example.org/healthz', autocomplete: 'off', spellcheck: 'false' });
   const every = c ? c.interval : 60;
   // A check set through the API may ask at another interval; it stays.
   const intervals = [...new Set([30, 60, 120, 300, 600, 1800, 3600, every])].sort((a, b) => a - b);
@@ -3457,7 +4146,8 @@ function storePanel(store) {
         h('td', null, x.last ? String(x.pods) : '—', x.failed ? h('span', { class: 'status-bad' }, ' · ' + t('podsFailed', x.failed)) : null),
         h('td', null, x.last ? compact(x.samples) : '—'),
         h('td', null, x.last ? age(x.last) : '—'),
-        h('td', { class: 'small-text' }, x.error ? h('span', { class: 'status-bad' }, x.error) : x.last ? pill('✓', 'ok') : h('span', { class: 'muted' }, t('notReadYet'))),
+        h('td', { class: 'small-text' }, x.error ? [h('span', { class: 'status-bad' }, x.error), policyHint(x.namespace, x.target, x.port, x.error)]
+          : x.last ? pill('✓', 'ok') : h('span', { class: 'muted' }, t('notReadYet'))),
         h('td', { class: 'actions-cell' }, button(t('explore'), () => exploreTarget(x)), canIn('operator', x.namespace) ? [
           button(t('edit'), () => collectDialog({ target: x })),
           button(t('collectRemove'), () => removeCollect(x), 'danger')] : null))))) : h('div', { class: 'empty-note' }, targets.length ? t('noMatch') : t('noTargets')),

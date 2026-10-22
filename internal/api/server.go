@@ -32,7 +32,9 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/httpx"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
+	"github.com/BerkeKartal/kartal-gozu/internal/rollout"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
+	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/ui"
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
@@ -62,6 +64,9 @@ type Config struct {
 	Alerts *alert.Manager
 	// History keeps the usage behind the charts; New makes one when it is nil.
 	History *history.Store
+	// Sizing keeps each workload's usage by day, for the requests and limits
+	// it suggests; New makes one in memory when it is nil.
+	Sizing *sizing.Store
 	// Mail, when set, lets admins set up the e-mail channel in the UI.
 	Mail *settings.Mail
 	// Checks runs the URL checks admins set up in the UI.
@@ -92,14 +97,16 @@ type Config struct {
 }
 
 type Server struct {
-	cfg     Config
-	st      *store.Store
-	log     *slog.Logger
-	now     func() time.Time
-	users   *auth.Directory
-	history *history.Store
-	changes *changes.Log
-	audit   *auditLog
+	cfg      Config
+	st       *store.Store
+	log      *slog.Logger
+	now      func() time.Time
+	users    *auth.Directory
+	history  *history.Store
+	sizing   *sizing.Store
+	changes  *changes.Log
+	rollouts *rollout.Tracker
+	audit    *auditLog
 	// sessions are the sign-ins made with a password (Config.Login).
 	sessions *auth.Sessions
 	throttle throttle
@@ -121,7 +128,12 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	if hist == nil {
 		hist = history.New()
 	}
-	s := &Server{cfg: cfg, st: st, log: log, now: time.Now, users: auth.NewDirectory(users), history: hist, changes: changes.New(), audit: newAuditLog()}
+	sz := cfg.Sizing
+	if sz == nil {
+		sz = sizing.New()
+	}
+	s := &Server{cfg: cfg, st: st, log: log, now: time.Now, users: auth.NewDirectory(users), history: hist, sizing: sz,
+		changes: changes.New(), rollouts: rollout.New(), audit: newAuditLog()}
 	if cfg.Login != nil {
 		ttl := cfg.SessionTTL
 		if ttl <= 0 {
@@ -195,6 +207,8 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routePrometheus(mux)
 	s.routeDashboards(mux)
 	s.routeUsers(mux)
+	s.routeNetwork(mux)
+	s.routeWorkloads(mux)
 	if cfg.DataSources != nil {
 		cfg.DataSources.Attach(s.ask)
 	}
@@ -459,6 +473,7 @@ func visible(u auth.User, cluster string, snap *protocol.Snapshot) *protocol.Sna
 	out.Pods = keep(snap.Pods, func(x protocol.Pod) bool { return sees(x.Namespace) })
 	out.Services = keep(snap.Services, func(x protocol.Service) bool { return sees(x.Namespace) })
 	out.Ingresses = keep(snap.Ingresses, func(x protocol.Ingress) bool { return sees(x.Namespace) })
+	out.Routes = keep(snap.Routes, func(x protocol.Route) bool { return sees(x.Namespace) })
 	out.ConfigMaps = keep(snap.ConfigMaps, func(x protocol.ObjectRef) bool { return sees(x.Namespace) })
 	out.Secrets = keep(snap.Secrets, func(x protocol.ObjectRef) bool { return sees(x.Namespace) })
 	out.VolumeClaims = keep(snap.VolumeClaims, func(x protocol.VolumeClaim) bool { return sees(x.Namespace) })
@@ -513,9 +528,12 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request, cluster string) 
 		return
 	}
 	s.history.Record(cluster, &snap, now)
+	s.sizing.Record(cluster, &snap, now)
 	s.changes.Observe(cluster, &snap, now)
+	s.rollouts.Observe(cluster, &snap, now)
 	if s.cfg.Alerts != nil {
 		s.cfg.Alerts.Observe(cluster, &snap, now)
+		s.cfg.Alerts.ObserveRollouts(cluster, s.rollouts.Stuck(cluster, now), now)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

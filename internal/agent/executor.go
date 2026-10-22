@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
+	"github.com/BerkeKartal/kartal-gozu/internal/netcheck"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 )
 
@@ -69,9 +70,20 @@ type Executor struct {
 	// DataSourceURLs are the data sources the agent may make requests to
 	// for the server (CommandHTTP).
 	DataSourceURLs []*url.URL
-	Namespaces     []string
-	MaxLogBytes    int64
-	Now            func() time.Time
+	// AllowNetCheck enables network checks: TCP connections to addresses
+	// people give, from the agent and from pods it starts on the nodes, in
+	// NetCheckNamespace with NetCheckImage (by default the agent's own).
+	AllowNetCheck     bool
+	NetCheckNamespace string
+	NetCheckImage     string
+	// Dialer makes the agent's own connections of network checks.
+	Dialer      netcheck.Dialer
+	Namespaces  []string
+	MaxLogBytes int64
+	Now         func() time.Time
+
+	netMu    sync.Mutex
+	netPlace *netCheckImage
 }
 
 // Capabilities lists what the executor may do beyond reading, for the
@@ -92,6 +104,9 @@ func (e *Executor) Capabilities() []string {
 	}
 	if len(e.DataSourceURLs) > 0 {
 		out = append(out, protocol.CapabilityDataSource)
+	}
+	if e.AllowNetCheck {
+		out = append(out, protocol.CapabilityNetCheck)
 	}
 	return out
 }
@@ -213,6 +228,19 @@ func (e *Executor) run(ctx context.Context, cmd protocol.Command) (string, error
 			return "", errScrapeDisabled
 		}
 		return e.findMetrics(ctx, cmd)
+	case protocol.CommandNetCheck, protocol.CommandNetCheckStatus:
+		if !e.AllowNetCheck {
+			return "", errNetCheckDisabled
+		}
+		if cmd.Type == protocol.CommandNetCheck {
+			return e.netCheck(ctx, cmd)
+		}
+		return e.netCheckStatus(ctx, cmd.Name)
+	case protocol.CommandNetworkPolicies:
+		if err := e.checkObject(cmd.Namespace, cmd.Name); err != nil {
+			return "", err
+		}
+		return e.networkPolicies(ctx, cmd)
 	case protocol.CommandScrape, protocol.CommandSample, protocol.CommandCollect:
 		if cmd.Path == "" {
 			cmd.Path = "/metrics"

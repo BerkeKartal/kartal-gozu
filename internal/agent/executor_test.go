@@ -116,7 +116,7 @@ func TestListAnyResource(t *testing.T) {
 	}
 	var refs []protocol.ObjectRef
 	json.Unmarshal([]byte(res.Output), &refs)
-	if len(refs) != 2 || refs[0].Name != "admin" || refs[1].Name != "web" {
+	if len(refs) != 3 || refs[0].Name != "admin" || refs[2].Name != "web" {
 		t.Errorf("refs = %+v", refs)
 	}
 }

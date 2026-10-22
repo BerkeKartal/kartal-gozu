@@ -93,6 +93,10 @@ func tally(snap *protocol.Snapshot, lv levels) (objectCounts, map[string]*object
 	for _, i := range snap.Ingresses {
 		count(i.Namespace, func(c *objectCounts) { c.Ingresses++ })
 	}
+	// The UI lists Traefik's IngressRoutes with the Ingresses.
+	for _, r := range snap.Routes {
+		count(r.Namespace, func(c *objectCounts) { c.Ingresses++ })
+	}
 	for _, m := range snap.ConfigMaps {
 		count(m.Namespace, func(c *objectCounts) { c.ConfigMaps++ })
 	}

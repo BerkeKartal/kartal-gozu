@@ -110,6 +110,9 @@ func (f *Server) serveMore(w http.ResponseWriter, r *http.Request, x extra, meta
 		io.WriteString(w, list(items...))
 	case p == "/apis/apps/v1/namespaces/demo/replicasets":
 		io.WriteString(w, list(rsAPICurrent, rsAPIPrevious))
+	case strings.HasPrefix(p, "/apis/networking.k8s.io/v1/namespaces/") && strings.HasSuffix(p, "/networkpolicies"):
+		ns := strings.TrimSuffix(strings.TrimPrefix(p, "/apis/networking.k8s.io/v1/namespaces/"), "/networkpolicies")
+		io.WriteString(w, list(networkPolicies(ns)...))
 	default:
 		return false
 	}
@@ -172,6 +175,10 @@ func (f *Server) serveChange(w http.ResponseWriter, r *http.Request) {
 	x := f.extra()
 	switch r.Method {
 	case http.MethodPost:
+		if strings.HasSuffix(p, "/pods") {
+			f.createPod(w, p, b)
+			return
+		}
 		if strings.HasSuffix(p, "/jobs") {
 			w.WriteHeader(http.StatusCreated)
 			w.Write(b)

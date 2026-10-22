@@ -24,8 +24,9 @@ func PodPage(team, replica int, at time.Time) string {
 
 // servePodMetrics answers what the API server proxies to a pod
 // (/api/v1/namespaces/<ns>/pods/<pod>:<port>/proxy/<path>). The generated
-// teams' web pods expose metrics on port 9100 at /metrics; other ports
-// refuse the connection, and other paths answer as such a pod would.
+// teams' web pods expose metrics on port 9100 at /metrics; their port 8082
+// is behind a NetworkPolicy that drops the API server's connections, other
+// ports refuse them, and other paths answer as such a pod would.
 func (f *Server) servePodMetrics(w http.ResponseWriter, r *http.Request) bool {
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/namespaces/")
 	if !ok {
@@ -42,6 +43,11 @@ func (f *Server) servePodMetrics(w http.ResponseWriter, r *http.Request) bool {
 	pod, port, _ := strings.Cut(target, ":")
 	var team, replica int
 	n, _ := fmt.Sscanf(strings.TrimPrefix(pod, "web-5d8c-"), "%2d%1d", &team, &replica)
+	if strings.HasPrefix(ns, "team-") && n == 2 && port == "8082" {
+		writeStatus(w, http.StatusServiceUnavailable, "ServiceUnavailable",
+			fmt.Sprintf("error trying to reach service: dial tcp 10.1.%d.%d:%s: i/o timeout", team, replica, port))
+		return true
+	}
 	if !strings.HasPrefix(ns, "team-") || n != 2 || port != "9100" {
 		writeStatus(w, http.StatusServiceUnavailable, "ServiceUnavailable",
 			fmt.Sprintf("error trying to reach service: dial tcp 10.1.%d.%d:%s: connect: connection refused", team, replica, port))

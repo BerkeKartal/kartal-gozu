@@ -24,6 +24,9 @@ resources:
   # The metrics pods expose, read through the API server (also
   # KARTAL_POD_METRICS):
   # - rbac-pod-metrics.yaml
+  # Which addresses the nodes reach, from short-lived pods (also
+  # KARTAL_NETWORK_CHECKS):
+  # - rbac-network-checks.yaml
 
 images:
   - name: kartal-gozu

@@ -35,7 +35,13 @@ type Config struct {
 	// that holds the name they sign in with (sAMAccountName in AD).
 	UserBase string
 	UserAttr string
-	Timeout  time.Duration
+	// NestedGroups looks up every group a person is in, through groups in
+	// groups too, not only the direct ones memberOf lists: Active
+	// Directory's LDAP_MATCHING_RULE_IN_CHAIN, searched for under
+	// GroupBase (by default, the domain of UserBase).
+	NestedGroups bool
+	GroupBase    string
+	Timeout      time.Duration
 }
 
 // Entry is someone found in the directory.
@@ -44,7 +50,9 @@ type Entry struct {
 	// Name is the name they sign in with, as the directory spells it.
 	Name        string
 	DisplayName string
-	Groups      []string // the DNs of the groups they are a direct member of
+	// Groups are the DNs of the groups they are a member of: directly, and
+	// with NestedGroups through other groups too.
+	Groups []string
 }
 
 var (
@@ -119,7 +127,99 @@ func (c Config) Authenticate(ctx context.Context, user, password string) (Entry,
 	if entry.Name == "" {
 		entry.Name = user
 	}
+	if c.NestedGroups {
+		// The direct groups still count when the search cannot be made,
+		// such as in a directory other than Active Directory.
+		if all, err := conn.groupsInChain(c.groupBase(), entry.DN); err == nil {
+			for _, g := range all {
+				if !hasDN(entry.Groups, g) {
+					entry.Groups = append(entry.Groups, g)
+				}
+			}
+		}
+	}
 	return entry, nil
+}
+
+// groupBase is where groups are searched for: GroupBase, or the domain
+// part (DC=...) of UserBase.
+func (c Config) groupBase() string {
+	if c.GroupBase != "" {
+		return c.GroupBase
+	}
+	var dc []string
+	for _, part := range strings.Split(c.UserBase, ",") {
+		if k, _, _ := strings.Cut(strings.TrimSpace(part), "="); strings.EqualFold(k, "DC") {
+			dc = append(dc, strings.TrimSpace(part))
+		}
+	}
+	if len(dc) == 0 {
+		return c.UserBase
+	}
+	return strings.Join(dc, ",")
+}
+
+func hasDN(list []string, dn string) bool {
+	for _, x := range list {
+		if normalizeDN(x) == normalizeDN(dn) {
+			return true
+		}
+	}
+	return false
+}
+
+// inChain is Active Directory's LDAP_MATCHING_RULE_IN_CHAIN: a group's
+// member attribute matches a person in any of its member groups too.
+const inChain = "1.2.840.113556.1.4.1941"
+
+// maxGroups bounds the groups one person's search returns.
+const maxGroups = 1000
+
+// groupsInChain finds every group under base that dn is in, directly or
+// through other groups: (&(objectClass=group)(member:1.2.840.113556.1.4.1941:=dn)),
+// built as BER like every filter here.
+func (cn *conn) groupsInChain(base, dn string) ([]string, error) {
+	filter := seq(tagAnd,
+		seq(tagEqualityMatch, octets(tagOctetString, "objectClass"), octets(tagOctetString, "group")),
+		seq(tagExtensibleMatch, octets(tagMatchingRule, inChain), octets(tagMatchType, "member"), octets(tagMatchValue, dn)))
+	// "1.1" asks for no attributes: the names of the groups are enough.
+	attrs := seq(tagSequence, octets(tagOctetString, "1.1"))
+	id, err := cn.send(seq(tagSearchRequest,
+		octets(tagOctetString, base),
+		tlv(tagEnumerated, []byte{2}), // whole subtree
+		tlv(tagEnumerated, []byte{0}), // never dereference aliases
+		integer(tagInteger, maxGroups),
+		integer(tagInteger, 10), // seconds
+		boolean(false),
+		filter, attrs))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for {
+		op, err := cn.receive(id)
+		if err != nil {
+			return nil, err
+		}
+		switch op.tag {
+		case tagSearchEntry:
+			parts, err := op.kids()
+			if err != nil || len(parts) < 1 {
+				return nil, errors.New("ldap: bad entry")
+			}
+			out = append(out, parts[0].str())
+		case tagSearchReference:
+		case tagSearchDone:
+			var re *resultError
+			// Past the size limit, the groups found still count.
+			if err := result(op); err != nil && !(errors.As(err, &re) && re.code == 4) {
+				return nil, err
+			}
+			return out, nil
+		default:
+			return nil, errors.New("ldap: unexpected answer to a search")
+		}
+	}
 }
 
 func (c Config) attr() string {

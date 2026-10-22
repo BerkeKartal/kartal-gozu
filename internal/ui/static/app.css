@@ -792,3 +792,41 @@ a.db-link:hover { color: var(--accent); }
   .db-qrow, .db-var-row, .field-row.panel-row, .field-row.three { grid-template-columns: minmax(0, 1fr); }
 }
 .db-body table.flat td, .db-body table.flat th { white-space: nowrap; }
+
+/* Placement: the nodes in groups, and pods outside their namespace's group. */
+.label-chip.off { border-color: var(--bad); color: var(--bad); }
+.label-chip.down { border-style: dashed; color: var(--muted); }
+.place-groups { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; }
+.place-group { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); min-width: 180px; }
+.inline-field { display: inline-flex; align-items: center; gap: 8px; }
+
+/* Network check: the form and the matrix of results. */
+.netcheck-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; padding: 12px 14px; }
+.netcheck-form .field { display: grid; gap: 8px; align-content: start; }
+.netcheck-form .field > span:first-child { font-size: 13px; color: var(--muted); }
+.netcheck-targets {
+  width: 100%; min-height: 120px; resize: vertical; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px;
+}
+.netcheck-targets:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.netcheck-actions { padding: 0 14px 12px; }
+.check-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-size: 13px; }
+.check-chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.netcheck-matrix td, .netcheck-matrix th { white-space: nowrap; }
+.netcheck-matrix th { vertical-align: top; }
+@media (max-width: 760px) {
+  .netcheck-form { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Why a pod's metrics cannot be read: its NetworkPolicies. */
+.policy-hint { margin-top: 4px; }
+.policy-hint .link-button { color: var(--accent); font-size: 12px; }
+.np-policy { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; }
+.np-policy ul { margin: 6px 0 0; padding-left: 18px; }
+.np-body { display: grid; gap: 10px; }
+.np-yaml { margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; }
+
+/* Right-sizing and rollouts. */
+.label-chip.warn { border-color: var(--warn); color: var(--warn); }
+table.sizing td { vertical-align: top; }
+table.sizing td > div + div { margin-top: 2px; }

@@ -98,7 +98,20 @@ func (a Authenticator) Login(ctx context.Context, user, password string) (auth.U
 	}
 	grants := Grants(a.Rules, e.Groups)
 	if len(grants) == 0 {
-		return auth.User{}, ErrNoAccess
+		// The groups go to the audit log, so that whoever writes the rules
+		// sees what the directory said.
+		names := []string{}
+		for _, g := range e.Groups {
+			if len(names) == 10 {
+				names = append(names, "…")
+				break
+			}
+			names = append(names, firstValue(g))
+		}
+		if len(names) == 0 {
+			return auth.User{}, fmt.Errorf("%w (it is in no group)", ErrNoAccess)
+		}
+		return auth.User{}, fmt.Errorf("%w (its groups: %s)", ErrNoAccess, strings.Join(names, ", "))
 	}
 	return auth.NewUser(e.Name, grants), nil
 }

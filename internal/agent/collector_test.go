@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/fakekube"
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 )
@@ -272,5 +275,69 @@ func TestNodeAndPodDisks(t *testing.T) {
 	}
 	if want := map[string]int64{"team-01/web-5d8c-012": 9 << 20, "team-02/web-5d8c-022": 18 << 20}; !reflect.DeepEqual(disks, want) {
 		t.Errorf("pod disks: %v", disks)
+	}
+}
+
+func TestRouteHosts(t *testing.T) {
+	for match, want := range map[string]string{
+		"Host(`a.example.org`) && PathPrefix(`/api`)":    "a.example.org",
+		"Host(`A.example.org`) || Host(`b.example.org`)": "a.example.org,b.example.org",
+		"Host(`a.example.org`, `c.example.org`)":         "a.example.org,c.example.org",
+		`Host("q.example.org") && Path("/x")`:            "q.example.org",
+		"HostRegexp(`{sub:[a-z]+}.example.org`)":         "",
+		"PathPrefix(`/`)":                                "",
+		"Host(`a.example.org`) || Host(`a.example.org`)": "a.example.org",
+		"(Host(`x.example.org`) && Headers(`X-A`, `b`))": "x.example.org",
+	} {
+		if got := strings.Join(ruleHosts(match), ","); got != want {
+			t.Errorf("ruleHosts(%q) = %q, want %q", match, got, want)
+		}
+	}
+}
+
+func TestRoutesAndTLS(t *testing.T) {
+	_, kc := NewFakeKube(t)
+	snap := (&Collector{Kube: kc}).Collect(context.Background())
+	for _, e := range snap.Errors {
+		if strings.HasPrefix(e, "ingressroutes") {
+			t.Errorf("collect: %s", e)
+		}
+	}
+	if len(snap.Routes) != 3 {
+		t.Fatalf("routes: %+v", snap.Routes)
+	}
+	admin, status, web := snap.Routes[0], snap.Routes[1], snap.Routes[2]
+	if strings.Join(admin.Hosts, ",") != "admin.example.org,ops.example.org" || admin.CertResolver != "letsencrypt" || !admin.TLS ||
+		strings.Join(admin.Services, ",") != "api:http" {
+		t.Errorf("admin: %+v", admin)
+	}
+	if web.TLS != true || web.TLSSecret != "" || strings.Join(web.EntryPoints, ",") != "websecure" || status.TLS {
+		t.Errorf("web %+v, status %+v", web, status)
+	}
+	if in := snap.Ingresses[0]; strings.Join(in.TLSSecrets, ",") != "api-tls" || strings.Join(in.TLSHosts, ",") != "demo.example.org" {
+		t.Errorf("ingress TLS: %+v", in)
+	}
+	// A cluster without Traefik has no routes, and that is no error.
+	f := &fakekube.Server{Forbid: []string{"/apis/traefik.io/v1alpha1/ingressroutes"}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	snap = (&Collector{Kube: kube.New(srv.URL, fakekube.Token, false)}).Collect(context.Background())
+	if !slices.ContainsFunc(snap.Errors, func(e string) bool { return strings.HasPrefix(e, "ingressroutes") }) {
+		t.Errorf("a refused list is an error: %v", snap.Errors)
+	}
+}
+
+func TestUnlimited(t *testing.T) {
+	for spec, want := range map[string]string{
+		`{"containers":[{"name":"a","resources":{"limits":{"cpu":"1","memory":"1Gi"}}}]}`:    "",
+		`{"containers":[{"name":"a","resources":{"limits":{"memory":"1Gi"}}},{"name":"b"}]}`: "memory",
+		`{"containers":[{"name":"a"}]}`: "",
+		`{"containers":[{"name":"a","resources":{"limits":{"cpu":"1","memory":"1Gi"}}}],"initContainers":[{"name":"i"}]}`:                          "",
+		`{"containers":[{"name":"a","resources":{"limits":{"cpu":"1","memory":"1Gi"}}}],"initContainers":[{"name":"s","restartPolicy":"Always"}]}`: "cpu,memory",
+	} {
+		p := decodeAs[kube.Pod](t, `{"spec":`+spec+`}`)
+		if got := strings.Join(unlimited(p), ","); got != want {
+			t.Errorf("%s: %q, want %q", spec, got, want)
+		}
 	}
 }

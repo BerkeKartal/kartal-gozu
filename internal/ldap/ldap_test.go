@@ -164,3 +164,43 @@ func TestAccountRefusals(t *testing.T) {
 		}
 	}
 }
+
+// With NestedGroups, a person in Team-A, which is in Platform, which is in
+// K8s-Admins, gets the grants of all three.
+func TestNestedGroups(t *testing.T) {
+	platform := "CN=Platform,OU=Groups,DC=example,DC=org"
+	for _, sa := range []bool{false, true} {
+		f, cfg := fakeDirectory(t, sa)
+		f.Nested = map[string][]string{teamA: {platform}, platform: {admins, teamA}}
+		e, err := cfg.Authenticate(context.Background(), "ali", "pass")
+		if err != nil || len(e.Groups) != 1 {
+			t.Fatalf("without NestedGroups only the direct group counts: %+v %v", e, err)
+		}
+		cfg.NestedGroups = true
+		cfg.UserBase = "OU=People,DC=example,DC=org"
+		e, err = cfg.Authenticate(context.Background(), "ali", "pass")
+		if err != nil || len(e.Groups) != 3 || e.Groups[0] != teamA || !hasDN(e.Groups, platform) || !hasDN(e.Groups, admins) {
+			t.Fatalf("service account %v: %+v %v", sa, e, err)
+		}
+		rules, _ := ParseRules("K8s-Admins => admin")
+		u, err := Authenticator{Config: cfg, Rules: rules}.Login(context.Background(), "ali", "pass")
+		if err != nil || u.Role != auth.Admin {
+			t.Errorf("a nested group's grant: %+v %v", u, err)
+		}
+	}
+}
+
+func TestGroupBase(t *testing.T) {
+	for base, want := range map[string]string{
+		"OU=Users,OU=TR, DC=corp,DC=example,DC=org": "DC=corp,DC=example,DC=org",
+		"DC=example,DC=org":                         "DC=example,DC=org",
+		"ou=people,o=example":                       "ou=people,o=example",
+	} {
+		if got := (Config{UserBase: base}).groupBase(); got != want {
+			t.Errorf("groupBase(%q) = %q, want %q", base, got, want)
+		}
+	}
+	if got := (Config{UserBase: "DC=a", GroupBase: "OU=G,DC=a"}).groupBase(); got != "OU=G,DC=a" {
+		t.Errorf("a given base wins: %q", got)
+	}
+}

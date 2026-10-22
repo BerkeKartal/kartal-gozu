@@ -63,6 +63,7 @@ var titles = map[string]string{
 	"CertificateExpiring": "Certificate expiring",
 	"URLDown":             "Address not answering",
 	"MetricLimit":         "Metric past its limit",
+	"RolloutStuck":        "Rollout stuck",
 }
 
 // podFailing are the pod reasons worth telling someone about; a pod merely
@@ -290,7 +291,9 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 			add(a)
 		}
 	}
-	m.update(cluster, found, func(a *Alert) bool { return a.Kind != "AgentOffline" && a.Kind != MetricLimit }, now)
+	m.update(cluster, found, func(a *Alert) bool {
+		return a.Kind != "AgentOffline" && a.Kind != MetricLimit && a.Kind != RolloutStuck
+	}, now)
 }
 
 // VolumeLevels are how full a volume may get, in percent, before it is a
@@ -438,6 +441,22 @@ func (m *Manager) ObserveMetrics(cluster string, alerts []Alert, now time.Time) 
 		found[a.key()] = a
 	}
 	m.update(cluster, found, func(a *Alert) bool { return a.Kind == MetricLimit }, now)
+}
+
+// RolloutStuck is the kind of alert for a new version that does not get
+// out: its pods do not all run it and get ready.
+const RolloutStuck = "RolloutStuck"
+
+// ObserveRollouts replaces a cluster's alerts about stuck rollouts: by
+// namespace and workload (joined by a NUL), what is wrong.
+func (m *Manager) ObserveRollouts(cluster string, stuck map[string]string, now time.Time) {
+	found := map[string]Alert{}
+	for key, detail := range stuck {
+		ns, object, _ := strings.Cut(key, "\x00")
+		a := Alert{Cluster: cluster, Kind: RolloutStuck, Severity: warning, Namespace: ns, Object: object, Detail: detail}
+		found[a.key()] = a
+	}
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind == RolloutStuck }, now)
 }
 
 // AgentStatus records whether a cluster's agent is reporting.

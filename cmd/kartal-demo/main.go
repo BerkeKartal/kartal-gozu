@@ -45,6 +45,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/promtext"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
+	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
@@ -74,7 +75,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	defer stop()
 
 	clusters := []demoCluster{
-		{"production", &fakekube.Server{Extra: namespaces, Live: true}},
+		{"production", &fakekube.Server{Extra: namespaces, Live: true, NetCheckDelay: 4 * time.Second}},
 		// Staging runs release candidates of every other team's app.
 		{"staging", &fakekube.Server{Extra: 4, NoMetrics: true, Variant: "-rc1"}},
 	}
@@ -90,6 +91,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		return err
 	}
 	hist := history.New()
+	usage := sizing.New()
 	// Until e-mail is set up on the Alerts page (the demo keeps it in memory),
 	// the demo's problems are only shown there.
 	email := alert.NewSwitchable("email")
@@ -127,6 +129,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		Checks:         checks,
 		Watches:        watches,
 		History:        hist,
+		Sizing:         usage,
 		Collect:        collector,
 		DataSources:    datasource.NewManager(keeper),
 		Dashboards:     dashboard.New(keeper),
@@ -156,7 +159,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		}
 	}
 	server := api.New(cfg, st, log)
-	go backfill(ctx, st, hist, "production")
+	go backfill(ctx, st, hist, usage, "production")
 	srv := &http.Server{
 		Handler:           logging.Requests(log, server),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -194,11 +197,14 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		}
 		kc := kube.New(kubeURL, fakekube.Token, false)
 		a := &agent.Agent{
-			ServerURL:   serverURL,
-			Token:       fmt.Sprintf("demo-agent-token-%02d", i),
-			HTTP:        &http.Client{Timeout: 30 * time.Second},
-			Collector:   &agent.Collector{Kube: kc, Version: "demo", IncludeSecrets: true, VolumeStats: true, TLSSecrets: true},
-			Executor:    &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true, AllowScrape: true, DataSourceURLs: sources(c.name, esAllowed)},
+			ServerURL: serverURL,
+			Token:     fmt.Sprintf("demo-agent-token-%02d", i),
+			HTTP:      &http.Client{Timeout: 30 * time.Second},
+			Collector: &agent.Collector{Kube: kc, Version: "demo", IncludeSecrets: true, VolumeStats: true, TLSSecrets: true},
+			Executor: &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true, AllowScrape: true, DataSourceURLs: sources(c.name, esAllowed),
+				// Network checks start their pods in the fake API, which makes up
+				// what they find; the agent's own attempts are real.
+				AllowNetCheck: true, NetCheckNamespace: "kartal-gozu", NetCheckImage: "kartal-gozu:demo"},
 			Interval:    5 * time.Second,
 			PollWait:    15 * time.Second,
 			Concurrency: 2,
@@ -217,7 +223,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 // backfill invents six hours of usage history for a cluster, so the demo's
 // charts have something to show from the start: its first real snapshot,
 // replayed into the past on a slow wave.
-func backfill(ctx context.Context, st *store.Store, hist *history.Store, cluster string) {
+func backfill(ctx context.Context, st *store.Store, hist *history.Store, usage *sizing.Store, cluster string) {
 	var snap *protocol.Snapshot
 	for snap == nil {
 		select {
@@ -232,7 +238,9 @@ func backfill(ctx context.Context, st *store.Store, hist *history.Store, cluster
 	now := time.Now()
 	for m := history.Points - 1; m >= 1; m-- {
 		x := float64(m)
-		hist.Record(cluster, scaled(snap, 0.85+0.25*math.Sin(x/37)+0.08*math.Sin(x/5.3)), now.Add(-time.Duration(m)*time.Minute))
+		past := scaled(snap, 0.85+0.25*math.Sin(x/37)+0.08*math.Sin(x/5.3))
+		hist.Record(cluster, past, now.Add(-time.Duration(m)*time.Minute))
+		usage.Record(cluster, past, now.Add(-time.Duration(m)*time.Minute))
 	}
 }
 

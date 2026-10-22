@@ -25,6 +25,11 @@ import (
 var version = "dev"
 
 func main() {
+	// The pods of network checks run the agent's image with this argument:
+	// they try the targets, print the results as one JSON line and stop.
+	if len(os.Args) > 1 && os.Args[1] == "net-check" {
+		os.Exit(netCheck(os.Args[2:]))
+	}
 	log := logging.New(config.String("KARTAL_LOG_LEVEL", "info"))
 	if err := run(log); err != nil {
 		log.Error("agent stopped", "err", err)
@@ -83,6 +88,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	netChecks, err := config.Bool("KARTAL_NETWORK_CHECKS", false)
+	if err != nil {
+		return err
+	}
+	// The check pods start next to the agent, from its own image unless
+	// told otherwise.
+	netCheckNS, _ := kube.InClusterNamespace()
+	netCheckImage := config.String("KARTAL_NETWORK_CHECK_IMAGE", "")
 	namespaces := config.List("KARTAL_NAMESPACES")
 	dataSources, err := agent.ParseDataSourceURLs(config.List("KARTAL_DATASOURCE_URLS"))
 	if err != nil {
@@ -105,14 +118,17 @@ func run(log *slog.Logger) error {
 		Collector: &agent.Collector{Kube: kc, Namespaces: namespaces, IncludeSecrets: includeSecrets, VolumeStats: volumeStats,
 			TLSSecrets: tlsSecrets, MaxEvents: 200, Version: version},
 		Executor: &agent.Executor{
-			Kube:           kc,
-			AllowWrite:     allowWrite,
-			AllowExec:      allowExec,
-			AllowEdit:      allowEdit,
-			AllowScrape:    podMetrics,
-			DataSourceURLs: dataSources,
-			Namespaces:     namespaces,
-			MaxLogBytes:    1 << 20,
+			Kube:              kc,
+			AllowWrite:        allowWrite,
+			AllowExec:         allowExec,
+			AllowEdit:         allowEdit,
+			AllowScrape:       podMetrics,
+			DataSourceURLs:    dataSources,
+			AllowNetCheck:     netChecks,
+			NetCheckNamespace: netCheckNS,
+			NetCheckImage:     netCheckImage,
+			Namespaces:        namespaces,
+			MaxLogBytes:       1 << 20,
 		},
 		Interval: interval,
 		PollWait: pollWait,

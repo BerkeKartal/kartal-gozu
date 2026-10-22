@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -131,6 +133,7 @@ func (c *Collector) Collect(ctx context.Context) *protocol.Snapshot {
 		func() {
 			snap.Ingresses = each(ctx, c, fail, "ingresses", "/apis/networking.k8s.io/v1", "ingresses", nil, toIngress)
 		},
+		func() { snap.Routes = c.routes(ctx, fail) },
 		func() { snap.ConfigMaps = c.metaRefs(ctx, fail, "configmaps") },
 		func() {
 			if c.IncludeSecrets {
@@ -213,6 +216,7 @@ func (c *Collector) Collect(ctx context.Context) *protocol.Snapshot {
 	sortByNSName(snap.Pods, func(x protocol.Pod) (string, string) { return x.Namespace, x.Name })
 	sortByNSName(snap.Services, func(x protocol.Service) (string, string) { return x.Namespace, x.Name })
 	sortByNSName(snap.Ingresses, func(x protocol.Ingress) (string, string) { return x.Namespace, x.Name })
+	sortByNSName(snap.Routes, func(x protocol.Route) (string, string) { return x.Namespace, x.Name })
 	sortByNSName(snap.ConfigMaps, func(x protocol.ObjectRef) (string, string) { return x.Namespace, x.Name })
 	sortByNSName(snap.Secrets, func(x protocol.ObjectRef) (string, string) { return x.Namespace, x.Name })
 	sortByNSName(snap.VolumeClaims, func(x protocol.VolumeClaim) (string, string) { return x.Namespace, x.Name })
@@ -333,35 +337,62 @@ func images(t kube.PodTemplate) []string {
 	return out
 }
 
+// affinityKeys lists the node labels the template's required node affinity
+// names, each once.
+func affinityKeys(t kube.PodTemplate) []string {
+	a := t.Spec.Affinity
+	if a == nil || a.NodeAffinity == nil || a.NodeAffinity.Required == nil {
+		return nil
+	}
+	var out []string
+	for _, term := range a.NodeAffinity.Required.Terms {
+		for _, e := range term.MatchExpressions {
+			if !slices.Contains(out, e.Key) {
+				out = append(out, e.Key)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func replicatedWorkload(kind string, r kube.Replicated) protocol.Workload {
 	desired := int32(1) // Kubernetes defaults an unset replicas field to 1
 	if r.Spec.Replicas != nil {
 		desired = *r.Spec.Replicas
 	}
 	return protocol.Workload{
-		Kind:       kind,
-		Namespace:  r.Metadata.Namespace,
-		Name:       r.Metadata.Name,
-		Desired:    desired,
-		Ready:      r.Status.ReadyReplicas,
-		Updated:    r.Status.UpdatedReplicas,
-		Images:     images(r.Spec.Template),
-		Generation: r.Metadata.Generation,
-		CreatedAt:  r.Metadata.CreationTimestamp,
+		Kind:               kind,
+		Namespace:          r.Metadata.Namespace,
+		Name:               r.Metadata.Name,
+		Desired:            desired,
+		Ready:              r.Status.ReadyReplicas,
+		Updated:            r.Status.UpdatedReplicas,
+		Images:             images(r.Spec.Template),
+		Generation:         r.Metadata.Generation,
+		ObservedGeneration: r.Status.ObservedGeneration,
+		ManualRollout:      r.Spec.UpdateStrategy.Manual(),
+		CreatedAt:          r.Metadata.CreationTimestamp,
+		NodeSelector:       r.Spec.Template.Spec.NodeSelector,
+		NodeAffinity:       affinityKeys(r.Spec.Template),
 	}
 }
 
 func daemonSetWorkload(d kube.DaemonSet) protocol.Workload {
 	return protocol.Workload{
-		Kind:       "DaemonSet",
-		Namespace:  d.Metadata.Namespace,
-		Name:       d.Metadata.Name,
-		Desired:    d.Status.DesiredNumberScheduled,
-		Ready:      d.Status.NumberReady,
-		Updated:    d.Status.UpdatedNumberScheduled,
-		Images:     images(d.Spec.Template),
-		Generation: d.Metadata.Generation,
-		CreatedAt:  d.Metadata.CreationTimestamp,
+		Kind:               "DaemonSet",
+		Namespace:          d.Metadata.Namespace,
+		Name:               d.Metadata.Name,
+		Desired:            d.Status.DesiredNumberScheduled,
+		Ready:              d.Status.NumberReady,
+		Updated:            d.Status.UpdatedNumberScheduled,
+		Images:             images(d.Spec.Template),
+		Generation:         d.Metadata.Generation,
+		ObservedGeneration: d.Status.ObservedGeneration,
+		ManualRollout:      d.Spec.UpdateStrategy.Manual(),
+		CreatedAt:          d.Metadata.CreationTimestamp,
+		NodeSelector:       d.Spec.Template.Spec.NodeSelector,
+		NodeAffinity:       affinityKeys(d.Spec.Template),
 	}
 }
 
@@ -443,6 +474,7 @@ func toNode(n kube.Node) protocol.Node {
 		Capacity:         resources(n.Status.Capacity),
 		Allocatable:      resources(n.Status.Allocatable),
 		CreatedAt:        n.Metadata.CreationTimestamp,
+		Labels:           n.Metadata.Labels,
 	}
 	for label := range n.Metadata.Labels {
 		if role, ok := strings.CutPrefix(label, "node-role.kubernetes.io/"); ok && role != "" {
@@ -496,6 +528,7 @@ func toPod(p kube.Pod) protocol.Pod {
 		Owner:     ownerOf(p.Metadata),
 	}
 	out.Requests, out.Limits = podResources(p)
+	out.Unlimited = unlimited(p)
 	if p.Status.StartTime != nil {
 		out.StartedAt = *p.Status.StartTime
 	}
@@ -508,6 +541,10 @@ func toPod(p kube.Pod) protocol.Pod {
 		}
 	}
 	for _, cs := range p.Status.ContainerStatuses {
+		if t := cs.LastState.Terminated; t != nil && t.Reason != "" &&
+			(out.LastTerminatedAt == nil || (t.FinishedAt != nil && t.FinishedAt.After(*out.LastTerminatedAt))) {
+			out.LastTermination, out.LastTerminatedAt = t.Reason, t.FinishedAt
+		}
 		if cs.Ready {
 			out.Ready++
 		}
@@ -545,6 +582,12 @@ func toIngress(in kube.Ingress) protocol.Ingress {
 	}
 	if in.Spec.IngressClassName != nil {
 		out.Class = *in.Spec.IngressClassName
+	}
+	for _, t := range in.Spec.TLS {
+		out.TLSHosts = append(out.TLSHosts, t.Hosts...)
+		if t.SecretName != "" && !slices.Contains(out.TLSSecrets, t.SecretName) {
+			out.TLSSecrets = append(out.TLSSecrets, t.SecretName)
+		}
 	}
 	for _, r := range in.Spec.Rules {
 		if r.HTTP == nil {
@@ -662,4 +705,112 @@ func toEvent(e kube.Event) protocol.Event {
 		Count:     count,
 		LastSeen:  latest(e.LastTimestamp, e.EventTime, e.FirstTimestamp, e.Metadata.CreationTimestamp),
 	}
+}
+
+// traefikGroups are where Traefik keeps its IngressRoutes: traefik.io since
+// Traefik 2.10, traefik.containo.us before.
+var traefikGroups = []string{"/apis/traefik.io/v1alpha1", "/apis/traefik.containo.us/v1alpha1"}
+
+// routes lists Traefik's IngressRoutes, from the first group the cluster
+// has; a cluster without Traefik has none, which is no error.
+func (c *Collector) routes(ctx context.Context, fail func(string, error)) []protocol.Route {
+	for _, group := range traefikGroups {
+		var out []protocol.Route
+		missing := false
+		for _, scope := range c.scopes() {
+			items, err := kube.ListAll[kube.IngressRoute](ctx, c.Kube, group+scope+"/ingressroutes", nil)
+			if kube.IsNotFound(err) {
+				missing = true
+				break
+			}
+			if err != nil {
+				fail("ingressroutes", err)
+				return out
+			}
+			for _, it := range items {
+				out = append(out, toRoute(it))
+			}
+		}
+		if !missing {
+			return out
+		}
+	}
+	return nil
+}
+
+var (
+	hostRule  = regexp.MustCompile(`\bHost\(([^)]*)\)`)
+	ruleValue = regexp.MustCompile("`([^`]*)`|\"([^\"]*)\"")
+)
+
+// ruleHosts reads the hosts of a Traefik rule such as
+// Host(`a.example.org`) || Host(`b.example.org`) && PathPrefix(`/api`).
+func ruleHosts(match string) []string {
+	var out []string
+	for _, m := range hostRule.FindAllStringSubmatch(match, -1) {
+		for _, v := range ruleValue.FindAllStringSubmatch(m[1], -1) {
+			host := strings.ToLower(v[1] + v[2])
+			if host != "" && !slices.Contains(out, host) {
+				out = append(out, host)
+			}
+		}
+	}
+	return out
+}
+
+func toRoute(r kube.IngressRoute) protocol.Route {
+	out := protocol.Route{
+		Namespace:   r.Metadata.Namespace,
+		Name:        r.Metadata.Name,
+		EntryPoints: r.Spec.EntryPoints,
+		CreatedAt:   r.Metadata.CreationTimestamp,
+	}
+	for _, rt := range r.Spec.Routes {
+		for _, h := range ruleHosts(rt.Match) {
+			if !slices.Contains(out.Hosts, h) {
+				out.Hosts = append(out.Hosts, h)
+			}
+		}
+		for _, svc := range rt.Services {
+			name := svc.Name
+			if svc.Port != "" {
+				name += ":" + string(svc.Port)
+			}
+			if !slices.Contains(out.Services, name) {
+				out.Services = append(out.Services, name)
+			}
+		}
+	}
+	if t := r.Spec.TLS; t != nil {
+		out.TLS, out.TLSSecret, out.CertResolver = true, t.SecretName, t.CertResolver
+	}
+	return out
+}
+
+// unlimited lists the resources that a container of the pod (an app
+// container or a sidecar) has no limit for, when another one has.
+func unlimited(p kube.Pod) []string {
+	var out []string
+	for _, res := range []string{"cpu", "memory"} {
+		some, all := false, true
+		check := func(c kube.Container) {
+			if _, ok := c.Resources.Limits[res]; ok {
+				some = true
+			} else {
+				all = false
+			}
+		}
+		for _, c := range p.Spec.Containers {
+			check(c)
+		}
+		for _, c := range p.Spec.InitContainers {
+			if c.RestartPolicy == "Always" {
+				check(c)
+			}
+		}
+		if some && !all {
+			out = append(out, res)
+		}
+	}
+	return out
 }

@@ -37,6 +37,13 @@ const (
 	tagExtendedRequest  = classApplication | constructed | 23
 	tagExtendedResponse = classApplication | constructed | 24
 	tagEqualityMatch    = classContext | constructed | 3
+	tagAnd              = classContext | constructed // filter choice 0
+	tagExtensibleMatch  = classContext | constructed | 9
+	// The parts of an extensible match: the matching rule, the attribute
+	// and the value.
+	tagMatchingRule = classContext | 1
+	tagMatchType    = classContext | 2
+	tagMatchValue   = classContext | 3
 	// Both are [0] in their own message: a simple bind's password, and an
 	// extended request's name.
 	tagSimpleAuth   = classContext

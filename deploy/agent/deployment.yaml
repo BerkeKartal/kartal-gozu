@@ -52,6 +52,10 @@ spec:
             # The metrics that pods expose, such as /metrics (needs rbac-pod-metrics.yaml).
             - name: KARTAL_POD_METRICS
               value: "false"
+            # Which addresses (a database, another service) the agent and the
+            # nodes reach, tried from short-lived pods (needs rbac-network-checks.yaml).
+            - name: KARTAL_NETWORK_CHECKS
+              value: "false"
             # Prometheus and Elasticsearch servers that only this cluster reaches,
             # which Explore may query through this agent: their base URLs,
             # separated by commas. The agent reaches nothing else for it.

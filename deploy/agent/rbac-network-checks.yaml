@@ -1,0 +1,29 @@
+# Optional: lets the agent check which addresses the nodes reach (also set
+# KARTAL_NETWORK_CHECKS to "true"). For each check it starts a short-lived
+# pod on every node asked for, in its own namespace and from its own image,
+# reads the result from the pod's log and removes the pod. The pods get no
+# service account token and no privileges. Admins of the whole cluster start
+# checks; each is written to the server's audit log.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kartal-agent-network-checks
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kartal-agent-network-checks
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kartal-agent-network-checks
+subjects:
+  - kind: ServiceAccount
+    name: kartal-agent
