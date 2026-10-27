@@ -367,7 +367,7 @@ const STRINGS = {
     dsIndex: 'Index pattern', dsTimeField: 'Time field', dsMessageField: 'Message field',
     dsTest: 'Try', dsTesting: 'Asking…', dsTestOK: 'It answers: {0}', dsSaved: 'Data source saved.', dsRemove: 'Remove',
     dsRemoveTitle: 'Remove data source', dsRemoveConfirm: '{0} will no longer be queried. Remove it?', dsRemoved: 'Data source removed.',
-    users: 'Users', userAdd: 'Add user', userEdit: 'Change user', userRole: 'Role', userGrant: 'Access', userBy: 'Added by', userChanged: 'Changed',
+    users: 'Admin', userAdd: 'Add user', userEdit: 'Change user', userRole: 'Role', userGrant: 'Access', userBy: 'Added by', userChanged: 'Changed',
     userGrantHelp: 'viewer, operator or admin; only in some places: operator@production/payments+staging/*',
     userPasswordHelp: 'At least 10 characters.', userPasswordKeep: 'Leave empty to keep the password.', userPasswordAgain: 'Password again',
     userPasswordsDiffer: 'The passwords differ.', userAdded: 'User added.', userSaved: 'User saved; their open sessions ended.',
@@ -376,6 +376,88 @@ const STRINGS = {
     usersNone: 'No users yet. Add one, and the sign-in page asks for a user name and password.',
     usersFixed: 'Users the server was started with', usersFixedHint: 'From KARTAL_USERS and the admin token; they are changed where they are set.',
     usersDirectory: 'People in the directory (Active Directory or LDAP) sign in with their own account; their groups give them their roles.',
+    'admin.users': 'Users',
+    'admin.groups': 'Groups',
+    'admin.access': 'Access',
+    'admin.sessions': 'Sessions',
+    'admin.audit': 'Audit',
+    'admin.status': 'Status',
+    'admin.enabled': 'active',
+    'admin.disabled': 'disabled',
+    'admin.noAccess': 'no access',
+    'admin.ownGrants': 'Own grants',
+    'admin.grants': 'Grants',
+    'admin.everywhere': 'everywhere',
+    'admin.enable': 'Enable',
+    'admin.disable': 'Disable',
+    'admin.enableConfirm': 'Let {0} sign in again?',
+    'admin.disableConfirm': '{0} can no longer sign in, and their open sessions end. Disable?',
+    'admin.notYourself': 'Not your own account; another admin can',
+    'admin.enabledDone': '{0} can sign in again.',
+    'admin.disabledDone': '{0} is disabled; their sessions ended.',
+    'admin.fullName': 'Full name',
+    'admin.email': 'E-mail',
+    'admin.grantsHelp': 'A role in a cluster and a namespace; * means all, and a name ending in * the ones it starts (team-*). Leave the namespace * for the whole cluster.',
+    'admin.groupsHelp': 'The person also gets what these groups give.',
+    'admin.noGroupsYet': 'No groups yet; add them in the Groups tab.',
+    'admin.disabledHelp': 'Disabled: cannot sign in',
+    'admin.saveEndsSessions': 'Saving ends the person’s open sessions, so the change applies at once.',
+    'admin.addGrant': 'Add a grant',
+    'admin.addEverywhere': 'Everywhere',
+    'admin.noGrants': 'No grants: only what their groups give.',
+    'admin.badScope': '“{0}” is not a cluster/namespace: letters, digits, . _ -, or * (alone or at the end).',
+    'admin.directory': 'Directory (Active Directory / LDAP)',
+    'admin.directoryGroup': 'Directory group',
+    'admin.noRules': 'No rules in KARTAL_LDAP_GROUPS; only the directory groups mapped to groups here let people in.',
+    'admin.directoryMapHint': 'These rules are set in KARTAL_LDAP_GROUPS. To give a directory group access from here, map it to a group in the Groups tab.',
+    'admin.groupsHint': 'A group gives its grants to its members: users named in it, and the members of the directory groups mapped to it. A change ends their open sessions.',
+    'admin.groupAdd': 'Add group',
+    'admin.groupEdit': 'Change group',
+    'admin.group': 'Group',
+    'admin.description': 'Description',
+    'admin.members': 'Members',
+    'admin.otherMembers': 'Other members',
+    'admin.directoryGroups': 'Directory groups',
+    'admin.otherMembersHelp': 'People not listed above, by the name they sign in with (directory users, for example); separate with commas or lines.',
+    'admin.directoryGroupsHelp': 'One per line: a CN (K8s-Operators) or a whole DN. Their members get this group’s grants when they sign in with the directory.',
+    'admin.noUsersYet': 'No users yet.',
+    'admin.groupsNone': 'No groups yet. A group gives the same grants to many people at once.',
+    'admin.groupSaveEndsSessions': 'Saving ends the open sessions of everyone the group reaches, before and after the change.',
+    'admin.groupAdded': 'Group added.',
+    'admin.groupSaved': 'Group saved; its members’ sessions ended.',
+    'admin.groupRemoveTitle': 'Remove group',
+    'admin.groupRemoveConfirm': 'Remove {0}? Its members lose what it gives, and their sessions end.',
+    'admin.groupRemoved': 'Group removed.',
+    'admin.accessHint': 'Who may do what in a namespace of a cluster, and why. Leave the namespace empty for the cluster as a whole (nodes, cluster-wide objects).',
+    'admin.accessNote': 'Directory users also get what their directory groups give; who is in which group, the directory knows.',
+    'admin.wholeCluster': 'whole cluster',
+    'admin.somewhere': 'somewhere in it',
+    'admin.who': 'Who',
+    'admin.kind': 'Kind',
+    'admin.because': 'Because of',
+    'admin.kind.user': 'user',
+    'admin.kind.fixed': 'start user',
+    'admin.kind.group': 'group',
+    'admin.kind.rule': 'directory rule',
+    'admin.kind.dirgroup': 'directory group',
+    'admin.fromOwn': 'own',
+    'admin.fromStart': 'KARTAL_USERS',
+    'admin.fromGroup': 'group {0}',
+    'admin.nobodyHere': 'Nobody may do anything here.',
+    'admin.accessOf': 'Access of {0}',
+    'admin.accessDirectoryNote': 'If they sign in with the directory, their directory groups may give more.',
+    'admin.sessionsHint': 'People signed in with a password or the directory. Sessions live in the server’s memory and end when it restarts.',
+    'admin.sessionsNone': 'Nobody is signed in with a session.',
+    'admin.signedInWith': 'Signed in with',
+    'admin.viaDirectory': 'directory',
+    'admin.viaPassword': 'password',
+    'admin.started': 'Started',
+    'admin.expires': 'Expires',
+    'admin.you': 'you',
+    'admin.endSession': 'End session',
+    'admin.endConfirm': 'Sign {0} out of this session?',
+    'admin.endOwnConfirm': 'This is your own session: you will be signed out. End it?',
+    'admin.sessionEnded': '{0} was signed out.',
     ownPassword: 'Change my password', currentPassword: 'Current password', newPassword: 'New password', ownPasswordSaved: 'Password changed.',
     spaceCluster: 'Clusters', spaceObserve: 'Observe', spaceClusterTitle: 'Cluster management', spaceObserveTitle: 'Observability',
     spaceClusterHelp: 'Workloads, nodes, logs, YAML, versions and changes, in every cluster.',
@@ -704,7 +786,7 @@ const STRINGS = {
     dsIndex: 'İndeks deseni', dsTimeField: 'Zaman alanı', dsMessageField: 'Mesaj alanı',
     dsTest: 'Dene', dsTesting: 'Soruluyor…', dsTestOK: 'Yanıt veriyor: {0}', dsSaved: 'Veri kaynağı kaydedildi.', dsRemove: 'Kaldır',
     dsRemoveTitle: 'Veri kaynağını kaldır', dsRemoveConfirm: '{0} artık sorgulanmayacak. Kaldırılsın mı?', dsRemoved: 'Veri kaynağı kaldırıldı.',
-    users: 'Kullanıcılar', userAdd: 'Kullanıcı ekle', userEdit: 'Kullanıcıyı düzenle', userRole: 'Rol', userGrant: 'Yetki', userBy: 'Ekleyen', userChanged: 'Değişiklik',
+    users: 'Yönetim', userAdd: 'Kullanıcı ekle', userEdit: 'Kullanıcıyı düzenle', userRole: 'Rol', userGrant: 'Yetki', userBy: 'Ekleyen', userChanged: 'Değişiklik',
     userGrantHelp: 'viewer, operator ya da admin; yalnızca bazı yerlerde: operator@production/payments+staging/*',
     userPasswordHelp: 'En az 10 karakter.', userPasswordKeep: 'Boş bırakılırsa şifre değişmez.', userPasswordAgain: 'Şifre (tekrar)',
     userPasswordsDiffer: 'Şifreler aynı değil.', userAdded: 'Kullanıcı eklendi.', userSaved: 'Kullanıcı kaydedildi; açık oturumları kapandı.',
@@ -713,6 +795,88 @@ const STRINGS = {
     usersNone: 'Henüz kullanıcı yok. Bir tane eklendiğinde giriş ekranı kullanıcı adı ve şifre sorar.',
     usersFixed: 'Sunucunun başlangıç kullanıcıları', usersFixedHint: 'KARTAL_USERS ve admin token’ından gelir; tanımlandıkları yerde değiştirilir.',
     usersDirectory: 'Dizindeki (Active Directory ya da LDAP) kişiler kendi hesaplarıyla girer; rollerini grupları belirler.',
+    'admin.users': 'Kullanıcılar',
+    'admin.groups': 'Gruplar',
+    'admin.access': 'Erişim',
+    'admin.sessions': 'Oturumlar',
+    'admin.audit': 'Denetim',
+    'admin.status': 'Durum',
+    'admin.enabled': 'etkin',
+    'admin.disabled': 'devre dışı',
+    'admin.noAccess': 'erişimi yok',
+    'admin.ownGrants': 'Kendi yetkileri',
+    'admin.grants': 'Yetkiler',
+    'admin.everywhere': 'her yerde',
+    'admin.enable': 'Etkinleştir',
+    'admin.disable': 'Devre dışı bırak',
+    'admin.enableConfirm': '{0} yeniden giriş yapabilsin mi?',
+    'admin.disableConfirm': '{0} artık giriş yapamaz, açık oturumları kapanır. Devre dışı bırakılsın mı?',
+    'admin.notYourself': 'Kendi hesabınız olamaz; başka bir yönetici yapabilir',
+    'admin.enabledDone': '{0} yeniden giriş yapabilir.',
+    'admin.disabledDone': '{0} devre dışı; oturumları kapandı.',
+    'admin.fullName': 'Ad soyad',
+    'admin.email': 'E-posta',
+    'admin.grantsHelp': 'Bir cluster ve namespace’te bir rol; * hepsi demek, * ile biten bir ad o adla başlayanlar (team-*). Cluster’ın tamamı için namespace’i * bırakın.',
+    'admin.groupsHelp': 'Kişi bu grupların verdiği yetkileri de alır.',
+    'admin.noGroupsYet': 'Henüz grup yok; Gruplar sekmesinden ekleyin.',
+    'admin.disabledHelp': 'Devre dışı: giriş yapamaz',
+    'admin.saveEndsSessions': 'Kaydetmek kişinin açık oturumlarını kapatır; değişiklik hemen geçerli olur.',
+    'admin.addGrant': 'Yetki ekle',
+    'admin.addEverywhere': 'Her yerde',
+    'admin.noGrants': 'Yetki yok: yalnızca gruplarının verdikleri.',
+    'admin.badScope': '“{0}” bir cluster/namespace değil: harf, rakam, . _ - ya da * (tek başına ya da sonda).',
+    'admin.directory': 'Dizin (Active Directory / LDAP)',
+    'admin.directoryGroup': 'Dizin grubu',
+    'admin.noRules': 'KARTAL_LDAP_GROUPS’ta kural yok; yalnızca buradaki gruplara eşlenen dizin grupları giriş yapabilir.',
+    'admin.directoryMapHint': 'Bu kurallar KARTAL_LDAP_GROUPS’ta tanımlı. Bir dizin grubuna buradan yetki vermek için Gruplar sekmesinde bir gruba eşleyin.',
+    'admin.groupsHint': 'Grup, yetkilerini üyelerine verir: içinde adı geçen kullanıcılara ve ona eşlenen dizin gruplarının üyelerine. Değişiklik açık oturumlarını kapatır.',
+    'admin.groupAdd': 'Grup ekle',
+    'admin.groupEdit': 'Grubu düzenle',
+    'admin.group': 'Grup',
+    'admin.description': 'Açıklama',
+    'admin.members': 'Üyeler',
+    'admin.otherMembers': 'Diğer üyeler',
+    'admin.directoryGroups': 'Dizin grupları',
+    'admin.otherMembersHelp': 'Yukarıda olmayan kişiler, giriş yaptıkları adla (örneğin dizin kullanıcıları); virgül ya da satırla ayırın.',
+    'admin.directoryGroupsHelp': 'Her satıra bir tane: CN (K8s-Operators) ya da tam DN. Üyeleri dizinle girdiklerinde bu grubun yetkilerini alır.',
+    'admin.noUsersYet': 'Henüz kullanıcı yok.',
+    'admin.groupsNone': 'Henüz grup yok. Grup, aynı yetkileri birçok kişiye birden verir.',
+    'admin.groupSaveEndsSessions': 'Kaydetmek, değişiklikten önce ve sonra grubun kapsadığı herkesin açık oturumlarını kapatır.',
+    'admin.groupAdded': 'Grup eklendi.',
+    'admin.groupSaved': 'Grup kaydedildi; üyelerinin oturumları kapandı.',
+    'admin.groupRemoveTitle': 'Grubu sil',
+    'admin.groupRemoveConfirm': '{0} silinsin mi? Üyeleri grubun verdiği yetkileri kaybeder, oturumları kapanır.',
+    'admin.groupRemoved': 'Grup silindi.',
+    'admin.accessHint': 'Bir cluster’ın bir namespace’inde kimin ne yapabildiği ve neden. Cluster’ın tamamı (node’lar, cluster çapındaki nesneler) için namespace’i boş bırakın.',
+    'admin.accessNote': 'Dizin kullanıcıları dizin gruplarının verdiğini de alır; kimin hangi grupta olduğunu dizin bilir.',
+    'admin.wholeCluster': 'cluster’ın tamamı',
+    'admin.somewhere': 'bir yerinde',
+    'admin.who': 'Kim',
+    'admin.kind': 'Tür',
+    'admin.because': 'Nereden',
+    'admin.kind.user': 'kullanıcı',
+    'admin.kind.fixed': 'başlangıç kullanıcısı',
+    'admin.kind.group': 'grup',
+    'admin.kind.rule': 'dizin kuralı',
+    'admin.kind.dirgroup': 'dizin grubu',
+    'admin.fromOwn': 'kendi',
+    'admin.fromStart': 'KARTAL_USERS',
+    'admin.fromGroup': '{0} grubu',
+    'admin.nobodyHere': 'Burada kimsenin yetkisi yok.',
+    'admin.accessOf': '{0} erişimi',
+    'admin.accessDirectoryNote': 'Dizinle girerse dizin grupları daha fazlasını verebilir.',
+    'admin.sessionsHint': 'Şifreyle ya da dizinle giriş yapmış kişiler. Oturumlar sunucunun belleğinde tutulur, sunucu yeniden başlayınca kapanır.',
+    'admin.sessionsNone': 'Oturumla giriş yapmış kimse yok.',
+    'admin.signedInWith': 'Giriş yolu',
+    'admin.viaDirectory': 'dizin',
+    'admin.viaPassword': 'şifre',
+    'admin.started': 'Başladı',
+    'admin.expires': 'Bitiyor',
+    'admin.you': 'siz',
+    'admin.endSession': 'Oturumu kapat',
+    'admin.endConfirm': '{0} bu oturumdan çıkarılsın mı?',
+    'admin.endOwnConfirm': 'Bu sizin oturumunuz: çıkış yapacaksınız. Kapatılsın mı?',
+    'admin.sessionEnded': '{0} oturumdan çıkarıldı.',
     ownPassword: 'Şifremi değiştir', currentPassword: 'Mevcut şifre', newPassword: 'Yeni şifre', ownPasswordSaved: 'Şifre değiştirildi.',
     spaceCluster: 'Küme', spaceObserve: 'Gözlem', spaceClusterTitle: 'Küme yönetimi', spaceObserveTitle: 'Gözlem',
     spaceClusterHelp: 'Her cluster’ın iş yükleri, node’ları, logları, YAML’ı, sürümleri ve değişiklikleri.',
@@ -1396,7 +1560,7 @@ async function loadView(signal) {
     case 'uptime':
       return { checks: await api('checks', { signal }) };
     case 'users':
-      return await api('users', { signal });
+      return await loadAdmin(signal);
     case 'placement': {
       const [nodes, workloads, pods] = await Promise.all([api(c + '/nodes', { signal }), api(c + '/workloads', { signal }), api(c + '/pods', { signal })]);
       return { nodes, workloads, pods };
@@ -3127,67 +3291,261 @@ async function mailDialog() {
   (fixed ? buttons[1] : addr).focus();
 }
 
-// renderUsers lists the users admins manage here, and the ones the server
-// was started with, which are changed where they are set.
-function renderUsers({ users, fixed, directory, where }) {
+// ---------------------------------------------------------------- admin panel
+
+// The admin panel: the users and groups admins manage here, who may do what
+// where, the live sessions and what admins changed. Its tab is in the route
+// (#/c/<cluster>/users/<tab>).
+const ADMIN_TABS = ['users', 'groups', 'access', 'sessions', 'audit'];
+const ADMIN_ACTIONS = new Set(['add-user', 'change-user', 'remove-user', 'add-group', 'change-group', 'remove-group',
+  'end-session', 'sign-in', 'change-own-password']);
+function adminTab() { return ADMIN_TABS.includes(state.rest[0]) ? state.rest[0] : 'users'; }
+
+async function loadAdmin(signal) {
+  const tab = adminTab();
+  const [base, sessions, audit] = await Promise.all([
+    api('users', { signal }),
+    tab === 'sessions' ? api('sessions', { signal }) : null,
+    tab === 'audit' ? api('audit', { signal }) : null,
+  ]);
+  return Object.assign({ tab, sessions, audit }, base);
+}
+
+// A grant is written as the server reads it: "operator", or
+// "operator@production/payments+staging/*".
+function parseGrantText(text) {
+  const [role, scopeText] = String(text).split('@');
+  const scopes = scopeText ? scopeText.split('+').map(s => {
+    const [cluster, namespace] = s.split('/');
+    return { cluster, namespace: namespace || '*' };
+  }) : [];
+  return { role, scopes };
+}
+function grantRole(grants, cluster, ns) {
+  let best = 0;
+  for (const text of grants || []) {
+    const g = parseGrantText(text);
+    const r = RANK[g.role] || 0;
+    if (r > best && (!g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, cluster) &&
+      (ns ? nameMatches(s.namespace, ns) : s.namespace === '*')))) best = r;
+  }
+  return best;
+}
+const ROLE_OF_RANK = Object.fromEntries(Object.entries(RANK).map(([k, v]) => [v, k]));
+
+function grantChip(text) {
+  const g = parseGrantText(text);
+  const where = g.scopes.length ? g.scopes.map(s => s.cluster + '/' + s.namespace).join(', ') : t('admin.everywhere');
+  return h('span', { class: 'label-chip grant-chip role-' + g.role, title: text }, h('strong', null, t('role.' + g.role)), ' · ' + where);
+}
+function grantChips(grants) {
+  return grants && grants.length ? h('div', { class: 'chips' }, grants.map(grantChip)) : h('span', { class: 'muted' }, '—');
+}
+function nameChips(names, max = 6) {
+  if (!names || !names.length) return h('span', { class: 'muted' }, '—');
+  return h('div', { class: 'chips' }, names.slice(0, max).map(n => h('span', { class: 'label-chip' }, n)),
+    names.length > max ? h('span', { class: 'muted' }, '+' + (names.length - max)) : null);
+}
+function directoryName(dn) {
+  const first = String(dn).split(',')[0];
+  return first.includes('=') ? first.split('=').slice(1).join('=').trim() : dn;
+}
+
+function renderUsers(data) {
+  const tab = adminTab();
+  const counts = { users: data.users.length, groups: data.groups.length, sessions: data.sessions ? data.sessions.sessions.length : null };
+  const tabs = h('nav', { class: 'detail-tabs admin-tabs', role: 'tablist' }, ADMIN_TABS.map(id => h('a', {
+    role: 'tab', class: id === tab ? 'dtab active' : 'dtab', 'aria-selected': String(id === tab),
+    href: routeHash({ view: 'users', rest: id === 'users' ? [] : [id] }),
+  }, t('admin.' + id), counts[id] != null ? h('span', { class: 'tab-count' }, String(counts[id])) : null)));
+  const body = tab === 'groups' ? renderGroupsTab(data)
+    : tab === 'access' ? renderAccessTab(data)
+      : tab === 'sessions' ? renderSessionsTab(data)
+        : tab === 'audit' ? renderAudit((data.audit || []).filter(e => ADMIN_ACTIONS.has(e.action)))
+          : renderUsersTab(data);
+  return [data.where ? null : h('div', { class: 'banner' }, t('mailNotKept')), tabs, body];
+}
+
+// ------------------------------------------------ users
+
+function renderUsersTab(data) {
+  const { users, fixed, directory, directoryRules } = data;
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
-  const rows = users.filter(u => matches(words, [u.name, u.grant, u.by]));
+  const rows = users.filter(u => matches(words, [u.name, u.fullName, u.email, u.by, ...(u.grants || []), ...(u.groups || [])]));
   return [
-    where ? null : h('div', { class: 'banner' }, t('mailNotKept')),
     h('section', { class: 'panel' },
       h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersHint')), h('span', { class: 'grow' }),
-        button('+ ' + t('userAdd'), () => userDialog(), 'primary')),
+        button('+ ' + t('userAdd'), () => userDialog(data), 'primary')),
       rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
-        h('thead', null, h('tr', null, h('th', null, t('userName')), h('th', null, t('userRole')), h('th', null, t('userGrant')),
-          h('th', null, t('userBy')), h('th', null, t('userChanged')), h('th'))),
-        h('tbody', null, rows.map(u => h('tr', null,
-          h('td', null, h('strong', null, u.name)),
-          h('td', null, t('role.' + u.role)),
-          h('td', null, mono(u.grant)),
-          h('td', null, u.by || '', u.created ? h('span', { class: 'muted' }, ' · ', age(u.created)) : null),
-          h('td', null, u.changed && when(u.changed) ? [age(u.changed), u.changedBy ? h('span', { class: 'muted' }, ' · ' + u.changedBy) : null] : '—'),
+        h('thead', null, h('tr', null, ['userName', 'admin.status', 'userRole', 'admin.ownGrants', 'admin.groups', 'userChanged'].map(k => h('th', null, t(k))), h('th'))),
+        h('tbody', null, rows.map(u => h('tr', { class: u.disabled ? 'muted-row' : null },
+          h('td', null, h('strong', null, u.name),
+            u.fullName ? h('div', { class: 'muted small-text' }, u.fullName) : null,
+            u.email ? h('div', { class: 'muted small-text' }, u.email) : null),
+          h('td', null, u.disabled ? pill(t('admin.disabled'), 'bad') : pill(t('admin.enabled'), 'ok')),
+          h('td', null, u.role && u.role !== 'none' ? t('role.' + u.role) : h('span', { class: 'status-bad' }, t('admin.noAccess'))),
+          h('td', null, grantChips(u.grants)),
+          h('td', null, nameChips(u.groups)),
+          h('td', null, u.changed && when(u.changed) ? [age(u.changed), u.changedBy ? h('span', { class: 'muted' }, ' · ' + u.changedBy) : null]
+            : [u.created ? age(u.created) : '—', u.by ? h('span', { class: 'muted' }, ' · ' + u.by) : null]),
           h('td', { class: 'actions-cell' },
-            button(t('edit'), () => userDialog(u)),
-            button(t('dsRemove'), () => removeUser(u), 'danger')))))))
+            button(t('edit'), () => userDialog(data, u)),
+            button(t('admin.access'), () => accessDialog(data, { kind: 'user', name: u.name })),
+            selfLocked(button(t(u.disabled ? 'admin.enable' : 'admin.disable'), () => toggleUser(u)), u),
+            selfLocked(button(t('dsRemove'), () => removeUser(u), 'danger'), u)))))))
         : h('div', { class: 'empty-note' }, users.length ? t('noMatch') : t('usersNone'))),
-    fixed.length || directory ? panel(t('usersFixed'), [
+    fixed.length ? panel(t('usersFixed'), [
       h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersFixedHint'))),
-      fixed.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
-        h('tbody', null, fixed.map(u => h('tr', null, h('td', null, u.name), h('td', null, t('role.' + u.role))))))) : null,
-      directory ? h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersDirectory'))) : null,
+      h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, ['userName', 'userRole', 'admin.ownGrants', 'admin.groups'].map(k => h('th', null, t(k))), h('th'))),
+        h('tbody', null, fixed.map(u => h('tr', null,
+          h('td', null, h('strong', null, u.name)), h('td', null, t('role.' + u.role)),
+          h('td', null, grantChips(u.grants)), h('td', null, nameChips(u.groups)),
+          h('td', { class: 'actions-cell' }, button(t('admin.access'), () => accessDialog(data, { kind: 'fixed', name: u.name })))))))),
+    ]) : null,
+    directory ? panel(t('admin.directory'), [
+      h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('usersDirectory'))),
+      directoryRules.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, h('th', null, t('admin.directoryGroup')), h('th', null, t('userGrant')))),
+        h('tbody', null, directoryRules.map(r => h('tr', null, h('td', null, mono(r.group)), h('td', null, grantChip(r.grant)))))))
+        : h('div', { class: 'empty-note' }, t('admin.noRules')),
+      h('div', { class: 'muted small-text panel-foot' }, t('admin.directoryMapHint')),
     ]) : null,
   ];
 }
 
-// userDialog adds a user, or changes one: their access, their password or
-// both; an empty password keeps the one they have.
-function userDialog(u) {
+// grantsEditor edits grants a row at a time: a role, a cluster and a
+// namespace, either of which may be * or end in * ("team-*").
+let grantsEditorSeq = 0;
+const namespaceCache = new Map();
+async function clusterNamespaces(cluster) {
+  if (!cluster || cluster.includes('*')) return [];
+  if (!namespaceCache.has(cluster)) {
+    namespaceCache.set(cluster, api('clusters/' + enc(cluster) + '/namespaces').then(list => (list || []).map(n => n.name).sort())
+      .catch(() => []));
+  }
+  return namespaceCache.get(cluster);
+}
+function grantsEditor(grants) {
+  const id = ++grantsEditorSeq;
+  const clusterList = h('datalist', { id: 'ge-c-' + id }, ['*', ...(state.clusters || []).map(c => c.name)].map(c => h('option', { value: c })));
+  const rows = h('div', { class: 'grant-rows' });
+  const empty = h('div', { class: 'empty-note' }, t('admin.noGrants'));
+  const sync = () => { empty.hidden = rows.children.length > 0; };
+  function addRow(role = 'viewer', cluster = '*', ns = '*') {
+    const roleSel = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === role }, t('role.' + r))));
+    const nsList = h('datalist', { id: 'ge-n-' + id + '-' + rows.children.length + '-' + Math.random().toString(36).slice(2, 7) });
+    const c = h('input', { type: 'text', class: 'mono', value: cluster, list: clusterList.id, placeholder: '*', spellcheck: 'false', autocomplete: 'off' });
+    const n = h('input', { type: 'text', class: 'mono', value: ns, list: nsList.id, placeholder: '*', spellcheck: 'false', autocomplete: 'off' });
+    const fillNs = async () => {
+      const names = await clusterNamespaces(c.value.trim());
+      fill(nsList, ['*', ...names].map(x => h('option', { value: x })));
+    };
+    c.addEventListener('change', fillNs);
+    fillNs();
+    const row = h('div', { class: 'grant-row' }, roleSel, c, h('span', { class: 'muted' }, '/'), n, nsList,
+      h('button', { type: 'button', class: 'btn', title: t('dsRemove'), onclick: () => { row.remove(); sync(); } }, '✕'));
+    row.read = () => ({ role: roleSel.value, cluster: c.value.trim() || '*', ns: n.value.trim() || '*' });
+    rows.append(row);
+    sync();
+    return row;
+  }
+  for (const text of grants || []) {
+    const g = parseGrantText(text);
+    if (!g.scopes.length) addRow(g.role);
+    else for (const s of g.scopes) addRow(g.role, s.cluster, s.namespace);
+  }
+  sync();
+  const box = h('div', { class: 'grants-editor' }, rows, empty, clusterList,
+    h('div', { class: 'grant-add' },
+      button('+ ' + t('admin.addGrant'), () => addRow().querySelector('input').focus()),
+      button(t('admin.addEverywhere'), () => addRow('viewer', '*', '*'))));
+  const pattern = /^(\*|[A-Za-z0-9][A-Za-z0-9._-]*\*?)$/;
+  // value returns the grants as the server reads them, or throws a reason.
+  box.value = () => [...rows.children].map(r => {
+    const { role, cluster, ns } = r.read();
+    if (!pattern.test(cluster) || !pattern.test(ns)) throw new Error(t('admin.badScope', cluster + '/' + ns));
+    return cluster === '*' && ns === '*' ? role : role + '@' + cluster + '/' + ns;
+  });
+  return box;
+}
+
+// checkList picks some of a list of names.
+function checkList(names, picked, help) {
+  const set = new Set((picked || []).map(x => x.toLowerCase()));
+  const boxes = names.map(n => {
+    const cb = h('input', { type: 'checkbox', value: n, checked: set.has(n.toLowerCase()) });
+    return h('label', { class: 'check-item' }, cb, ' ', n);
+  });
+  const el = h('div', { class: 'check-list' }, boxes.length ? boxes : h('span', { class: 'muted small-text' }, help || '—'));
+  el.value = () => boxes.map(b => b.querySelector('input')).filter(cb => cb.checked).map(cb => cb.value);
+  return el;
+}
+
+// selfLocked turns off a control that would disable or remove the signed-in
+// admin's own account, which the server refuses too.
+function selfLocked(el, u) {
+  if (u && state.me && u.name.toLowerCase() === state.me.name.toLowerCase()) {
+    el.disabled = true;
+    el.title = t('admin.notYourself');
+  }
+  return el;
+}
+
+// grantKeys spells grants one scope each, so that "operator@a/x+b/*" and the
+// rows the editor makes of it compare equal, and so does their order.
+function grantKeys(grants) {
+  return [...new Set((grants || []).flatMap(text => {
+    const g = parseGrantText(text);
+    return g.scopes.length ? g.scopes.map(s => g.role + '@' + s.cluster + '/' + s.namespace) : [g.role + '@*/*'];
+  }))].sort();
+}
+function sameNames(a, b) {
+  const norm = xs => [...new Set((xs || []).map(x => x.toLowerCase()))].sort().join('\n');
+  return norm(a) === norm(b);
+}
+
+// userDialog adds a user, or changes one. Saving ends the person's open
+// sessions, so a change that changes nothing is not sent.
+function userDialog(data, u) {
   const name = h('input', { type: 'text', maxlength: '64', autocomplete: 'off', spellcheck: 'false', value: u ? u.name : '', disabled: !!u });
-  const grant = h('input', { type: 'text', class: 'mono', autocomplete: 'off', spellcheck: 'false', value: u ? u.grant : 'viewer', list: 'user-grants' });
-  const grants = h('datalist', { id: 'user-grants' }, ['viewer', 'operator', 'admin'].map(g => h('option', { value: g })));
+  const fullName = h('input', { type: 'text', maxlength: '100', autocomplete: 'off', value: u ? u.fullName || '' : '' });
+  const email = h('input', { type: 'text', maxlength: '254', autocomplete: 'off', spellcheck: 'false', value: u ? u.email || '' : '' });
+  const grants = grantsEditor(u ? u.grants : ['viewer']);
+  const groups = checkList(data.groups.map(g => g.name), u ? u.groups : [], t('admin.noGroupsYet'));
+  const disabled = selfLocked(h('input', { type: 'checkbox', checked: !!(u && u.disabled) }), u);
   const pass = h('input', { type: 'password', autocomplete: 'new-password', required: !u });
   const again = h('input', { type: 'password', autocomplete: 'new-password', required: !u });
   const note = formNote();
   const form = h('form', {
-    class: 'dialog',
+    class: 'dialog wide',
     onsubmit: async e => {
       e.preventDefault();
       if (pass.value !== again.value) {
         note.say(t('userPasswordsDiffer'), 'bad');
         return;
       }
+      let body;
+      try {
+        body = { fullName: fullName.value.trim(), email: email.value.trim(), grants: grants.value(), groups: groups.value(), disabled: disabled.checked };
+      } catch (err) {
+        note.say(err.message, 'bad');
+        return;
+      }
+      if (pass.value) body.password = pass.value;
       try {
         if (u) {
-          const body = { grant: grant.value.trim() !== u.grant ? grant.value.trim() : '', password: pass.value };
-          // Nothing changed: saving would only end their sessions.
-          if (!body.grant && !body.password) {
+          const same = body.fullName === (u.fullName || '') && body.email === (u.email || '') && body.disabled === !!u.disabled &&
+            grantKeys(body.grants).join('\n') === grantKeys(u.grants).join('\n') && sameNames(body.groups, u.groups);
+          if (!body.password && same) {
             close();
             return;
           }
           await api('users/' + enc(u.name), { method: 'PUT', body });
           toast(t('userSaved'));
         } else {
-          await api('users', { method: 'POST', body: { name: name.value.trim(), grant: grant.value.trim(), password: pass.value } });
+          body.name = name.value.trim();
+          await api('users', { method: 'POST', body });
           toast(t('userAdded'));
         }
         close();
@@ -3197,14 +3555,34 @@ function userDialog(u) {
       }
     },
   }, h('h2', null, t(u ? 'userEdit' : 'userAdd')),
-  dialogField(t('userName'), name),
-  dialogField(t('userGrant'), grant, t('userGrantHelp')), grants,
-  dialogField(t('password'), pass, u ? t('userPasswordKeep') : t('userPasswordHelp')),
-  dialogField(t('userPasswordAgain'), again),
+  h('div', { class: 'field-row' }, dialogField(t('userName'), name), dialogField(t('admin.fullName'), fullName)),
+  dialogField(t('admin.email'), email),
+  dialogField(t('admin.ownGrants'), grants, t('admin.grantsHelp')),
+  dialogField(t('admin.groups'), groups, t('admin.groupsHelp')),
+  h('div', { class: 'field-row' },
+    dialogField(t('password'), pass, u ? t('userPasswordKeep') : t('userPasswordHelp')),
+    dialogField(t('userPasswordAgain'), again)),
+  h('label', { class: 'check-item' }, disabled, ' ', t('admin.disabledHelp')),
+  u ? h('div', { class: 'muted small-text' }, t('admin.saveEndsSessions')) : null,
   note,
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t(u ? 'save' : 'userAdd'))));
   const close = modal(form);
-  (u ? grant : name).focus();
+  (u ? fullName : name).focus();
+}
+
+async function toggleUser(u) {
+  const off = !u.disabled;
+  const ok = await ask({ title: t(off ? 'admin.disable' : 'admin.enable'), message: t(off ? 'admin.disableConfirm' : 'admin.enableConfirm', u.name),
+    confirm: t(off ? 'admin.disable' : 'admin.enable'), danger: off });
+  if (!ok) return;
+  try {
+    await api('users/' + enc(u.name), { method: 'PUT', body: { disabled: off } });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t(off ? 'admin.disabledDone' : 'admin.enabledDone', u.name));
+  refresh();
 }
 
 async function removeUser(u) {
@@ -3217,6 +3595,242 @@ async function removeUser(u) {
     return;
   }
   toast(t('userRemoved'));
+  refresh();
+}
+
+// ------------------------------------------------ groups
+
+function renderGroupsTab(data) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = data.groups.filter(g => matches(words, [g.name, g.description, ...g.grants, ...g.members, ...g.directory]));
+  return h('section', { class: 'panel' },
+    h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('admin.groupsHint')), h('span', { class: 'grow' }),
+      button('+ ' + t('admin.groupAdd'), () => groupDialog(data), 'primary')),
+    rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, ['admin.group', 'admin.grants', 'admin.members', 'admin.directoryGroups', 'userChanged'].map(k => h('th', null, t(k))), h('th'))),
+      h('tbody', null, rows.map(g => h('tr', null,
+        h('td', null, h('strong', null, g.name), g.description ? h('div', { class: 'muted small-text' }, g.description) : null),
+        h('td', null, grantChips(g.grants)),
+        h('td', null, nameChips(g.members)),
+        h('td', null, g.directory.length ? nameChips(g.directory.map(directoryName)) : h('span', { class: 'muted' }, '—')),
+        h('td', null, g.changed && when(g.changed) ? [age(g.changed), g.changedBy ? h('span', { class: 'muted' }, ' · ' + g.changedBy) : null]
+          : [g.created ? age(g.created) : '—', g.by ? h('span', { class: 'muted' }, ' · ' + g.by) : null]),
+        h('td', { class: 'actions-cell' },
+          button(t('edit'), () => groupDialog(data, g)),
+          button(t('admin.access'), () => accessDialog(data, { kind: 'group', name: g.name })),
+          button(t('dsRemove'), () => removeGroup(g), 'danger')))))))
+      : h('div', { class: 'empty-note' }, data.groups.length ? t('noMatch') : t('admin.groupsNone')));
+}
+
+function splitList(text) {
+  return String(text).split(/[\n,;]+/).map(x => x.trim()).filter(Boolean);
+}
+
+// groupDialog adds a group, or changes one. Saving ends the open sessions
+// of everyone it reaches, so a change that changes nothing is not sent.
+function groupDialog(data, g) {
+  // Users of KARTAL_USERS with a token get nothing from groups.
+  const known = [...data.users.map(u => u.name), ...data.fixed.filter(u => u.password).map(u => u.name)];
+  const knownSet = new Set(known.map(x => x.toLowerCase()));
+  const name = h('input', { type: 'text', maxlength: '64', autocomplete: 'off', value: g ? g.name : '', disabled: !!g });
+  const description = h('input', { type: 'text', maxlength: '300', autocomplete: 'off', value: g ? g.description || '' : '' });
+  const grants = grantsEditor(g ? g.grants : ['viewer']);
+  const members = checkList(known, g ? g.members : [], t('admin.noUsersYet'));
+  const others = h('textarea', { rows: '2', spellcheck: 'false', placeholder: 'ahmet.yilmaz, mehmet.kaya' },
+    (g ? g.members.filter(m => !knownSet.has(m.toLowerCase())) : []).join('\n'));
+  const dir = h('textarea', { rows: '3', spellcheck: 'false', placeholder: 'K8s-Operators\nCN=Payments,OU=Groups,DC=example,DC=org' },
+    (g ? g.directory : []).join('\n'));
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      let body;
+      try {
+        body = { description: description.value.trim(), grants: grants.value(), members: [...members.value(), ...splitList(others.value)],
+          directory: dir.value.split('\n').map(x => x.trim()).filter(Boolean) };
+      } catch (err) {
+        note.say(err.message, 'bad');
+        return;
+      }
+      try {
+        if (g) {
+          if (body.description === (g.description || '') && grantKeys(body.grants).join('\n') === grantKeys(g.grants).join('\n') &&
+            sameNames(body.members, g.members) && sameNames(body.directory, g.directory)) {
+            close();
+            return;
+          }
+          await api('groups/' + enc(g.name), { method: 'PUT', body });
+          toast(t('admin.groupSaved'));
+        } else {
+          body.name = name.value.trim();
+          await api('groups', { method: 'POST', body });
+          toast(t('admin.groupAdded'));
+        }
+        close();
+        refresh();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t(g ? 'admin.groupEdit' : 'admin.groupAdd')),
+  h('div', { class: 'field-row' }, dialogField(t('admin.group'), name), dialogField(t('admin.description'), description)),
+  dialogField(t('admin.grants'), grants, t('admin.grantsHelp')),
+  dialogField(t('admin.members'), members),
+  dialogField(t('admin.otherMembers'), others, t('admin.otherMembersHelp')),
+  data.directory || (g && g.directory.length) ? dialogField(t('admin.directoryGroups'), dir, t('admin.directoryGroupsHelp')) : null,
+  h('div', { class: 'muted small-text' }, t('admin.groupSaveEndsSessions')),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t(g ? 'save' : 'admin.groupAdd'))));
+  const close = modal(form);
+  (g ? description : name).focus();
+}
+
+async function removeGroup(g) {
+  const ok = await ask({ title: t('admin.groupRemoveTitle'), message: t('admin.groupRemoveConfirm', g.name), confirm: t('dsRemove'), danger: true });
+  if (!ok) return;
+  try {
+    await api('groups/' + enc(g.name), { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t('admin.groupRemoved'));
+  refresh();
+}
+
+// ------------------------------------------------ access
+
+// principals are everyone and everything that gives access: users of the
+// UI and of the server's start (with what their groups give them), groups,
+// the directory's rules and the directory groups mapped to groups.
+function principals(data) {
+  // The server says whose groups count: a token of KARTAL_USERS gets none.
+  const groupGrants = names => data.groups.filter(g => (names || []).includes(g.name))
+    .flatMap(g => g.grants.map(grant => ({ grant, from: t('admin.fromGroup', g.name) })));
+  const out = [];
+  for (const u of data.users) {
+    out.push({ kind: 'user', name: u.name, disabled: u.disabled,
+      sources: [...u.grants.map(grant => ({ grant, from: t('admin.fromOwn') })), ...groupGrants(u.groups)] });
+  }
+  for (const u of data.fixed) {
+    out.push({ kind: 'fixed', name: u.name, sources: [...u.grants.map(grant => ({ grant, from: t('admin.fromStart') })), ...groupGrants(u.groups)] });
+  }
+  for (const g of data.groups) {
+    out.push({ kind: 'group', name: g.name, sources: g.grants.map(grant => ({ grant, from: t('admin.fromGroup', g.name) })) });
+  }
+  for (const r of data.directoryRules || []) {
+    out.push({ kind: 'rule', name: r.group, sources: [{ grant: r.grant, from: 'KARTAL_LDAP_GROUPS' }] });
+  }
+  for (const g of data.groups) {
+    for (const d of g.directory) {
+      out.push({ kind: 'dirgroup', name: d, sources: g.grants.map(grant => ({ grant, from: t('admin.fromGroup', g.name) })) });
+    }
+  }
+  return out;
+}
+
+let accessCluster = '';
+let accessNs = '';
+function renderAccessTab(data) {
+  const clusters = (state.clusters || []).map(c => c.name);
+  if (!accessCluster || !clusters.includes(accessCluster)) accessCluster = state.cluster || clusters[0] || '';
+  const results = h('div');
+  const nsList = h('datalist', { id: 'access-ns' });
+  const clusterSel = h('select', { onchange: () => { accessCluster = clusterSel.value; draw(); fillNs(); } },
+    clusters.map(c => h('option', { value: c, selected: c === accessCluster }, c)));
+  const nsInput = h('input', { type: 'text', class: 'mono', list: 'access-ns', value: accessNs, placeholder: t('admin.wholeCluster'),
+    spellcheck: 'false', autocomplete: 'off', oninput: () => { accessNs = nsInput.value.trim(); draw(); } });
+  const fillNs = async () => fill(nsList, (await clusterNamespaces(accessCluster)).map(x => h('option', { value: x })));
+  function draw() {
+    const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = principals(data).map(p => {
+      const role = grantRole(p.sources.map(s => s.grant), accessCluster, accessNs);
+      const from = p.sources.filter(s => grantRole([s.grant], accessCluster, accessNs) === role && role > 0);
+      return { p, role, from };
+    }).filter(x => x.role > 0 && matches(words, [x.p.name, ...x.from.map(f => f.from)]))
+      .sort((a, b) => b.role - a.role || a.p.kind.localeCompare(b.p.kind) || a.p.name.localeCompare(b.p.name));
+    fill(results, rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, h('th', null, t('admin.who')), h('th', null, t('admin.kind')), h('th', null, t('userRole')), h('th', null, t('admin.because')))),
+      h('tbody', null, rows.map(({ p, role, from }) => h('tr', { class: p.disabled ? 'muted-row' : null },
+        h('td', null, h('strong', null, p.kind === 'dirgroup' ? directoryName(p.name) : p.name), p.disabled ? h('span', { class: 'muted' }, ' · ' + t('admin.disabled')) : null),
+        h('td', null, h('span', { class: 'label-chip' }, t('admin.kind.' + p.kind))),
+        h('td', null, h('span', { class: 'role-badge role-' + ROLE_OF_RANK[role] }, t('role.' + ROLE_OF_RANK[role]))),
+        h('td', null, h('div', { class: 'chips' }, from.map(f => h('span', { class: 'muted small-text' }, f.from + ': ', grantChip(f.grant))))))))))
+      : h('div', { class: 'empty-note' }, t('admin.nobodyHere')));
+  }
+  draw();
+  fillNs();
+  return h('section', { class: 'panel' },
+    h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('admin.accessHint'))),
+    h('div', { class: 'access-pick' },
+      h('label', { class: 'field' }, h('span', null, t('cluster')), clusterSel),
+      h('label', { class: 'field' }, h('span', null, t('namespace')), nsInput, nsList)),
+    results,
+    h('div', { class: 'muted small-text panel-foot' }, t('admin.accessNote')));
+}
+
+// accessDialog shows where someone or a group may do what, and why.
+function accessDialog(data, { kind, name }) {
+  const p = principals(data).find(x => x.kind === kind && x.name === name);
+  const sources = p ? p.sources : [];
+  const clusters = (state.clusters || []).map(c => c.name);
+  const table = h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+    h('thead', null, h('tr', null, h('th', null, t('admin.because')), h('th', null, t('userGrant')))),
+    h('tbody', null, sources.length ? sources.map(s => h('tr', null, h('td', null, s.from), h('td', null, grantChip(s.grant))))
+      : h('tr', null, h('td', { colspan: '2', class: 'empty-note' }, t('admin.noAccess'))))));
+  const perCluster = clusters.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+    h('thead', null, h('tr', null, h('th', null, t('cluster')), h('th', null, t('admin.wholeCluster')), h('th', null, t('admin.somewhere')))),
+    h('tbody', null, clusters.map(c => {
+      const grants = sources.map(s => s.grant);
+      const whole = grantRole(grants, c, '');
+      const some = Math.max(whole, ...grants.map(text => {
+        const g = parseGrantText(text);
+        return !g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, c)) ? RANK[g.role] || 0 : 0;
+      }), 0);
+      const cell = r => r ? t('role.' + ROLE_OF_RANK[r]) : h('span', { class: 'muted' }, '—');
+      return h('tr', null, h('td', null, c), h('td', null, cell(whole)), h('td', null, cell(some)));
+    })))) : null;
+  const form = h('div', { class: 'dialog wide' },
+    h('h2', null, t('admin.accessOf', name)),
+    table, perCluster,
+    kind === 'user' || kind === 'fixed' ? h('div', { class: 'muted small-text' }, t('admin.accessDirectoryNote')) : null,
+    h('div', { class: 'dialog-actions' }, button(t('close'), () => close(), 'primary')));
+  const close = modal(form);
+}
+
+// ------------------------------------------------ sessions
+
+function renderSessionsTab(data) {
+  const { sessions, you } = data.sessions || { sessions: [], you: '' };
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = sessions.filter(s => matches(words, [s.user, s.role, ...s.grants]));
+  return h('section', { class: 'panel' },
+    h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('admin.sessionsHint'))),
+    rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, ['admin.who', 'userRole', 'admin.grants', 'admin.signedInWith', 'admin.started', 'admin.expires'].map(k => h('th', null, t(k))), h('th'))),
+      h('tbody', null, rows.map(s => h('tr', null,
+        h('td', null, h('strong', null, s.user), s.id === you ? h('span', { class: 'label-chip you-chip' }, t('admin.you')) : null),
+        h('td', null, t('role.' + s.role)),
+        h('td', null, grantChips(s.grants)),
+        h('td', null, t(s.directory ? 'admin.viaDirectory' : 'admin.viaPassword')),
+        h('td', null, age(s.created)),
+        h('td', null, new Date(s.expires).toLocaleString()),
+        h('td', { class: 'actions-cell' }, button(t('admin.endSession'), () => endSession(s, s.id === you), 'danger')))))))
+      : h('div', { class: 'empty-note' }, sessions.length ? t('noMatch') : t('admin.sessionsNone')));
+}
+
+async function endSession(s, mine) {
+  const ok = await ask({ title: t('admin.endSession'), message: t(mine ? 'admin.endOwnConfirm' : 'admin.endConfirm', s.user),
+    confirm: t('admin.endSession'), danger: true });
+  if (!ok) return;
+  try {
+    await api('sessions/' + enc(s.id), { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t('admin.sessionEnded', s.user));
   refresh();
 }
 
@@ -3809,7 +4423,7 @@ function renderAudit(items) {
       h('thead', null, h('tr', null, ['time', 'user', 'action', 'cluster', 'object', 'detail', 'result'].map(k => h('th', null, t('col.' + k))))),
       h('tbody', null, rows.slice(0, state.limit).map(e => h('tr', { class: e.ok ? null : 'problem' },
         h('td', null, age(e.time)),
-        h('td', null, h('strong', null, e.user), h('span', { class: 'muted' }, ' · ' + t('role.' + e.role))),
+        h('td', null, h('strong', null, e.user), e.role ? h('span', { class: 'muted' }, ' · ' + t('role.' + e.role)) : null),
         h('td', null, e.action),
         h('td', null, e.cluster || '—'),
         h('td', null, e.object, e.namespace ? h('span', { class: 'muted' }, ' · ' + e.namespace) : null),

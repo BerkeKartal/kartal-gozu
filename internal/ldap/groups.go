@@ -55,11 +55,17 @@ func Grants(rules []Rule, groups []string) []auth.Grant {
 	return out
 }
 
-func (r Rule) matches(dn string) bool {
-	if strings.Contains(r.Group, "=") {
-		return normalizeDN(r.Group) == normalizeDN(dn)
+func (r Rule) matches(dn string) bool { return MatchGroup(r.Group, dn) }
+
+// MatchGroup tells whether a group's DN is the group named by pattern: a
+// whole DN, compared without regard to case or the spaces around
+// separators, or just its CN ("Team-A").
+func MatchGroup(pattern, dn string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if strings.Contains(pattern, "=") {
+		return normalizeDN(pattern) == normalizeDN(dn)
 	}
-	return strings.EqualFold(firstValue(dn), r.Group)
+	return strings.EqualFold(firstValue(dn), pattern)
 }
 
 // normalizeDN makes two spellings of a DN compare equal: case and the
@@ -85,10 +91,12 @@ func firstValue(dn string) string {
 var ErrNoAccess = auth.ErrNoAccess
 
 // Authenticator signs people in: their password is checked against the
-// directory and their groups become grants.
+// directory and their groups become grants. Extra, when set, adds what
+// admins gave in the UI to the person (by name) or to their groups.
 type Authenticator struct {
 	Config Config
 	Rules  []Rule
+	Extra  func(name string, groups []string) []auth.Grant
 }
 
 func (a Authenticator) Login(ctx context.Context, user, password string) (auth.User, error) {
@@ -97,6 +105,9 @@ func (a Authenticator) Login(ctx context.Context, user, password string) (auth.U
 		return auth.User{}, err
 	}
 	grants := Grants(a.Rules, e.Groups)
+	if a.Extra != nil {
+		grants = append(grants, a.Extra(e.Name, e.Groups)...)
+	}
 	if len(grants) == 0 {
 		// The groups go to the audit log, so that whoever writes the rules
 		// sees what the directory said.
@@ -113,5 +124,7 @@ func (a Authenticator) Login(ctx context.Context, user, password string) (auth.U
 		}
 		return auth.User{}, fmt.Errorf("%w (its groups: %s)", ErrNoAccess, strings.Join(names, ", "))
 	}
-	return auth.NewUser(e.Name, grants), nil
+	u := auth.NewUser(e.Name, grants)
+	u.Directory = append([]string{}, e.Groups...)
+	return u, nil
 }

@@ -111,6 +111,34 @@ func TestAuthenticator(t *testing.T) {
 	if _, err := a.Login(context.Background(), "guest", "guest"); !errors.Is(err, ErrNoAccess) {
 		t.Errorf("someone in no allowed group: %v", err)
 	}
+	if len(u.Directory) == 0 {
+		t.Errorf("ali's groups were not kept: %+v", u)
+	}
+	// What admins give in the UI, by name or by group, lets people in too.
+	a.Extra = func(name string, groups []string) []auth.Grant {
+		if name == "guest" {
+			g, _ := auth.ParseGrant("viewer@staging")
+			return []auth.Grant{g}
+		}
+		return nil
+	}
+	// Directory is set even when empty: the sessions page tells the
+	// directory's sign-ins from the others by it.
+	if u, err := a.Login(context.Background(), "guest", "guest"); err != nil || u.RoleIn("staging", "x") != auth.Viewer || u.RoleIn("production", "x") != 0 || u.Directory == nil {
+		t.Errorf("guest with a grant from the UI: %+v %v", u, err)
+	}
+}
+
+func TestMatchGroup(t *testing.T) {
+	dn := "CN=Team-A,OU=Groups,DC=example,DC=org"
+	for pattern, want := range map[string]bool{
+		"team-a": true, " Team-A ": true, "cn=team-a, ou=groups, dc=example, dc=org": true,
+		"Team-B": false, "CN=Team-A,OU=Other,DC=example,DC=org": false,
+	} {
+		if MatchGroup(pattern, dn) != want {
+			t.Errorf("%q: want %v", pattern, want)
+		}
+	}
 }
 
 func TestSilentServer(t *testing.T) {

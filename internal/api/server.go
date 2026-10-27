@@ -91,9 +91,12 @@ type Config struct {
 	Directory bool
 	// FilePasswords says KARTAL_USERS has users with a password.
 	FilePasswords bool
-	// Accounts, when set, are the users admins manage in the UI; Login asks
-	// them too.
+	// Accounts, when set, are the users and groups admins manage in the UI;
+	// Login asks them too.
 	Accounts *accounts.Manager
+	// DirectoryRules are the rules of KARTAL_LDAP_GROUPS ("group => grant"),
+	// which the admin panel shows next to the groups mapped in the UI.
+	DirectoryRules []string
 }
 
 type Server struct {

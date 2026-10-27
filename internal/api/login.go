@@ -80,7 +80,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.throttle.failed(name, now)
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
-	case errors.Is(err, auth.ErrNoAccess):
+	case errors.Is(err, auth.ErrNoAccess), errors.Is(err, auth.ErrDisabled):
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	case err != nil:

@@ -459,21 +459,35 @@ limit on failed attempts and the audit log work as with a directory (below);
 with a directory as well, these passwords are tried first. A changed list
 takes effect when the server restarts.
 
-### Users in the UI
+### The admin page
 
-Admins of everything also manage users on the **Users** page (Clusters,
-under Operations): add someone with a user name, a grant and a password,
-change their grant or password, or remove them. It takes effect at once,
-without a restart, and a change ends the person's open sessions, so that
-their new role applies right away. The users are kept with the other
-settings (`KARTAL_SETTINGS_SECRET` or `KARTAL_SETTINGS_FILE`), only the
-password's hash, hashed as above. Their names cannot be those of
-`KARTAL_USERS` or `admin`, which the page lists but leaves alone. Someone
-added there changes their own password from their name in the top bar,
-giving the current one. Once a first user is added, the sign-in page asks
-for a user name and password; signing in tries `KARTAL_USERS`, then these
-users, then the directory. The page is there whenever the server has a user
-(a token, a password or a directory), not when it lets everyone in.
+Admins of everything manage who may do what on the **Admin** page
+(Clusters, under Operations), without a restart. What they change is kept
+with the other settings (`KARTAL_SETTINGS_SECRET` or
+`KARTAL_SETTINGS_FILE`); without either, it lasts until the server stops.
+The page has five tabs:
+
+| Tab | Shows and does |
+|---|---|
+| Users | Add someone with a user name and a password, and optionally a full name and an e-mail address; give them grants of their own (a role, a cluster and a namespace each, where `*` and names ending in `*` work as above) and put them in groups. Change any of it later, disable an account (the person cannot sign in, and is told so, until it is turned back on) or remove it. The tab also lists the users of `KARTAL_USERS` and the directory's rules, which it leaves alone |
+| Groups | A group has grants and gives them to its members: the users named in it (users added here, users of `KARTAL_USERS` who sign in with a password, and directory users by their name) and the members of the directory groups mapped to it, by CN or whole DN. A directory group can so be given access here, next to the rules of `KARTAL_LDAP_GROUPS` |
+| Access | Pick a cluster and a namespace, or none for the whole cluster, to see who may do what there, with which role and because of which grant: their own, a group's, a directory rule or `KARTAL_USERS`. **Access** next to a user or group lists everywhere they may act |
+| Sessions | Everyone signed in with a password or through the directory, with their grants, how they signed in and when the session ends; an admin can end any session |
+| Audit | The audit log, where every change made on the page is, never with a password |
+
+Someone has their own grants and those of all their groups. A change takes
+effect at once and ends the open sessions of the people it touches (the
+user, or everyone a group reaches), so that their new role applies right
+away. Only a password's hash is kept, hashed as above. Names of users added
+here cannot be those of `KARTAL_USERS` or `admin`, and no admin can disable
+or remove their own account. Users of `KARTAL_USERS` with a token do not get
+their groups' grants; those with a password do. Someone added here
+changes their own password from their name in the top bar, giving the
+current one. Once a first user is added, the sign-in page asks for a user
+name and password; signing in tries `KARTAL_USERS`, then these users, then
+the directory. The page is there whenever the server has a user (a token, a
+password or a directory), not when it lets everyone in. It keeps up to 500
+users and 200 groups, with up to 50 grants each.
 
 ### Active Directory and LDAP
 
@@ -481,8 +495,10 @@ With `KARTAL_LDAP_URL`, people sign in with their own user name and password,
 and the groups they belong to give them their grants. A rule per line, in
 `KARTAL_LDAP_GROUPS` (or the file in `KARTAL_LDAP_GROUPS_FILE`), reads
 `group => grant`; the group is its CN or, when two groups share a CN, its
-whole DN. Someone in several of the groups gets all of their grants; someone
-in none cannot sign in.
+whole DN. Someone in several of the groups gets all of their grants, and
+those of the groups on the [admin page](#the-admin-page) that name them or
+one of their directory groups; someone left with no grant cannot sign in.
+The rules may be left empty when the admin page's groups give the access.
 
 ```
 Kartal-Admins => admin
@@ -867,10 +883,15 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | POST | `/api/v1/logout` | viewer | Ends the session of the token used |
 | GET | `/api/v1/me` | viewer | The signed-in user, their role, their grants, whether they change their own password here (`ownPassword`) and the levels at which volumes and certificates need attention |
 | POST | `/api/v1/me/password` | viewer | Body: `{"current", "password"}`; changes the password of a user added in the UI |
-| GET | `/api/v1/users` | admin everywhere | The users added in the UI (no hashes), and the ones the server was started with |
-| POST | `/api/v1/users` | admin everywhere | Body: `{"name", "grant", "password"}`; adds a user |
-| PUT | `/api/v1/users/{name}` | admin everywhere | Body: `{"grant", "password"}`, either may be empty; changes a user and ends their sessions |
-| DELETE | `/api/v1/users/{name}` | admin everywhere | Removes a user and ends their sessions |
+| GET | `/api/v1/users` | admin everywhere | The users and groups added in the UI (no hashes), the users the server was started with and the directory's rules |
+| POST | `/api/v1/users` | admin everywhere | Body: `{"name", "password", "fullName", "email", "grants", "groups", "disabled"}`; adds a user |
+| PUT | `/api/v1/users/{name}` | admin everywhere | The same body without the name; what is left out stays as it is. Changes a user and ends their sessions |
+| DELETE | `/api/v1/users/{name}` | admin everywhere | Removes a user, from their groups too, and ends their sessions |
+| POST | `/api/v1/groups` | admin everywhere | Body: `{"name", "description", "grants", "members", "directory"}`; adds a group |
+| PUT | `/api/v1/groups/{name}` | admin everywhere | The same body without the name; what is left out stays as it is. Changes a group and ends the sessions of everyone it reached or reaches |
+| DELETE | `/api/v1/groups/{name}` | admin everywhere | Removes a group and ends the sessions of everyone it reached |
+| GET | `/api/v1/sessions` | admin everywhere | The open sessions, without their tokens: an `id`, the user, their role and grants, whether the directory signed them in, and when the session started and ends; `you` is the caller's |
+| DELETE | `/api/v1/sessions/{id}` | admin everywhere | Ends a session |
 | GET | `/api/v1/clusters` | viewer | Clusters, their status, capacity, requests, usage, summary counts, the actions their agent allows and their active alerts |
 | GET | `/api/v1/clusters/{c}` | viewer | One cluster's summary |
 | GET | `/api/v1/clusters/{c}/namespaces` | viewer | Namespaces with object counts, problems and warnings |

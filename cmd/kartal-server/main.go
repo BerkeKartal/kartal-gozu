@@ -147,11 +147,20 @@ func run(log *slog.Logger) error {
 	if len(fixed) > 0 || directory != nil {
 		accts = accounts.New(keeper, fixed)
 	}
+	// The groups of the admin panel give their grants to directory users
+	// too: by name, or by the directory groups mapped to them.
+	if directory != nil && accts != nil {
+		directory.Extra = accts.GroupGrants
+	}
 	// Passwords of KARTAL_USERS first, then the UI's users, then the
 	// directory.
 	var login auth.Chain
 	if passwords.Len() > 0 {
-		login = append(login, passwords)
+		if accts != nil {
+			login = append(login, accts.WithGroups(passwords))
+		} else {
+			login = append(login, passwords)
+		}
 	}
 	if accts != nil {
 		login = append(login, accts)
@@ -196,6 +205,11 @@ func run(log *slog.Logger) error {
 	}
 	if accts != nil {
 		cfg.Accounts = accts
+	}
+	if directory != nil {
+		for _, r := range directory.Rules {
+			cfg.DirectoryRules = append(cfg.DirectoryRules, r.Group+" => "+r.Grant.String())
+		}
 	}
 	server := api.New(cfg, store.New(clusters...), log)
 	handler := logging.Requests(log, server)
@@ -457,8 +471,11 @@ func directoryLogin(log *slog.Logger) (*ldap.Authenticator, error) {
 		return nil, errors.New("KARTAL_LDAP_URL needs KARTAL_LDAP_USER_BASE, where people are searched for")
 	case a.Config.BindDN == "" && a.Config.UPNDomain == "":
 		return nil, errors.New("KARTAL_LDAP_URL needs KARTAL_LDAP_BIND_DN (a service account) or KARTAL_LDAP_UPN_DOMAIN (Active Directory)")
-	case len(rules) == 0:
-		return nil, errors.New("KARTAL_LDAP_URL needs KARTAL_LDAP_GROUPS: without rules nobody could sign in")
+	}
+	if len(rules) == 0 {
+		// Groups mapped in the admin panel let people in too; until there
+		// are some, nobody from the directory can sign in.
+		log.Warn("KARTAL_LDAP_GROUPS is empty: only the directory groups mapped in the admin panel let people in")
 	}
 	if strings.HasPrefix(url, "ldap://") && !startTLS {
 		log.Warn("KARTAL_LDAP_URL is plain ldap:// without KARTAL_LDAP_STARTTLS: passwords cross the network readable")

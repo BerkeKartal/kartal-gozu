@@ -146,5 +146,14 @@ func (s Settings) clone() Settings {
 		s.Dashboards[i].Panels = slices.Clone(d.Panels)
 	}
 	s.Users = slices.Clone(s.Users)
+	for i, u := range s.Users {
+		s.Users[i].Grants = slices.Clone(u.Grants)
+	}
+	s.Groups = slices.Clone(s.Groups)
+	for i, g := range s.Groups {
+		s.Groups[i].Grants = slices.Clone(g.Grants)
+		s.Groups[i].Members = slices.Clone(g.Members)
+		s.Groups[i].Directory = slices.Clone(g.Directory)
+	}
 	return s
 }

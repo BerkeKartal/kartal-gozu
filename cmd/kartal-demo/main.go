@@ -149,6 +149,11 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		if err != nil {
 			return err
 		}
+		// Groups of the admin panel reach directory users too.
+		login.Extra = cfg.Accounts.GroupGrants
+		for _, r := range login.Rules {
+			cfg.DirectoryRules = append(cfg.DirectoryRules, r.Group+" => "+r.Grant.String())
+		}
 		cfg.Login = auth.Chain{cfg.Accounts, login}
 		cfg.Directory = true
 		// Signing in is needed then; the Prometheus source that is the demo

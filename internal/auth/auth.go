@@ -61,10 +61,27 @@ type Grant struct {
 
 // User is someone signed in. Role is the highest role the user has
 // anywhere; Grants say where. A user without grants has Role everywhere.
+// Directory holds the DNs of the directory groups a person who signed in
+// with the directory is in, so that what admins map to those groups in the
+// UI reaches them, and a change to that mapping ends their sessions. It is
+// not nil, if empty, for everyone the directory signed in.
 type User struct {
-	Name   string
-	Role   Role
-	Grants []Grant
+	Name      string
+	Role      Role
+	Grants    []Grant
+	Directory []string
+}
+
+// Add gives the user more grants, raising Role where they reach higher.
+func (u User) Add(grants ...Grant) User {
+	if len(grants) == 0 {
+		return u
+	}
+	u.Grants = append(append([]Grant{}, u.grants()...), grants...)
+	for _, g := range grants {
+		u.Role = max(u.Role, g.Role)
+	}
+	return u
 }
 
 // match tells whether a name fits a pattern.
