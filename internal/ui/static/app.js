@@ -397,7 +397,9 @@ const STRINGS = {
     'admin.disabledDone': '{0} is disabled; their sessions ended.',
     'admin.fullName': 'Full name',
     'admin.email': 'E-mail',
-    'admin.grantsHelp': 'A role in a cluster and a namespace; * means all, and a name ending in * the ones it starts (team-*). Leave the namespace * for the whole cluster.',
+    'admin.grantsHelp': 'A role in a cluster and a namespace. “Type a pattern…” takes a name ending in *, for every one it starts (team-*). Keep “All namespaces” for the whole cluster, nodes included.',
+    'admin.allClusters': 'All clusters (*)',
+    'admin.typePattern': 'Type a pattern… (team-*)',
     'admin.groupsHelp': 'The person also gets what these groups give.',
     'admin.noGroupsYet': 'No groups yet; add them in the Groups tab.',
     'admin.disabledHelp': 'Disabled: cannot sign in',
@@ -816,7 +818,9 @@ const STRINGS = {
     'admin.disabledDone': '{0} devre dışı; oturumları kapandı.',
     'admin.fullName': 'Ad soyad',
     'admin.email': 'E-posta',
-    'admin.grantsHelp': 'Bir cluster ve namespace’te bir rol; * hepsi demek, * ile biten bir ad o adla başlayanlar (team-*). Cluster’ın tamamı için namespace’i * bırakın.',
+    'admin.grantsHelp': 'Bir cluster ve namespace’te bir rol. “Desen yaz…” ile * ile biten bir ad, o adla başlayanların hepsi (team-*). Node’lar dahil cluster’ın tamamı için “Tüm namespace’ler” kalsın.',
+    'admin.allClusters': 'Tüm cluster’lar (*)',
+    'admin.typePattern': 'Desen yaz… (team-*)',
     'admin.groupsHelp': 'Kişi bu grupların verdiği yetkileri de alır.',
     'admin.noGroupsYet': 'Henüz grup yok; Gruplar sekmesinden ekleyin.',
     'admin.disabledHelp': 'Devre dışı: giriş yapamaz',
@@ -3416,7 +3420,6 @@ function renderUsersTab(data) {
 
 // grantsEditor edits grants a row at a time: a role, a cluster and a
 // namespace, either of which may be * or end in * ("team-*").
-let grantsEditorSeq = 0;
 const namespaceCache = new Map();
 async function clusterNamespaces(cluster) {
   if (!cluster || cluster.includes('*')) return [];
@@ -3426,26 +3429,64 @@ async function clusterNamespaces(cluster) {
   }
   return namespaceCache.get(cluster);
 }
+// namespacesOf are the namespaces of every cluster a pattern names.
+async function namespacesOf(pattern) {
+  const clusters = (state.clusters || []).map(c => c.name).filter(c => nameMatches(pattern, c));
+  return [...new Set((await Promise.all(clusters.map(clusterNamespaces))).flat())].sort();
+}
+
+// scopePicker picks a cluster or a namespace: all of them (*), one from a
+// list that can change (setNames), or a pattern typed in ("team-*").
+const TYPED = '\u0001typed';
+function scopePicker(value, allLabel, onchange) {
+  let current = value || '*';
+  const sel = h('select');
+  const text = h('input', { type: 'text', class: 'mono', placeholder: 'team-*', spellcheck: 'false', autocomplete: 'off' });
+  const el = h('span', { class: 'scope-pick' }, sel, text);
+  el.read = () => sel.value === TYPED ? text.value.trim() || '*' : sel.value;
+  el.setNames = names => {
+    const list = [...new Set(names)];
+    fill(sel, h('option', { value: '*' }, allLabel), list.map(n => h('option', { value: n }, n)), h('option', { value: TYPED }, t('admin.typePattern')));
+    const listed = current === '*' || list.includes(current);
+    sel.value = listed ? current : TYPED;
+    if (!listed) text.value = current;
+    text.hidden = listed;
+  };
+  const changed = () => {
+    current = el.read();
+    if (onchange) onchange();
+  };
+  sel.addEventListener('change', () => {
+    text.hidden = sel.value !== TYPED;
+    if (!text.hidden) text.focus();
+    changed();
+  });
+  text.addEventListener('input', changed);
+  el.setNames([]);
+  return el;
+}
+
 function grantsEditor(grants) {
-  const id = ++grantsEditorSeq;
-  const clusterList = h('datalist', { id: 'ge-c-' + id }, ['*', ...(state.clusters || []).map(c => c.name)].map(c => h('option', { value: c })));
   const rows = h('div', { class: 'grant-rows' });
   const empty = h('div', { class: 'empty-note' }, t('admin.noGrants'));
   const sync = () => { empty.hidden = rows.children.length > 0; };
   function addRow(role = 'viewer', cluster = '*', ns = '*') {
     const roleSel = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === role }, t('role.' + r))));
-    const nsList = h('datalist', { id: 'ge-n-' + id + '-' + rows.children.length + '-' + Math.random().toString(36).slice(2, 7) });
-    const c = h('input', { type: 'text', class: 'mono', value: cluster, list: clusterList.id, placeholder: '*', spellcheck: 'false', autocomplete: 'off' });
-    const n = h('input', { type: 'text', class: 'mono', value: ns, list: nsList.id, placeholder: '*', spellcheck: 'false', autocomplete: 'off' });
-    const fillNs = async () => {
-      const names = await clusterNamespaces(c.value.trim());
-      fill(nsList, ['*', ...names].map(x => h('option', { value: x })));
+    // The namespaces offered are those of the cluster picked; the last
+    // answer to arrive must be the one asked last.
+    let asked = 0;
+    const loadNs = async () => {
+      const mine = ++asked;
+      const names = await namespacesOf(c.read());
+      if (mine === asked) n.setNames(names);
     };
-    c.addEventListener('change', fillNs);
-    fillNs();
-    const row = h('div', { class: 'grant-row' }, roleSel, c, h('span', { class: 'muted' }, '/'), n, nsList,
+    const c = scopePicker(cluster, t('admin.allClusters'), loadNs);
+    c.setNames((state.clusters || []).map(x => x.name));
+    const n = scopePicker(ns, t('allNamespaces') + ' (*)');
+    loadNs();
+    const row = h('div', { class: 'grant-row' }, roleSel, c, h('span', { class: 'muted' }, '/'), n,
       h('button', { type: 'button', class: 'btn', title: t('dsRemove'), onclick: () => { row.remove(); sync(); } }, '✕'));
-    row.read = () => ({ role: roleSel.value, cluster: c.value.trim() || '*', ns: n.value.trim() || '*' });
+    row.read = () => ({ role: roleSel.value, cluster: c.read(), ns: n.read() });
     rows.append(row);
     sync();
     return row;
@@ -3456,9 +3497,9 @@ function grantsEditor(grants) {
     else for (const s of g.scopes) addRow(g.role, s.cluster, s.namespace);
   }
   sync();
-  const box = h('div', { class: 'grants-editor' }, rows, empty, clusterList,
+  const box = h('div', { class: 'grants-editor' }, rows, empty,
     h('div', { class: 'grant-add' },
-      button('+ ' + t('admin.addGrant'), () => addRow().querySelector('input').focus()),
+      button('+ ' + t('admin.addGrant'), () => addRow().querySelector('.scope-pick select').focus()),
       button(t('admin.addEverywhere'), () => addRow('viewer', '*', '*'))));
   const pattern = /^(\*|[A-Za-z0-9][A-Za-z0-9._-]*\*?)$/;
   // value returns the grants as the server reads them, or throws a reason.
