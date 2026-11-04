@@ -3251,12 +3251,6 @@ function silencesPanel(list) {
   ]);
 }
 
-// localInput is a time as a datetime-local input takes it.
-function localInput(ms) {
-  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
-  return d.toISOString().slice(0, 16);
-}
-
 // silenceDialog sets a silence: over one problem when opened from it,
 // or a maintenance window over what is chosen.
 function silenceDialog(x) {

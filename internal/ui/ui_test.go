@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -96,6 +97,24 @@ func TestAssets(t *testing.T) {
 	for _, path := range []string{"/_ui/nope.js", "/_ui/index.html", "/_ui/"} {
 		if rec := get(h, path); rec.Code != http.StatusNotFound {
 			t.Errorf("%s: %d, want 404", path, rec.Code)
+		}
+	}
+}
+
+// A module may declare each name once at its top level; a second one makes
+// the browser refuse the whole script, and the page stays blank.
+func TestScriptsDeclareEachNameOnce(t *testing.T) {
+	decl := regexp.MustCompile(`(?m)^(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)`)
+	for name, a := range assets {
+		if !strings.HasSuffix(name, ".js") {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, m := range decl.FindAllStringSubmatch(string(a.body), -1) {
+			if seen[m[1]] {
+				t.Errorf("%s declares %s twice at its top level", name, m[1])
+			}
+			seen[m[1]] = true
 		}
 	}
 }
