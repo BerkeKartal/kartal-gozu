@@ -77,7 +77,8 @@ const (
 			"annotations":{"deployment.kubernetes.io/revision":"2",
 				"kubectl.kubernetes.io/last-applied-configuration":"{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{},\"name\":\"api\",\"namespace\":\"demo\"},\"spec\":{\"replicas\":3,\"selector\":{\"matchLabels\":{\"app\":\"api\"}},\"template\":{\"metadata\":{\"labels\":{\"app\":\"api\"}},\"spec\":{\"containers\":[{\"image\":\"registry.example.org/demo/api:abc123\",\"name\":\"app\"}]}}}}"}},
 		"spec":{"replicas":2,"selector":{"matchLabels":{"app":"api"}},
-			"template":{"metadata":{"labels":{"app":"api"}},"spec":{"containers":[{"name":"app","image":"registry.example.org/demo/api:abc123"}]}}},
+			"template":{"metadata":{"labels":{"app":"api"}},"spec":{"containers":[{"name":"app","image":"registry.example.org/demo/api:abc123",
+				"readinessProbe":{"httpGet":{"path":"/ready","port":8080}},"livenessProbe":{"tcpSocket":{"port":8080}}}]}}},
 		"status":{"readyReplicas":1,"updatedReplicas":2}}`
 	dsExporter = `{"metadata":{"name":"node-exporter","namespace":"kube-system"},
 		"spec":{"template":{"spec":{"containers":[{"name":"exporter","image":"exporter:1"}]}}},
@@ -202,9 +203,17 @@ func (f *Server) extra() extra {
 		if f.Live && i == 2 && time.Now().Unix()%120 < 45 {
 			updated = 1
 		}
+		// Every third team has no probes, the next a readiness probe only.
+		probes := `,"readinessProbe":{"httpGet":{"path":"/ready","port":8080}},"livenessProbe":{"httpGet":{"path":"/live","port":8080}}`
+		switch i % 3 {
+		case 0:
+			probes = ""
+		case 1:
+			probes = `,"readinessProbe":{"httpGet":{"path":"/ready","port":8080}}`
+		}
 		e.deployments = append(e.deployments, fmt.Sprintf(`{"metadata":{"name":"web","namespace":%q,"creationTimestamp":"2026-09-%02dT10:00:00Z"},
-			"spec":{"replicas":3,"template":{"spec":{"nodeSelector":%s,"containers":[{"name":"web","image":"registry.example.org/%s/web:%s"}]}}},
-			"status":{"readyReplicas":%d,"updatedReplicas":%d}}`, ns, 1+i%28, selector, ns, tag, ready, updated))
+			"spec":{"replicas":3,"template":{"spec":{"nodeSelector":%s,"containers":[{"name":"web","image":"registry.example.org/%s/web:%s"%s}]}}},
+			"status":{"readyReplicas":%d,"updatedReplicas":%d}}`, ns, 1+i%28, selector, ns, tag, probes, ready, updated))
 		for r := 1; r <= 3; r++ {
 			name := fmt.Sprintf("web-5d8c-%02d%d", i, r)
 			node := []string{"cp1", "worker1"}[r%2]

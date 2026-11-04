@@ -15,7 +15,7 @@ const TOKEN_KEY = 'kartal.token';
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
   'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources',
-  'placement', 'netcheck', 'sizing', 'rollouts'];
+  'placement', 'netcheck', 'sizing', 'probes', 'rollouts'];
 // Views that are not about one namespace.
 const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users',
   'placement', 'netcheck']);
@@ -62,7 +62,7 @@ const NAV = [
   { group: 'grpNetwork', items: ['services', 'ingresses'] },
   { group: 'grpConfig', items: ['configmaps', 'secrets', 'certificates'] },
   { group: 'grpStorage', items: ['volumeclaims'] },
-  { group: 'grpApps', items: ['helm', 'releases', 'rollouts', 'sizing'] },
+  { group: 'grpApps', items: ['helm', 'releases', 'rollouts', 'sizing', 'probes'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events', 'placement', 'netcheck'] },
   { group: 'grpOps', items: ['changes', 'audit', 'users'] },
   { items: ['resources'] },
@@ -104,7 +104,11 @@ const STRINGS = {
     grpApps: 'Applications', grpOps: 'Operations',
     navSearch: 'Search the menu…', navFavorites: 'Favorites', navFavAdd: 'Add to favorites', navFavRemove: 'Remove from favorites',
     navCollapse: 'Close this group', navExpand: 'Open this group', navNeedsAttention: '{0} need attention',
-    sizing: 'Right-sizing', rollouts: 'Rollouts',
+    sizing: 'Right-sizing', rollouts: 'Rollouts', probes: 'Probes',
+    prHint: 'Each workload’s containers and their probes. Without a readiness probe a pod gets traffic before it can answer, as it does in every deploy; without a liveness probe a pod that hangs is not restarted. A startup probe holds the others back while a slow app starts.',
+    prReadiness: 'readiness', prLiveness: 'liveness', prStartup: 'startup', prContainer: 'Container',
+    prMissing: '{0} without a readiness probe, {1} without a liveness probe', prAllFine: 'Every container has a readiness and a liveness probe.',
+    prOld: 'This cluster’s agent does not report probes; {0} workloads are left out until it is upgraded.',
     'sz.none': 'none', szNoMetrics: 'This cluster reports no usage (metrics-server is missing): nothing can be suggested.',
     szRisky: '{0} workloads at risk', szNoRisk: 'no workload at risk', szFree: '{0} CPU and {1} memory could be given back',
     szLearning: '{0} still being learned',
@@ -536,7 +540,11 @@ const STRINGS = {
     grpApps: 'Uygulamalar', grpOps: 'Operasyon',
     navSearch: 'Menüde ara…', navFavorites: 'Sık kullanılanlar', navFavAdd: 'Sık kullanılanlara ekle', navFavRemove: 'Sık kullanılanlardan çıkar',
     navCollapse: 'Bu grubu kapat', navExpand: 'Bu grubu aç', navNeedsAttention: '{0} tanesi ilgi bekliyor',
-    sizing: 'Kaynak önerisi', rollouts: 'Dağıtımlar',
+    sizing: 'Kaynak önerisi', rollouts: 'Dağıtımlar', probes: 'Probe’lar',
+    prHint: 'Her iş yükünün container’ları ve probe’ları. Readiness probe’u olmayan pod, cevap veremeden trafik alır; bu her deploy’da olur. Liveness probe’u olmayan pod takılırsa yeniden başlatılmaz. Startup probe’u, yavaş açılan bir uygulama açılana kadar diğerlerini bekletir.',
+    prReadiness: 'readiness', prLiveness: 'liveness', prStartup: 'startup', prContainer: 'Container',
+    prMissing: '{0} iş yükünde readiness, {1} iş yükünde liveness probe’u yok', prAllFine: 'Her container’ın readiness ve liveness probe’u var.',
+    prOld: 'Bu cluster’ın agent’ı probe’ları bildirmiyor; güncellenene kadar {0} iş yükü listede yok.',
     'sz.none': 'yok', szNoMetrics: 'Bu cluster kullanım bildirmiyor (metrics-server yok): öneri yapılamaz.',
     szRisky: '{0} iş yükü risk altında', szNoRisk: 'risk altında iş yükü yok', szFree: '{0} CPU ve {1} bellek geri verilebilir',
     szLearning: '{0} henüz öğreniliyor',
@@ -1602,6 +1610,8 @@ async function loadView(signal) {
       return { nodes: await api(c + '/nodes', { signal }) };
     case 'sizing':
       return await api(c + '/sizing' + nsq, { signal });
+    case 'probes':
+      return await api(c + '/workloads' + nsq, { signal });
     case 'rollouts': {
       const q = new URLSearchParams({ cluster: state.cluster });
       if (state.ns) q.set('namespace', state.ns);
@@ -2301,6 +2311,7 @@ const NAV_ICONS = {
   releases: ['M3 12V4h8l10 10-8 8z', [7.5, 8, 1.3]],
   rollouts: ['M12 20V7', 'M6.5 12.5L12 7l5.5 5.5', 'M5 4h14'],
   sizing: ['M4 18a8 8 0 1 1 16 0', 'M12 18l4-6', [12, 18, 1.2]],
+  probes: ['M3 12h4l2-5 4 10 2-5h6'],
   nodes: [[3, 4, 18, 7, 2], [3, 13, 18, 7, 2], 'M7 7.5h.01', 'M7 16.5h.01'],
   namespaces: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
   events: ['M13 3L5 13h6l-1 8 8-10h-6z'],
@@ -2450,6 +2461,7 @@ function renderContent() {
     case 'placement': body = renderPlacement(state.data); break;
     case 'netcheck': body = renderNetCheck(state.data); break;
     case 'sizing': body = renderSizing(state.data); break;
+    case 'probes': body = renderProbes(state.data); break;
     case 'rollouts': body = renderRollouts(state.data.items); break;
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
@@ -4361,6 +4373,40 @@ function renderSizing({ workloads, metrics, kept }) {
             h('td', { class: 'actions-cell' }, s ? button(t('szCopy'), () => copyText(sizingYAML(a)), 'small') : null));
         })))) : h('div', { class: 'empty-note' }, workloads.length ? (all ? t('noMatch') : t('szAllFine')) : t('szNothing')),
       h('div', { class: 'more-note' }, t('szPerPod'))),
+  ];
+}
+
+// ---------------------------------------------------------------- probes
+
+// renderProbes lists the containers of the workloads and their probes,
+// those lacking a readiness or a liveness probe unless all are asked for.
+function renderProbes(workloads) {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = state.probeAll === true;
+  const known = workloads.filter(w => Array.isArray(w.probes));
+  const lacks = w => w.probes.some(c => !c.readiness || !c.liveness);
+  const noReady = known.filter(w => w.probes.some(c => !c.readiness)).length;
+  const noLive = known.filter(w => w.probes.some(c => !c.liveness)).length;
+  const rows = known.filter(w => (all || lacks(w)) && matches(words, [w.namespace, w.name, w.kind, ...w.probes.map(c => c.container)]))
+    .sort((a, b) => a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind));
+  const mark = (has, needed) => (has ? h('span', { class: 'status-ok' }, '✓') : needed ? h('span', { class: 'status-bad' }, '✗') : h('span', { class: 'muted' }, '—'));
+  return [
+    workloads.length > known.length ? h('div', { class: 'banner' }, t('prOld', workloads.length - known.length)) : null,
+    h('section', { class: 'panel' },
+      h('div', { class: 'db-list-head' },
+        h('button', { type: 'button', class: all ? 'chip' : 'chip active', onclick: () => { state.probeAll = !all; renderContent(); } }, '⚠ ' + t('problemsOnly')),
+        h('span', { class: 'grow' }),
+        noReady || noLive ? h('span', { class: 'status-bad' }, t('prMissing', noReady, noLive)) : known.length ? h('span', { class: 'status-ok' }, '✓ ' + t('prAllFine')) : null),
+      h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' }, t('prHint')))),
+      rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, h('th', null, t('sz.col.namespace')), h('th', null, t('sz.col.workload')), h('th', null, t('prContainer')),
+          h('th', null, t('prReadiness')), h('th', null, t('prLiveness')), h('th', null, t('prStartup')))),
+        h('tbody', null, rows.flatMap(w => w.probes.map((c, i) => h('tr', null,
+          h('td', null, i ? null : nsLink(w.namespace)),
+          h('td', null, i ? null : [nameLink(w.kind, w.namespace, w.name), h('div', { class: 'muted small-text' }, w.kind)]),
+          h('td', { class: 'mono' }, c.container),
+          h('td', null, mark(c.readiness, true)), h('td', null, mark(c.liveness, true)), h('td', null, mark(c.startup, false))))))))
+        : h('div', { class: 'empty-note' }, known.length ? (all ? t('noMatch') : '✓ ' + t('prAllFine')) : t('noItems'))),
   ];
 }
 

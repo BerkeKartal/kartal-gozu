@@ -210,6 +210,10 @@ type Container struct {
 	// RestartPolicy "Always" on an init container makes it a sidecar.
 	RestartPolicy string          `json:"restartPolicy"`
 	Ports         []ContainerPort `json:"ports"`
+	// Only whether each probe is there matters here.
+	ReadinessProbe *struct{} `json:"readinessProbe"`
+	LivenessProbe  *struct{} `json:"livenessProbe"`
+	StartupProbe   *struct{} `json:"startupProbe"`
 }
 
 type ContainerPort struct {

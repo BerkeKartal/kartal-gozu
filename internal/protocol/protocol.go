@@ -160,6 +160,20 @@ type Workload struct {
 	// node affinity names.
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 	NodeAffinity []string          `json:"nodeAffinity,omitempty"`
+	// Probes are the pod template's containers and the probes each has;
+	// nil from an agent too old to tell.
+	Probes []ContainerProbes `json:"probes,omitempty"`
+}
+
+// ContainerProbes tells which probes a container has: readiness, without
+// which it gets traffic before it can answer; liveness, without which it
+// is not restarted when it hangs; startup, which holds the others back
+// while it starts.
+type ContainerProbes struct {
+	Container string `json:"container"`
+	Readiness bool   `json:"readiness,omitempty"`
+	Liveness  bool   `json:"liveness,omitempty"`
+	Startup   bool   `json:"startup,omitempty"`
 }
 
 // RolledOut reports whether every replica runs the current spec and is

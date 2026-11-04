@@ -157,7 +157,7 @@ where it was left.
     - Networking: Services, Ingresses (with Traefik's IngressRoutes)
     - Configuration: ConfigMaps, Secrets, Certificates
     - Storage: volume claims, with how full each one is
-    - Applications: Helm releases, Versions, Rollouts, Right-sizing
+    - Applications: Helm releases, Versions, Rollouts, Right-sizing, Probes
     - Cluster: Nodes, Namespaces, Events, Placement, Network check (for
       admins)
     - Operations: Changes, Audit log, Users (for admins)
@@ -208,6 +208,12 @@ where it was left.
   the pod. The usage is kept in `KARTAL_DATA_DIR` (`sizing.json`, written
   every ten minutes and on stopping), or in memory without it; a workload
   needs an hour of it before anything is suggested.
+- **Probes:** each workload's containers and their readiness, liveness and
+  startup probes. Without a readiness probe a pod gets traffic before it
+  can answer, as it does in every deploy; without a liveness probe a pod
+  that hangs is not restarted. "Problems only" keeps the workloads lacking
+  either. An agent older than this page does not report probes; its
+  workloads are counted, not listed.
 - **Placement:** where the pods run, by a label of the nodes (such as
   `env=test` and `env=prod`; the page offers the labels that split the
   nodes). A namespace whose pods run in more than one group of nodes is

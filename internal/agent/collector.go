@@ -337,6 +337,16 @@ func images(t kube.PodTemplate) []string {
 	return out
 }
 
+// probes tells which probes each container of the template has.
+func probes(t kube.PodTemplate) []protocol.ContainerProbes {
+	out := make([]protocol.ContainerProbes, 0, len(t.Spec.Containers))
+	for _, c := range t.Spec.Containers {
+		out = append(out, protocol.ContainerProbes{Container: c.Name,
+			Readiness: c.ReadinessProbe != nil, Liveness: c.LivenessProbe != nil, Startup: c.StartupProbe != nil})
+	}
+	return out
+}
+
 // affinityKeys lists the node labels the template's required node affinity
 // names, each once.
 func affinityKeys(t kube.PodTemplate) []string {
@@ -375,6 +385,7 @@ func replicatedWorkload(kind string, r kube.Replicated) protocol.Workload {
 		CreatedAt:          r.Metadata.CreationTimestamp,
 		NodeSelector:       r.Spec.Template.Spec.NodeSelector,
 		NodeAffinity:       affinityKeys(r.Spec.Template),
+		Probes:             probes(r.Spec.Template),
 	}
 }
 
@@ -393,6 +404,7 @@ func daemonSetWorkload(d kube.DaemonSet) protocol.Workload {
 		CreatedAt:          d.Metadata.CreationTimestamp,
 		NodeSelector:       d.Spec.Template.Spec.NodeSelector,
 		NodeAffinity:       affinityKeys(d.Spec.Template),
+		Probes:             probes(d.Spec.Template),
 	}
 }
 

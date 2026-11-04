@@ -98,6 +98,24 @@ func TestCollectWholeCluster(t *testing.T) {
 	}
 }
 
+func TestCollectProbes(t *testing.T) {
+	_, kc := NewFakeKube(t)
+	snap := (&Collector{Kube: kc}).Collect(context.Background())
+	got := map[string][]protocol.ContainerProbes{}
+	for _, w := range snap.Workloads {
+		got[w.Kind+"/"+w.Name] = w.Probes
+	}
+	want := map[string][]protocol.ContainerProbes{
+		"Deployment/api":          {{Container: "app", Readiness: true, Liveness: true}},
+		"DaemonSet/node-exporter": {{Container: "exporter"}},
+	}
+	for k, w := range want {
+		if !reflect.DeepEqual(got[k], w) {
+			t.Errorf("%s: %+v, want %+v", k, got[k], w)
+		}
+	}
+}
+
 func TestSecretsAreOptIn(t *testing.T) {
 	_, kc := NewFakeKube(t)
 	snap := (&Collector{Kube: kc}).Collect(context.Background())
