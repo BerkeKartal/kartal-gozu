@@ -315,3 +315,51 @@ func TestChecksBelongToNoCluster(t *testing.T) {
 		t.Errorf("still active: %d", n)
 	}
 }
+
+func TestSilencedProblemsWait(t *testing.T) {
+	rec := &recorder{}
+	m := NewManager(2*time.Minute, nil, rec)
+	start := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	// Namespace a is silenced until ten minutes in: the pod and the
+	// workload in it wait; the node, in no namespace, does not. (The state
+	// asks at the real time, so the silence is a switch here.)
+	until := start.Add(10 * time.Minute)
+	on := true
+	m.Silenced = func(a Alert, _ time.Time) bool { return on && a.Namespace == "a" }
+
+	m.Observe("prod", broken(), start)
+	m.Observe("prod", broken(), start.Add(3*time.Minute))
+	sent := rec.wait(t, 1)
+	if len(sent) != 1 || len(sent[0].Firing) != 1 || sent[0].Firing[0].Kind != "NodeNotReady" {
+		t.Fatalf("only the node should be told: %+v", sent)
+	}
+	silenced := 0
+	for _, a := range m.State().Active {
+		if a.Silenced {
+			silenced++
+		}
+	}
+	if silenced != 2 {
+		t.Errorf("%d alerts shown as silenced, want 2", silenced)
+	}
+
+	// The workload recovers within the silence: nobody hears of it.
+	fixed := broken()
+	fixed.Workloads = nil
+	m.Observe("prod", fixed, start.Add(5*time.Minute))
+	// The pod still fails when the silence ends: it is told then.
+	on = false
+	m.Observe("prod", fixed, until)
+	sent = rec.wait(t, 2)
+	if len(sent) != 2 || len(sent[1].Firing) != 1 || sent[1].Firing[0].Object != "crash" || len(sent[1].Resolved) != 0 {
+		t.Fatalf("after the silence: %+v", sent)
+	}
+
+	// A problem told before a silence starts keeps its "resolved" message.
+	m.Silenced = func(Alert, time.Time) bool { return true }
+	m.Observe("prod", &protocol.Snapshot{}, until.Add(time.Minute))
+	sent = rec.wait(t, 3)
+	if len(sent) != 3 || len(sent[2].Resolved) != 2 || len(sent[2].Firing) != 0 {
+		t.Errorf("resolved within a silence: %+v", sent)
+	}
+}

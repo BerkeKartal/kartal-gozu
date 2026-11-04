@@ -37,7 +37,8 @@ tunnel), and the server works under any URL path without configuration.
   ready, degraded workloads, failed jobs, unbound volume claims and silent
   agents are collected on one page and sent to Microsoft Teams, e-mail or any
   webhook, with a message when they are resolved. E-mail is set up right on
-  that page, and tried before it is saved.
+  that page, and tried before it is saved. A silence, or a maintenance
+  window set ahead, keeps them quiet while a deploy or a fix is under way.
 - **Warnings before an outage.** Volumes that fill up, TLS certificates that
   are about to expire (in the cluster's Secrets and on any address), and URL
   checks that the server runs itself, with a 24-hour history for each.
@@ -619,6 +620,22 @@ restart.
 Set `KARTAL_PUBLIC_URL` to the UI's address so messages link to it. Outbound
 requests honour `HTTPS_PROXY`. The Alerts page shows active and recent
 problems, the channels and the last deliveries; admins can send a test.
+
+### Silences and maintenance windows
+
+A silence keeps alerts from being notified for a while: **Silence** next to
+an active problem, for that one, or **Maintenance window**, for a cluster, a
+namespace (`shop-*` covers the namespaces it starts), a kind of problem or an
+object, now or later, for up to 31 days. The alerts it covers still show,
+marked silenced; nobody is told of them while it lasts. Those still there
+when it ends are notified then, and those that end within it never are; a
+problem notified before the silence still gets its "resolved" message.
+
+Operators set and end silences over what they operate: one namespace takes
+an operator of it, a whole cluster or a pattern of namespaces an operator
+of the cluster, and every cluster (the URL checks too) an operator
+everywhere. Everyone sees the silences over what they see. They are kept
+with the other settings, and every one set or ended goes to the audit log.
 
 ## URL checks
 

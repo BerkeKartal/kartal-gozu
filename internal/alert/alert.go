@@ -30,6 +30,8 @@ type Alert struct {
 	Since     time.Time  `json:"since"`
 	Notified  bool       `json:"notified"`
 	Resolved  *time.Time `json:"resolved,omitempty"`
+	// Silenced says a silence covers it now, so it is not notified.
+	Silenced bool `json:"silenced,omitempty"`
 }
 
 func (a Alert) key() string {
@@ -180,6 +182,11 @@ type Manager struct {
 	// CertificateWarning and CertificateCritical are how close a
 	// certificate's expiry may come; zero means 14 days and 3 days.
 	CertificateWarning, CertificateCritical time.Duration
+	// Silenced, when set, tells whether a silence covers an alert at a
+	// time. A covered problem is not notified while it is covered; one that
+	// lasts past the silence is notified then, and one that ends within it
+	// never is. A problem notified before keeps its "resolved" message.
+	Silenced func(a Alert, now time.Time) bool
 
 	mu     sync.Mutex
 	active map[string]*Alert
@@ -503,7 +510,7 @@ func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Aler
 	listening := len(m.Channels()) > 0
 	var firing []Alert
 	for _, a := range m.active {
-		if listening && a.Cluster == cluster && !a.Notified && now.Sub(a.Since) >= m.After {
+		if listening && a.Cluster == cluster && !a.Notified && now.Sub(a.Since) >= m.After && !m.silenced(*a, now) {
 			a.Notified = true
 			firing = append(firing, *a)
 			m.remember(*a)
@@ -515,6 +522,10 @@ func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Aler
 		sortAlerts(resolved)
 		m.notify(Notification{Cluster: cluster, Firing: firing, Resolved: resolved, URL: m.PublicURL})
 	}
+}
+
+func (m *Manager) silenced(a Alert, now time.Time) bool {
+	return m.Silenced != nil && m.Silenced(a, now)
 }
 
 func sortAlerts(list []Alert) {
@@ -638,8 +649,11 @@ func (m *Manager) State() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := State{Enabled: true, Active: []Alert{}, Recent: []Alert{}, Channels: m.Channels(), Deliveries: []Delivery{}, After: m.After.String()}
+	now := time.Now()
 	for _, a := range m.active {
-		st.Active = append(st.Active, *a)
+		x := *a
+		x.Silenced = m.silenced(x, now)
+		st.Active = append(st.Active, x)
 	}
 	sortAlerts(st.Active)
 	for i := len(m.recent) - 1; i >= 0; i-- {

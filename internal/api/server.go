@@ -34,6 +34,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/rollout"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
+	"github.com/BerkeKartal/kartal-gozu/internal/silence"
 	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/ui"
@@ -81,6 +82,8 @@ type Config struct {
 	DataSources *datasource.Manager
 	// Dashboards, when set, are the saved dashboards.
 	Dashboards *dashboard.Manager
+	// Silences, when set, keep alerts from being notified for a while.
+	Silences *silence.Manager
 	// Login, when set, lets people sign in with a name and password, for a
 	// session of SessionTTL (12 hours when zero).
 	Login      Login
@@ -209,6 +212,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeDataSources(mux)
 	s.routePrometheus(mux)
 	s.routeDashboards(mux)
+	s.routeSilences(mux)
 	s.routeUsers(mux)
 	s.routeNetwork(mux)
 	s.routeWorkloads(mux)

@@ -32,6 +32,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
+	"github.com/BerkeKartal/kartal-gozu/internal/silence"
 	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
@@ -110,6 +111,12 @@ func run(log *slog.Logger) error {
 	loadCtx, cancelLoad := context.WithTimeout(context.Background(), 15*time.Second)
 	keeper := settings.NewKeeper(loadCtx, st, log)
 	cancelLoad()
+	// Silences are asked about by the alerts from the first check on.
+	silences := silence.New(keeper)
+	keeper.OnLoad(silences.Reload)
+	alerts.Manager.Silenced = func(a alert.Alert, now time.Time) bool {
+		return silences.Covers(a.Cluster, a.Kind, a.Namespace, a.Object, now)
+	}
 	env, err := emailFromEnv()
 	if err != nil {
 		return err
@@ -196,6 +203,7 @@ func run(log *slog.Logger) error {
 		Sizing:         usage,
 		DataSources:    datasource.NewManager(keeper),
 		Dashboards:     dashboard.New(keeper),
+		Silences:       silences,
 		SessionTTL:     sessionTTL,
 	}
 	if len(login) > 0 {

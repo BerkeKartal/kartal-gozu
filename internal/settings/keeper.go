@@ -134,6 +134,7 @@ func (k *Keeper) LoadError() string {
 func (s Settings) clone() Settings {
 	s.Email.To = slices.Clone(s.Email.To)
 	s.Checks = slices.Clone(s.Checks)
+	s.Silences = slices.Clone(s.Silences)
 	s.Watches = slices.Clone(s.Watches)
 	for i, w := range s.Watches {
 		s.Watches[i] = w.clone()

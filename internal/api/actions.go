@@ -15,6 +15,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
+	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 )
 
 const (
@@ -386,7 +387,15 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	st := s.cfg.Alerts.State()
 	visibleTo := func(a alert.Alert) bool { return alertVisible(u, a) }
 	st.Active, st.Recent = keep(st.Active, visibleTo), keep(st.Recent, visibleTo)
-	writeJSON(w, http.StatusOK, st)
+	// The silences come along, for the page that shows both.
+	out := struct {
+		alert.State
+		Silences []settings.Silence `json:"silences"`
+	}{State: st, Silences: []settings.Silence{}}
+	if s.cfg.Silences != nil {
+		out.Silences = s.visibleSilences(u)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) testAlerts(w http.ResponseWriter, r *http.Request) {

@@ -282,6 +282,13 @@ const STRINGS = {
     'alert.WorkloadDegraded': 'Workload degraded', 'alert.JobFailed': 'Job failed', 'alert.VolumeClaimUnbound': 'Volume claim unbound',
     'alert.VolumeFilling': 'Volume filling up', 'alert.CertificateExpiring': 'Certificate expiring', 'alert.URLDown': 'Address not answering',
     'alert.MetricLimit': 'Metric past its limit', 'alert.RolloutStuck': 'Rollout stuck',
+    silences: 'Silences', silence: 'Silence', silNew: 'Maintenance window', silTitle: 'Silence alerts', silencedBadge: 'silenced',
+    silHelp: 'The alerts it covers still show here, but nobody is told of them until it ends; those still there then are notified. An empty field covers anything; a namespace or an object ending in * covers the names it starts.',
+    silCluster: 'Cluster', silAllClusters: 'every cluster, and the URL checks', silNamespace: 'Namespace', silAnyNs: 'any namespace',
+    silKind: 'Problem', silAnyKind: 'any problem', silObject: 'Object', silStarts: 'Starts', silStartsHelp: 'Empty: now.', silEnds: 'Ends',
+    silComment: 'Why', silCommentHint: 'such as the deploy or the ticket', silEndBefore: 'It must end after it starts.',
+    silSaved: 'Silenced until {0}.', silEnd: 'End', silEndTitle: 'End the silence', silEndConfirm: 'The alerts it covers are notified again, from the next check.',
+    silEnded: 'Silence ended.', silOn: 'on', silAhead: 'ahead', silNone: 'No silence is on or ahead.', silCovers: 'Covers', silWhen: 'When', silBy: 'By',
     appmetrics: 'Metrics', 'tab.scrape': 'App metrics', 'capMissing.scrape': 'This cluster’s agent does not read the metrics of pods (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Applications often expose metrics of their own, such as requests, errors or queue lengths, at an address like :9100/metrics. Choose the port and read them.',
     readMetrics: 'Read', port: 'Port', path: 'Path', metricsFilter: 'Filter metrics', nSeries: '{0} series', moreSeries: '… and {0} more series',
@@ -710,6 +717,13 @@ const STRINGS = {
     'alert.WorkloadDegraded': 'İş yükü eksik', 'alert.JobFailed': 'Job başarısız', 'alert.VolumeClaimUnbound': 'PVC bağlanmadı',
     'alert.VolumeFilling': 'Disk doluyor', 'alert.CertificateExpiring': 'Sertifikanın süresi doluyor', 'alert.URLDown': 'Adres cevap vermiyor',
     'alert.MetricLimit': 'Metrik sınırı aştı', 'alert.RolloutStuck': 'Dağıtım takıldı',
+    silences: 'Susturmalar', silence: 'Sustur', silNew: 'Bakım penceresi', silTitle: 'Uyarıları sustur', silencedBadge: 'susturuldu',
+    silHelp: 'Kapsadığı uyarılar burada görünmeye devam eder, ama bitene kadar kimseye bildirilmez; o zaman hâlâ süren uyarılar bildirilir. Boş bir alan hepsini kapsar; * ile biten bir namespace ya da nesne, o adla başlayanları kapsar.',
+    silCluster: 'Cluster', silAllClusters: 'tüm cluster’lar ve URL kontrolleri', silNamespace: 'Namespace', silAnyNs: 'tüm namespace’ler',
+    silKind: 'Sorun', silAnyKind: 'tüm sorunlar', silObject: 'Nesne', silStarts: 'Başlangıç', silStartsHelp: 'Boş: şimdi.', silEnds: 'Bitiş',
+    silComment: 'Neden', silCommentHint: 'deploy ya da kayıt numarası gibi', silEndBefore: 'Bitiş başlangıçtan sonra olmalı.',
+    silSaved: 'Susturuldu, bitiş: {0}.', silEnd: 'Bitir', silEndTitle: 'Susturmayı bitir', silEndConfirm: 'Kapsadığı uyarılar bir sonraki kontrolden itibaren yeniden bildirilir.',
+    silEnded: 'Susturma bitti.', silOn: 'açık', silAhead: 'ileride', silNone: 'Açık ya da ileride bir susturma yok.', silCovers: 'Kapsam', silWhen: 'Zaman', silBy: 'Kuran',
     appmetrics: 'Metrikler', 'tab.scrape': 'Metrikler', 'capMissing.scrape': 'Bu cluster’ın agent’ı podların metriklerini okumuyor (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Uygulamalar çoğu zaman istek, hata ya da kuyruk uzunluğu gibi kendi metriklerini :9100/metrics gibi bir adreste yayınlar. Portu seçip okuyun.',
     readMetrics: 'Oku', port: 'Port', path: 'Yol', metricsFilter: 'Metriklerde ara', nSeries: '{0} seri', moreSeries: '… ve {0} seri daha',
@@ -1216,13 +1230,14 @@ function agentAllows(cap) {
 function nameMatches(pattern, name) {
   return pattern === '*' || (pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : pattern === name);
 }
-// roleIn is the user's role in a namespace of the current cluster; the
-// namespace '' stands for the whole cluster (nodes, cluster-wide objects).
-function roleIn(ns) {
+// roleIn is the user's role in a namespace of the current cluster, or of
+// another; the namespace '' stands for the whole cluster (nodes,
+// cluster-wide objects).
+function roleIn(ns, cluster = state.cluster) {
   let best = 0;
   for (const g of (state.me && state.me.grants) || []) {
     const r = RANK[g.role] || 0;
-    if (r > best && (!g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, state.cluster) &&
+    if (r > best && (!g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, cluster) &&
       (ns ? nameMatches(s.namespace, ns) : s.namespace === '*')))) best = r;
   }
   return best;
@@ -3142,15 +3157,18 @@ function renderAlerts(st) {
   const active = st.active.filter(wanted);
   const recent = st.recent.filter(wanted);
   const notify = st.channels.length > 0;
-  const alertRow = a => h('tr', { class: a.severity === 'critical' ? 'problem' : null },
-    h('td', null, pill(t(a.severity), a.severity === 'critical' ? 'bad' : 'warn')),
+  const alertRow = a => h('tr', { class: a.severity === 'critical' && !a.silenced ? 'problem' : null },
+    h('td', null, pill(t(a.severity), a.severity === 'critical' ? 'bad' : 'warn'),
+      a.silenced ? h('span', { class: 'badge', title: t('silHelp') }, t('silencedBadge')) : null),
     h('td', null, t('alert.' + a.kind)),
     h('td', null, a.cluster || h('a', { href: routeHash({ view: 'uptime' }) }, t('uptime'))),
     h('td', null, a.namespace ? a.namespace + '/' : '', alertObject(a)),
     h('td', null, a.detail),
     h('td', null, age(a.since)),
     // Without a channel nothing is sent, so there is nothing to show.
-    notify ? h('td', null, a.notified ? pill('✓ ' + t('notified'), 'ok') : h('span', { class: 'muted' }, t('waitingNotify'))) : null);
+    notify ? h('td', null, a.notified ? pill('✓ ' + t('notified'), 'ok') : h('span', { class: 'muted' }, t('waitingNotify'))) : null,
+    h('td', { class: 'actions-cell' }, !a.silenced && maySilence(a) ? button(t('silence'), () =>
+      silenceDialog({ cluster: a.cluster, namespace: a.namespace, kind: a.kind, object: a.object })) : null));
   return [
     panel(t('alertsChannels'), h('div', { class: 'issue' },
       h('div', { class: 'what' },
@@ -3160,8 +3178,9 @@ function renderAlerts(st) {
         st.channels.length ? actionButton(t('testNotify'), testNotification, { role: 'admin', cap: null, where: null }) : null,
         actionButton(t('mailSettings'), mailDialog, { role: 'admin', cap: null, where: null })))),
     panel(t('alertsActive') + ' (' + st.active.length + ')', active.length ? h('table', null,
-      h('thead', null, h('tr', null, ['severity', 'problem', 'cluster', 'object', 'detail', 'since'].concat(notify ? ['notified'] : []).map(k => h('th', null, t('col.' + k))))),
+      h('thead', null, h('tr', null, ['severity', 'problem', 'cluster', 'object', 'detail', 'since'].concat(notify ? ['notified'] : []).map(k => h('th', null, t('col.' + k))), h('th'))),
       h('tbody', null, active.map(alertRow))) : h('div', { class: 'ok-note' }, '✓ ' + t('noAlerts'))),
+    silencesPanel(st.silences || []),
     recent.length ? panel(t('alertsRecent'), h('table', null,
       h('thead', null, h('tr', null, ['time', 'problem', 'cluster', 'object', 'detail'].map(k => h('th', null, t('col.' + k))))),
       h('tbody', null, recent.slice(0, 100).map(a => h('tr', null,
@@ -3176,6 +3195,120 @@ function renderAlerts(st) {
         h('td', null, age(d.time)), h('td', null, d.channel), h('td', null, d.title),
         h('td', null, d.error ? h('span', { class: 'status-bad' }, d.error) : pill(t('ok'), 'ok'))))))) : null,
   ];
+}
+
+// ---- silences
+
+const ALERT_KINDS = ['AgentOffline', 'NodeNotReady', 'NodePressure', 'NodeDiskFilling', 'PodFailing', 'WorkloadDegraded', 'JobFailed',
+  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'RolloutStuck'];
+const SIL_FOR = [['1h', 3600e3], ['4h', 4 * 3600e3], ['1d', 86400e3], ['7d', 7 * 86400e3]];
+
+// maySilence tells whether the user may set or end a silence over a
+// cluster and namespace, as the server decides: an operator of all it
+// covers.
+function maySilence({ cluster, namespace }) {
+  if (!cluster) return canEverywhere('operator');
+  if (!namespace || namespace.endsWith('*')) return roleIn('', cluster) >= RANK.operator;
+  return roleIn(namespace, cluster) >= RANK.operator;
+}
+
+function clockText(v) {
+  return new Date(when(v)).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function silenceScope(x) {
+  return [x.cluster || t('silAllClusters'), x.namespace || t('silAnyNs'), x.kind ? t('alert.' + x.kind) : t('silAnyKind')]
+    .concat(x.object ? [x.object] : []).join(' · ');
+}
+
+function silencesPanel(list) {
+  const now = Date.now();
+  const add = roleAtLeast('operator') ? button('+ ' + t('silNew'), () => silenceDialog({})) : null;
+  return panel(t('silences') + (list.length ? ' (' + list.length + ')' : ''), [
+    h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('silHelp')), h('span', { class: 'grow' }), add),
+    list.length ? h('table', null,
+      h('thead', null, h('tr', null, h('th', null, t('silCovers')), h('th', null, t('silWhen')), h('th', null, t('silComment')), h('th', null, t('silBy')), h('th'))),
+      h('tbody', null, list.map(x => h('tr', null,
+        h('td', null, silenceScope(x)),
+        h('td', null, when(x.starts) > now ? pill(t('silAhead'), 'warn') : pill(t('silOn'), 'ok'), ' ',
+          clockText(x.starts) + ' – ' + clockText(x.ends)),
+        h('td', null, x.comment || h('span', { class: 'muted' }, '—')),
+        h('td', null, x.by),
+        h('td', { class: 'actions-cell' }, maySilence(x) ? button(t('silEnd'), () => endSilence(x), 'danger') : null)))))
+      : h('div', { class: 'empty-note' }, t('silNone')),
+  ]);
+}
+
+// localInput is a time as a datetime-local input takes it.
+function localInput(ms) {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+
+// silenceDialog sets a silence: over one problem when opened from it,
+// or a maintenance window over what is chosen.
+function silenceDialog(x) {
+  const clusters = (state.clusters || []).map(c => c.name);
+  const cluster = h('select', null, h('option', { value: '' }, t('silAllClusters')),
+    clusters.map(c => h('option', { value: c, selected: c === (x.cluster === undefined ? state.cluster : x.cluster) }, c)));
+  const text = (value, placeholder) => h('input', { type: 'text', class: 'mono', value: value || '', placeholder, autocomplete: 'off', spellcheck: 'false' });
+  const namespace = text(x.namespace, t('silAnyNs'));
+  const object = text(x.object, '*');
+  const kind = h('select', null, h('option', { value: '' }, t('silAnyKind')),
+    ALERT_KINDS.map(k => h('option', { value: k, selected: k === x.kind }, t('alert.' + k))));
+  const starts = h('input', { type: 'datetime-local' });
+  const ends = h('input', { type: 'datetime-local', value: localInput(Date.now() + 3600e3) });
+  const forChips = h('div', { class: 'chips' }, SIL_FOR.map(([label, ms]) => h('button', {
+    type: 'button', class: 'chip', onclick: () => { ends.value = localInput((starts.value ? Date.parse(starts.value) : Date.now()) + ms); },
+  }, '+' + label)));
+  const comment = h('input', { type: 'text', maxlength: '500', placeholder: t('silCommentHint'), autocomplete: 'off' });
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      const from = starts.value ? Date.parse(starts.value) : Date.now();
+      const to = Date.parse(ends.value);
+      if (!Number.isFinite(to) || to <= from) {
+        note.say(t('silEndBefore'), 'bad');
+        return;
+      }
+      const body = { cluster: cluster.value, namespace: namespace.value.trim(), kind: kind.value, object: object.value.trim(),
+        comment: comment.value.trim(), ends: new Date(to).toISOString() };
+      if (starts.value) body.starts = new Date(from).toISOString();
+      let saved;
+      try {
+        saved = await api('silences', { method: 'POST', body });
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        return;
+      }
+      close();
+      toast(t('silSaved', clockText(saved.ends)));
+      refresh();
+    },
+  },
+  h('h2', null, t('silTitle')), h('p', { class: 'muted small-text' }, t('silHelp')),
+  h('div', { class: 'field-row' }, dialogField(t('silCluster'), cluster), dialogField(t('silNamespace'), namespace)),
+  h('div', { class: 'field-row' }, dialogField(t('silKind'), kind), dialogField(t('silObject'), object)),
+  h('div', { class: 'field-row' }, dialogField(t('silStarts'), starts, t('silStartsHelp')), dialogField(t('silEnds'), ends, forChips)),
+  dialogField(t('silComment'), comment), note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('silence'))));
+  const close = modal(form);
+  comment.focus();
+}
+
+async function endSilence(x) {
+  const ok = await ask({ title: t('silEndTitle'), message: silenceScope(x) + '. ' + t('silEndConfirm'), confirm: t('silEnd'), danger: true });
+  if (!ok) return;
+  try {
+    await api('silences/' + enc(x.id), { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t('silEnded'));
+  refresh();
 }
 
 // alertObject links an alert to the object when it is in this cluster.

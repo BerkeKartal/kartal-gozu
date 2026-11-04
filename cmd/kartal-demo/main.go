@@ -45,6 +45,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/promtext"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
+	"github.com/BerkeKartal/kartal-gozu/internal/silence"
 	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
@@ -97,6 +98,10 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	email := alert.NewSwitchable("email")
 	alerts := alert.NewManager(30*time.Second, log, email)
 	keeper := settings.NewKeeper(ctx, settings.Memory{}, log)
+	silences := silence.New(keeper)
+	alerts.Silenced = func(a alert.Alert, now time.Time) bool {
+		return silences.Covers(a.Cluster, a.Kind, a.Namespace, a.Object, now)
+	}
 	checks := uptime.New(keeper, alerts, log)
 	if err := demoChecks(ctx, keeper); err != nil {
 		return err
@@ -133,6 +138,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		Collect:        collector,
 		DataSources:    datasource.NewManager(keeper),
 		Dashboards:     dashboard.New(keeper),
+		Silences:       silences,
 	}
 	selfToken := adminToken
 	if withLDAP || adminToken != "" {
