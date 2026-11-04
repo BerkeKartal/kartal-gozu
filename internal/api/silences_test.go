@@ -102,4 +102,13 @@ func TestSilences(t *testing.T) {
 	if rec := do(s, "DELETE", "/api/v1/silences/"+saved.ID, teamTok, ""); rec.Code != 404 {
 		t.Errorf("ended twice: %d", rec.Code)
 	}
+
+	// What is typed is trimmed before it is checked, as it is kept: the
+	// team's own namespace, with spaces around it, is the team's.
+	rec = do(s, "POST", "/api/v1/silences", teamTok, `{"cluster": " prod ", "namespace": " team-a ", "ends": "`+ends+`"}`)
+	var trimmed settings.Silence
+	json.Unmarshal(rec.Body.Bytes(), &trimmed)
+	if rec.Code != 201 || trimmed.Cluster != "prod" || trimmed.Namespace != "team-a" {
+		t.Errorf("a scope with spaces: %d %+v", rec.Code, trimmed)
+	}
 }

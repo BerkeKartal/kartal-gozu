@@ -7437,7 +7437,7 @@ function panelToExplore(p, edit) {
 
 // ---- editing
 
-function panelEditor(p) {
+function panelEditor(p, isNew = !p) {
   const v = copyOf(p || { title: '', type: 'graph', w: 6, h: 4, queries: [['']] });
   const title = h('input', { type: 'text', value: v.title || '', maxlength: '120', autocomplete: 'off' });
   const type = h('select', null, DB_TYPES.map(x => h('option', { value: x, selected: x === v.type }, t('dbType.' + x))));
@@ -7505,7 +7505,7 @@ function panelEditor(p) {
     class: 'dialog db-wide',
     onsubmit: e => {
       e.preventDefault();
-      if (!p && db.work.panels.length >= 60) {
+      if (isNew && db.work.panels.length >= 60) {
         note.say(t('dbTooMany'), 'bad');
         return;
       }
@@ -7513,14 +7513,14 @@ function panelEditor(p) {
       close();
     },
   },
-  h('h2', null, p ? t('dbEditPanel') : t('dbNewPanel')),
+  h('h2', null, isNew ? t('dbNewPanel') : t('dbEditPanel')),
   h('div', { class: 'field-row panel-row' }, dialogField(t('dbPanelTitle'), title), dialogField(t('dbType'), type),
     dialogField(t('dbWidth'), width), dialogField(t('dbHeight'), height)),
   parts.queries, h('div', { class: 'field-row' }, parts.unit, parts.mode), parts.stat, parts.text,
   note,
   h('div', { class: 'dialog-actions' },
     button(t('dbInExplore'), () => {
-      if (!p && db.work.panels.length >= 60) {
+      if (isNew && db.work.panels.length >= 60) {
         note.say(t('dbTooMany'), 'bad');
         return;
       }
@@ -7591,7 +7591,9 @@ function panelJSON(v) {
     },
   },
   h('h2', null, t('dbPanelJSON')), h('p', { class: 'muted small-text' }, t('dbPanelJSONHelp')), area, note,
-  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
+  // Cancel goes back to the panel editor, with what was changed there.
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => { close(); panelEditor(v, !db.work.panels.some(p => p.id === v.id)); }),
+    h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
   const close = modal(form);
   area.focus();
 }

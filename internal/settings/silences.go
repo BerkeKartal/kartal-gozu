@@ -30,14 +30,21 @@ type Silence struct {
 }
 
 const (
-	// MaxSilences bounds the silences not over yet.
-	MaxSilences = 200
+	// MaxSilences bounds the silences not over yet: they share the
+	// settings' Secret, of at most a megabyte, with the dashboards.
+	MaxSilences = 100
 	// MaxSilenceLength is how long one may last, and maxSilenceAhead how
 	// far ahead one may start: a maintenance window, not a way to turn
 	// alerts off for good.
 	MaxSilenceLength = 31 * 24 * time.Hour
 	maxSilenceAhead  = 90 * 24 * time.Hour
 )
+
+// Normalize trims what was typed, so that what is checked is what is kept.
+func (s *Silence) Normalize() {
+	s.Cluster, s.Namespace = strings.TrimSpace(s.Cluster), strings.TrimSpace(s.Namespace)
+	s.Object, s.Kind, s.Comment = strings.TrimSpace(s.Object), strings.TrimSpace(s.Kind), strings.TrimSpace(s.Comment)
+}
 
 // Validate tells what is wrong with a silence set at now, if anything.
 func (s Silence) Validate(now time.Time) error {

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -98,8 +97,7 @@ func (m *Manager) Add(ctx context.Context, s settings.Silence, user string) (set
 	defer m.edit.Unlock()
 	now := m.Now().UTC()
 	s.ID, s.By = settings.NewCheckID(), user
-	s.Cluster, s.Namespace, s.Object, s.Kind = strings.TrimSpace(s.Cluster), strings.TrimSpace(s.Namespace), strings.TrimSpace(s.Object), strings.TrimSpace(s.Kind)
-	s.Comment = strings.TrimSpace(s.Comment)
+	s.Normalize()
 	if s.Starts.IsZero() || s.Starts.Before(now) {
 		s.Starts = now
 	}

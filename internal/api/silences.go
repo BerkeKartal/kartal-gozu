@@ -91,6 +91,8 @@ func (s *Server) addSilence(w http.ResponseWriter, r *http.Request) {
 	if m == nil || !readJSON(w, r, &x, silenceFields) {
 		return
 	}
+	// The scope is checked as it will be kept.
+	x.Normalize()
 	u := userOf(r)
 	if !maySilence(u, x) {
 		writeError(w, http.StatusForbidden, "your role may not silence this: it needs an operator of all it covers")
