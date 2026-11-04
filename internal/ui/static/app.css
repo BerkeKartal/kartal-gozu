@@ -287,6 +287,11 @@ td.fav, th.fav { width: 26px; padding-right: 0; }
 tr.problem td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 tr.differs td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 tr.differs .badge { margin-left: 6px; }
+.cmp-bar { display: flex; gap: 16px; align-items: center; margin: 4px 0 10px; }
+.cmp-table td { vertical-align: top; }
+.cmp-table .mono { font-size: 12px; overflow-wrap: anywhere; }
+.cmp-key { white-space: nowrap; color: var(--muted); }
+mark.cmp-mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 2px; }
 .release-cell { vertical-align: top; }
 .release-cell a { display: block; color: inherit; text-decoration: none; }
 .release-cell a:hover { color: var(--accent); }

@@ -222,7 +222,10 @@ const STRINGS = {
     previewFirst: 'Preview the changes first.', resize: 'Drag to resize', gone: 'Could not reload: {0}',
     discardTitle: 'Discard your changes?', discardConfirm: 'The YAML you edited has not been saved.', discard: 'Discard',
     'tab.summary': 'Summary', 'tab.yaml': 'YAML', 'tab.events': 'Events', 'tab.pods': 'Pods', 'tab.logs': 'Logs',
-    'tab.history': 'History', 'tab.metrics': 'Metrics', 'tab.console': 'Console', 'tab.jobs': 'Jobs',
+    'tab.history': 'History', 'tab.metrics': 'Metrics', 'tab.console': 'Console', 'tab.jobs': 'Jobs', 'tab.compare': 'Compare',
+    cmpHint: 'The {0}s named {1} in the other namespaces and clusters you may see, side by side: images, environment, resources, probes, volumes and placement.',
+    cmpNone: 'No other {0} is named {1} in the namespaces and clusters you may see.', cmpOnlyDiff: 'Only differences', cmpSame: 'All the same.',
+    cmpSetting: 'Setting', cmpThis: 'this one', cmpFirst: 'The first {0} of {1}.', cmpUnread: 'not read: {0}',
     'f.created': 'Created', 'f.labels': 'Labels', 'f.annotations': 'Annotations', 'f.owner': 'Controlled by',
     'f.node': 'Node', 'f.podIP': 'Pod IP', 'f.qos': 'QoS class', 'f.serviceAccount': 'Service account',
     'f.restartPolicy': 'Restart policy', 'f.priority': 'Priority class', 'f.started': 'Started',
@@ -645,7 +648,10 @@ const STRINGS = {
     previewFirst: 'Önce değişiklikleri önizle.', resize: 'Boyutlandırmak için sürükle', gone: 'Yenilenemedi: {0}',
     discardTitle: 'Değişiklikler atılsın mı?', discardConfirm: 'Düzenlediğin YAML kaydedilmedi.', discard: 'At',
     'tab.summary': 'Özet', 'tab.yaml': 'YAML', 'tab.events': 'Olaylar', 'tab.pods': 'Podlar', 'tab.logs': 'Loglar',
-    'tab.history': 'Geçmiş', 'tab.metrics': 'Grafik', 'tab.console': 'Konsol', 'tab.jobs': 'Job’lar',
+    'tab.history': 'Geçmiş', 'tab.metrics': 'Grafik', 'tab.console': 'Konsol', 'tab.jobs': 'Job’lar', 'tab.compare': 'Karşılaştır',
+    cmpHint: 'Görebildiğiniz diğer namespace ve cluster’lardaki {1} adlı {0}’lar yan yana: imajlar, ortam değişkenleri, kaynaklar, probe’lar, volume’lar ve yerleşim.',
+    cmpNone: 'Görebildiğiniz namespace ve cluster’larda {1} adlı başka bir {0} yok.', cmpOnlyDiff: 'Yalnızca farklar', cmpSame: 'Hepsi aynı.',
+    cmpSetting: 'Ayar', cmpThis: 'bu', cmpFirst: '{1} taneden ilk {0} tanesi.', cmpUnread: 'okunamadı: {0}',
     'f.created': 'Oluşturulma', 'f.labels': 'Etiketler', 'f.annotations': 'Açıklamalar (annotation)', 'f.owner': 'Yöneten',
     'f.node': 'Node', 'f.podIP': 'Pod IP', 'f.qos': 'QoS sınıfı', 'f.serviceAccount': 'Service account',
     'f.restartPolicy': 'Yeniden başlatma', 'f.priority': 'Öncelik sınıfı', 'f.started': 'Başlama',
@@ -8245,6 +8251,7 @@ function tabsFor(kind) {
   if ((kind === 'Pod' || kind === 'Node') && c && c.metricsAvailable) tabs.push('metrics');
   if (['Pod', 'Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)) tabs.push('scrape');
   if (kind === 'Pod' && canIn('admin', detail.ref ? detail.ref.ns : '')) tabs.push('console');
+  if (COMPARE_KINDS.includes(kind)) tabs.push('compare');
   return tabs;
 }
 function currentTab() {
@@ -8252,10 +8259,10 @@ function currentTab() {
   return tabs.includes(state.tab) ? state.tab : 'summary';
 }
 
-function objectPath(ref, query) {
+function objectPath(ref, query, cluster) {
   const [group, version, resource] = ref.gvr.split('/');
   const q = new URLSearchParams(Object.assign(ref.ns ? { namespace: ref.ns } : {}, query)).toString();
-  return clusterPath() + '/resources/' + [group, version, resource, ref.name].map(enc).join('/') + (q ? '?' + q : '');
+  return clusterPath(cluster) + '/resources/' + [group, version, resource, ref.name].map(enc).join('/') + (q ? '?' + q : '');
 }
 
 // loadDetailObject fetches the object. A quiet reload redraws only when the
@@ -8403,7 +8410,7 @@ function renderDetail() {
 const DETAIL_TABS = {
   summary: renderSummary, yaml: renderYAMLTab, events: renderEventsTab, pods: renderPodsTab, jobs: renderJobsTab,
   changes: renderChangesTab, history: renderHistoryTab, metrics: renderMetricsTab, logs: renderLogsTab, console: renderConsoleTab,
-  scrape: renderScrapeTab,
+  scrape: renderScrapeTab, compare: renderCompareTab,
 };
 
 function objectStatus(kind, o) {
@@ -8993,6 +9000,158 @@ function renderChangesTab() {
 }
 
 // The history asks the agent each time; it is reloaded on demand only.
+// ---- comparing a workload with the ones named the same elsewhere
+
+// The kinds the versions list has, and so whose namesakes it finds.
+const COMPARE_KINDS = ['Deployment', 'StatefulSet', 'DaemonSet'];
+const COMPARE_MAX = 8;
+
+// probeText is what a probe checks, every how many seconds, after how many
+// failures, and after how long a wait at the start.
+function probeText(p) {
+  if (!p) return '';
+  let what = '?';
+  if (p.httpGet) what = 'HTTP GET :' + p.httpGet.port + (p.httpGet.path || '/');
+  else if (p.tcpSocket) what = 'TCP :' + p.tcpSocket.port;
+  else if (p.grpc) what = 'gRPC :' + p.grpc.port;
+  else if (p.exec) what = 'exec ' + (p.exec.command || []).join(' ');
+  return [what, (p.periodSeconds || 10) + 's', '×' + (p.failureThreshold || 3), p.initialDelaySeconds ? '+' + p.initialDelaySeconds + 's' : ''].filter(Boolean).join(' ');
+}
+
+// envText is an environment variable's value, or where it comes from.
+function envText(e) {
+  if (e.value !== undefined) return e.value === '' ? '""' : e.value;
+  const f = e.valueFrom || {};
+  if (f.secretKeyRef) return '↪ Secret ' + f.secretKeyRef.name + '/' + f.secretKeyRef.key;
+  if (f.configMapKeyRef) return '↪ ConfigMap ' + f.configMapKeyRef.name + '/' + f.configMapKeyRef.key;
+  if (f.fieldRef) return '↪ ' + f.fieldRef.fieldPath;
+  if (f.resourceFieldRef) return '↪ ' + f.resourceFieldRef.resource;
+  return '""';
+}
+
+function volumeText(v) {
+  if (v.configMap) return 'ConfigMap ' + v.configMap.name;
+  if (v.secret) return 'Secret ' + v.secret.secretName;
+  if (v.persistentVolumeClaim) return 'PVC ' + v.persistentVolumeClaim.claimName;
+  if (v.hostPath) return 'hostPath ' + v.hostPath.path;
+  if (v.nfs) return 'NFS ' + v.nfs.server + ':' + v.nfs.path;
+  if (v.emptyDir) return 'emptyDir' + (v.emptyDir.medium ? ' ' + v.emptyDir.medium : '');
+  return Object.keys(v).filter(k => k !== 'name').join(', ');
+}
+
+// workloadSettings is what tells two copies of a workload apart, as setting
+// and value, in the order the workload has them: its replicas, where its
+// pods may run, and each container's image, command, resources, probes,
+// ports, environment and mounts, then its volumes.
+function workloadSettings(o) {
+  const out = new Map();
+  const put = (key, value) => {
+    if (value !== undefined && value !== null && value !== '') out.set(key, String(value));
+  };
+  const spec = o.spec || {};
+  const pod = (spec.template || {}).spec || {};
+  if (o.kind !== 'DaemonSet') put('replicas', spec.replicas == null ? 1 : spec.replicas);
+  put('strategy', (spec.strategy || spec.updateStrategy || {}).type);
+  put('serviceAccount', pod.serviceAccountName);
+  const sel = pod.nodeSelector || {};
+  put('nodeSelector', Object.keys(sel).sort().map(k => k + '=' + sel[k]).join(', '));
+  const required = ((pod.affinity || {}).nodeAffinity || {}).requiredDuringSchedulingIgnoredDuringExecution || {};
+  put('nodeAffinity', (required.nodeSelectorTerms || []).flatMap(term => (term.matchExpressions || [])
+    .map(m => m.key + ' ' + m.operator + ' ' + (m.values || []).join('|'))).join('; '));
+  put('tolerations', (pod.tolerations || []).map(x => (x.key || '*') + (x.effect ? ':' + x.effect : '')).join(', '));
+  put('topologySpread', (pod.topologySpreadConstraints || []).map(c => c.topologyKey + ' ≤' + c.maxSkew + (c.whenUnsatisfiable === 'ScheduleAnyway' ? ' ~' : '')).join(', '));
+  const containers = (pod.initContainers || []).map(c => ['init ' + c.name, c]).concat((pod.containers || []).map(c => [c.name, c]));
+  for (const [name, c] of containers) {
+    const p = name + ' · ';
+    put(p + 'image', c.image);
+    put(p + 'command', (c.command || []).join(' '));
+    put(p + 'args', (c.args || []).join(' '));
+    const res = c.resources || {};
+    for (const side of ['requests', 'limits']) for (const r of ['cpu', 'memory']) put(p + side + '.' + r, (res[side] || {})[r]);
+    for (const probe of ['startupProbe', 'readinessProbe', 'livenessProbe']) put(p + probe, probeText(c[probe]));
+    put(p + 'ports', (c.ports || []).map(x => x.containerPort + (x.protocol && x.protocol !== 'TCP' ? '/' + x.protocol : '')).join(', '));
+    put(p + 'envFrom', (c.envFrom || []).map(x => (x.configMapRef ? 'ConfigMap ' + x.configMapRef.name : x.secretRef ? 'Secret ' + x.secretRef.name : '')).join(', '));
+    for (const e of c.env || []) put(p + 'env ' + e.name, envText(e));
+    put(p + 'volumeMounts', (c.volumeMounts || []).map(m => m.mountPath + (m.subPath ? ' (' + m.subPath + ')' : '') + ' ← ' + m.name).join(', '));
+  }
+  for (const v of pod.volumes || []) put('volume ' + v.name, volumeText(v));
+  return out;
+}
+
+// compareRows lines up the settings of workloads: every setting any of
+// them has, in the order they have them, with each one's value (undefined
+// where it lacks it) and whether they differ. A workload that could not be
+// read (null) takes no part.
+function compareRows(settings) {
+  const keys = [];
+  const seen = new Set();
+  for (const s of settings) {
+    for (const k of s ? s.keys() : []) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      keys.push(k);
+    }
+  }
+  return keys.map(key => {
+    const values = settings.map(s => (s ? s.get(key) : undefined));
+    const read = values.filter((_, i) => settings[i]);
+    return { key, values, differs: new Set(read.map(v => (v === undefined ? '\u0000' : v))).size > 1 };
+  });
+}
+
+// markTokens shows a long value word by word, marking the words base lacks:
+// what differs in a line of options, such as JAVA_OPTS, stands out.
+function markTokens(value, base) {
+  if (base === undefined || value === base || value.length < 40 || !/\s/.test(value)) return value;
+  const have = new Set(base.split(/\s+/));
+  return value.split(/(\s+)/).map(w => (/^\s*$/.test(w) || have.has(w) ? w : h('mark', { class: 'cmp-mark' }, w)));
+}
+
+// loadPeers reads the workloads named as this one, of its kind, in the other
+// namespaces and clusters the user may see, the same cluster's first.
+async function loadPeers(ref, kind) {
+  const all = await api('releases');
+  const peers = all.filter(r => r.kind === kind && r.name === ref.name && !(r.cluster === state.cluster && r.namespace === ref.ns));
+  peers.sort((a, b) => (a.cluster !== state.cluster) - (b.cluster !== state.cluster) || a.cluster.localeCompare(b.cluster) || a.namespace.localeCompare(b.namespace));
+  const read = await Promise.all(peers.slice(0, COMPARE_MAX).map(r =>
+    api(objectPath({ gvr: ref.gvr, ns: r.namespace, name: r.name }, undefined, r.cluster), { text: true })
+      .then(text => ({ cluster: r.cluster, namespace: r.namespace, obj: JSON.parse(text) }),
+        e => ({ cluster: r.cluster, namespace: r.namespace, error: e.message }))));
+  return { total: peers.length, peers: read };
+}
+
+function renderCompareTab() {
+  const { ref, kind, obj } = detail;
+  fromCache('compare', () => loadPeers(ref, kind), ({ total, peers }) => {
+    const hint = h('p', { class: 'muted small-text' }, t('cmpHint', kind, ref.name));
+    if (!peers.length) {
+      fill(els.detailBody, hint, h('div', { class: 'empty-note' }, t('cmpNone', kind, ref.name)));
+      return;
+    }
+    const oneCluster = peers.every(p => p.cluster === state.cluster);
+    const label = (cluster, ns) => (oneCluster ? ns : cluster + ' · ' + ns);
+    const cols = [{ label: label(state.cluster, ref.ns), settings: workloadSettings(obj), here: true }]
+      .concat(peers.map(p => ({ label: label(p.cluster, p.namespace), settings: p.obj ? workloadSettings(p.obj) : null, error: p.error })));
+    const rows = compareRows(cols.map(c => c.settings));
+    const only = detail.cmpAll !== true;
+    const shown = only ? rows.filter(r => r.differs) : rows;
+    const toggle = h('label', { class: 'check-line small-text' }, h('input', {
+      type: 'checkbox', checked: only, onchange: e => { detail.cmpAll = !e.target.checked; renderDetail(); },
+    }), t('cmpOnlyDiff'));
+    const cell = (v, base) => (v === undefined ? h('span', { class: 'muted' }, '—') : h('span', { class: 'mono' }, markTokens(v, base)));
+    fill(els.detailBody, hint, h('div', { class: 'cmp-bar' }, toggle,
+      total > peers.length ? h('span', { class: 'muted small-text' }, t('cmpFirst', peers.length, total)) : null),
+    shown.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'compact cmp-table' },
+      h('thead', null, h('tr', null, h('th', null, t('cmpSetting')), cols.map(c => h('th', null, c.label,
+        c.here ? h('span', { class: 'muted' }, ' · ' + t('cmpThis')) : null,
+        c.error ? h('div', { class: 'status-bad small-text' }, t('cmpUnread', c.error)) : null)))),
+      h('tbody', null, shown.map(r => h('tr', { class: r.differs ? 'differs' : null },
+        h('td', { class: 'mono cmp-key' }, r.key),
+        r.values.map((v, i) => h('td', null, cols[i].settings ? cell(v, i ? r.values[0] : undefined) : null)))))))
+      : h('div', { class: 'empty-note' }, t('cmpSame')));
+  }, 300000);
+}
+
 function renderHistoryTab() {
   const { ref } = detail;
   const base = clusterPath() + '/namespaces/' + enc(ref.ns) + '/deployments/' + enc(ref.name);

@@ -69,8 +69,9 @@ tunnel), and the server works under any URL path without configuration.
 - **What changed, and what runs where.** A timeline of what changed in each
   cluster (new images, scaling, restarts, nodes going away), with who did it
   when it was done through Kartal Gözü. The versions of every app side by
-  side across clusters, with the differences marked. And, for any object,
-  what was changed since the last `kubectl apply`.
+  side across clusters, with the differences marked, and any workload's
+  settings next to its namesakes' in other namespaces and clusters. And,
+  for any object, what was changed since the last `kubectl apply`.
 - **Users, roles and an audit log.** Viewers look, operators act, admins also
   edit YAML and use the console, everywhere or only in the clusters and
   namespaces you choose. People sign in with a user name and password the
@@ -174,6 +175,15 @@ where it was left.
 - **Versions:** every app's images in every cluster, side by side. Rows whose
   versions differ are marked, and "Only differences" keeps those and the apps
   missing from a cluster. A cell opens the app in that cluster.
+- **Compare** (a tab of a Deployment, StatefulSet or DaemonSet): the
+  workloads named the same in the other namespaces and clusters you may see,
+  such as one app's test, staging and production, side by side, setting by
+  setting: replicas, node selector, affinity, tolerations and spread, and
+  each container's image, command, requests and limits, probes, ports,
+  environment and mounts, then the volumes. Differences are kept, or every
+  setting shown; in a long value such as `JAVA_OPTS` the words that differ
+  are marked. Secrets' values are never read: a variable taken from one
+  shows which Secret and key.
 - **Rollouts:** each new version of a Deployment, StatefulSet or DaemonSet,
   from the snapshot that first shows it until every replica runs it and is
   ready: from which tag to which, how long it took, and who started it when
