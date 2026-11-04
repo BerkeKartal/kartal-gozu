@@ -497,6 +497,10 @@ const STRINGS = {
     dbImportPaste: 'Dashboard JSON', dbImportBad: 'This is not a dashboard: {0}', dbImportBig: 'The file is larger than 4 MiB.',
     dbImportSource: 'Grafana’s queries read', dbImportSourceHelp: 'The store has what Kartal Gözü collects; a Prometheus data source, all that Prometheus has.',
     dbImported: 'Dashboard imported.', dbImportedSkipped: 'Imported; {0} left out: {1}',
+    dbJSON: 'JSON', dbSavedLeftOut: 'Saved; {0} left out: {1}',
+    dbJSONHelp: 'The dashboard as Export gives it: change it here, or paste another one in its place, a Grafana dashboard’s JSON too. Saving replaces the dashboard, with the changes you made so far; a change someone saved meanwhile is not overwritten.',
+    dbPanelJSON: 'Panel JSON', dbPanelJSONHelp: 'The panel as the dashboard keeps it. It goes into the dashboard being edited, and is saved with it.',
+    dbJSONBad: 'This is not JSON: {0}', dbJSONField: 'The panel’s “{0}” is not valid.', dbJSONIgnored: 'Left out, not known: {0}',
     dbAddTitle: 'Add to a dashboard', dbWhich: 'Dashboard', dbNewOne: 'a new dashboard', dbNewTitle: 'Title of the new dashboard', dbAdded: 'Added to {0}.',
     dbHalf: 'half the width', dbFull: 'the whole width', dbThird: 'a third of it',
   },
@@ -918,6 +922,10 @@ const STRINGS = {
     dbImportPaste: 'Pano JSON’u', dbImportBad: 'Bu bir pano değil: {0}', dbImportBig: 'Dosya 4 MiB’tan büyük.',
     dbImportSource: 'Grafana sorguları nereyi okusun', dbImportSourceHelp: 'Depoda Kartal Gözü’nün topladıkları var; bir Prometheus veri kaynağında o Prometheus’taki her şey.',
     dbImported: 'Pano içe aktarıldı.', dbImportedSkipped: 'İçe aktarıldı; {0} öğe alınmadı: {1}',
+    dbJSON: 'JSON', dbSavedLeftOut: 'Kaydedildi; {0} öğe alınmadı: {1}',
+    dbJSONHelp: 'Pano, Dışa aktar’ın verdiği hâliyle: burada değiştirin ya da yerine başka birini, bir Grafana panosunun JSON’unu da yapıştırın. Kaydetmek panoyu şimdiye kadarki değişikliklerinizle birlikte değiştirir; bu arada başkasının kaydettiği bir değişikliğin üzerine yazılmaz.',
+    dbPanelJSON: 'Panel JSON’u', dbPanelJSONHelp: 'Panel, panonun onu sakladığı hâliyle. Düzenlenen panoya girer ve onunla birlikte kaydedilir.',
+    dbJSONBad: 'Bu bir JSON değil: {0}', dbJSONField: 'Panelin “{0}” alanı geçerli değil.', dbJSONIgnored: 'Bilinmediği için alınmadı: {0}',
     dbAddTitle: 'Panoya ekle', dbWhich: 'Pano', dbNewOne: 'yeni bir pano', dbNewTitle: 'Yeni panonun başlığı', dbAdded: '{0} panosuna eklendi.',
     dbHalf: 'yarım genişlik', dbFull: 'tam genişlik', dbThird: 'üçte bir',
   },
@@ -6651,6 +6659,7 @@ function drawDashHead() {
   const actions = db.edit ? [
     button('+ ' + t('dbAddPanel'), () => panelEditor(null)),
     button(t('dbSettings'), () => dashSettings()),
+    button(t('dbJSON'), () => dashJSON()),
     button(t('cancel'), () => discardDashboard()),
     button(t('save'), () => saveDashboard(), 'primary'),
   ] : [
@@ -7287,8 +7296,10 @@ function panelEditor(p) {
   };
   type.addEventListener('change', show);
   show();
-  const apply = () => {
-    const out = { id: v.id || newPanelID(), title: title.value.trim(), type: type.value, w: clampInt(width.value, 1, 12, 6), h: clampInt(height.value, 1, 24, 4) };
+  // collect is the panel as the form has it.
+  const id = v.id || newPanelID();
+  const collect = () => {
+    const out = { id, title: title.value.trim(), type: type.value, w: clampInt(width.value, 1, 12, 6), h: clampInt(height.value, 1, 24, 4) };
     if (out.type === 'text') {
       out.text = text.value;
     } else {
@@ -7301,16 +7312,9 @@ function panelEditor(p) {
         if (crit.value !== '' && Number.isFinite(Number(crit.value))) out.crit = Number(crit.value);
       }
     }
-    const list = db.work.panels;
-    const i = list.findIndex(x => x.id === out.id);
-    if (i >= 0) list[i] = out;
-    else list.push(out);
-    markDirty();
-    drawGrid();
-    const [from, to] = dashRange();
-    runPanel(out, from, to, db.ctl ? db.ctl.signal : undefined);
     return out;
   };
+  const apply = () => putPanel(collect());
   const note = formNote();
   const form = h('form', {
     class: 'dialog db-wide',
@@ -7339,11 +7343,106 @@ function panelEditor(p) {
       close();
       panelToExplore(out, true);
     }),
+    button(t('dbJSON'), () => {
+      const out = collect();
+      close();
+      panelJSON(out);
+    }),
     h('span', { class: 'grow' }),
     button(t('cancel'), () => close()),
     h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
   const close = modal(form);
   title.focus();
+}
+
+// putPanel puts a panel in the dashboard being edited, in place of the one
+// with its ID or after the others, and draws and reads it.
+function putPanel(out) {
+  const list = db.work.panels;
+  const i = list.findIndex(x => x.id === out.id);
+  if (i >= 0) list[i] = out;
+  else list.push(out);
+  markDirty();
+  drawGrid();
+  const [from, to] = dashRange();
+  runPanel(out, from, to, db.ctl ? db.ctl.signal : undefined);
+  return out;
+}
+
+// DB_PANEL_KEYS are what a panel holds; the server leaves out the rest.
+const DB_PANEL_KEYS = ['id', 'title', 'type', 'w', 'h', 'queries', 'unit', 'mode', 'reduce', 'warn', 'crit', 'text'];
+
+// panelJSON changes a panel as JSON, as the dashboard keeps it: like the
+// panel editor, in the dashboard being edited, saved with it. The panel
+// keeps its ID.
+function panelJSON(v) {
+  const area = h('textarea', { rows: '18', class: 'mono', spellcheck: 'false', 'aria-label': t('dbPanelJSON') });
+  area.value = JSON.stringify(v, null, 2);
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: e => {
+      e.preventDefault();
+      let x;
+      try {
+        x = JSON.parse(area.value);
+      } catch (err) {
+        note.say(t('dbJSONBad', err.message), 'bad');
+        return;
+      }
+      const { panel, problem, unknown } = jsonPanel(x);
+      if (problem) {
+        note.say(problem, 'bad');
+        return;
+      }
+      if (!db.work.panels.some(p => p.id === v.id) && db.work.panels.length >= 60) {
+        note.say(t('dbTooMany'), 'bad');
+        return;
+      }
+      panel.id = v.id;
+      putPanel(panel);
+      close();
+      if (unknown.length) toast(t('dbJSONIgnored', unknown.join(', ')));
+    },
+  },
+  h('h2', null, t('dbPanelJSON')), h('p', { class: 'muted small-text' }, t('dbPanelJSONHelp')), area, note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('exApply'))));
+  const close = modal(form);
+  area.focus();
+}
+
+// jsonPanel checks a panel written as JSON as the server will check it, and
+// keeps what a panel holds: problem tells what is wrong, unknown what was
+// left out.
+function jsonPanel(x) {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return { problem: t('dbJSONBad', '{…}') };
+  // The server counts bytes; a size of 0 is its default.
+  const bytes = s => new TextEncoder().encode(s).length;
+  const absent = k => x[k] === undefined || x[k] === null;
+  const text = (k, most) => absent(k) || (typeof x[k] === 'string' && bytes(x[k]) <= most);
+  const whole = (k, hi) => absent(k) || (Number.isInteger(x[k]) && x[k] >= 0 && x[k] <= hi);
+  const number = k => absent(k) || (typeof x[k] === 'number' && Number.isFinite(x[k]));
+  const query = q => Array.isArray(q) && q.length > 0 && bytes(JSON.stringify(q)) <= 20 << 10;
+  const checks = [
+    ['type', DB_TYPES.includes(x.type)],
+    ['title', text('title', 120)],
+    ['w', whole('w', 12)],
+    ['h', whole('h', 24)],
+    ['queries', absent('queries') || (Array.isArray(x.queries) && x.queries.length <= 10 && x.queries.every(query))],
+    ['unit', text('unit', 20)],
+    ['mode', absent('mode') || ['', 'lines', 'area', 'stacked'].includes(x.mode)],
+    ['reduce', absent('reduce') || ['', ...DB_REDUCE].includes(x.reduce)],
+    ['warn', number('warn')],
+    ['crit', number('crit')],
+    ['text', text('text', 10000)],
+  ];
+  const bad = checks.find(([, ok]) => !ok);
+  if (bad) return { problem: t('dbJSONField', bad[0]) };
+  const panel = {};
+  for (const k of DB_PANEL_KEYS) if (!absent(k)) panel[k] = x[k];
+  panel.w = panel.w || 6;
+  panel.h = panel.h || 4;
+  return { panel, unknown: Object.keys(x).filter(k => !DB_PANEL_KEYS.includes(k)) };
 }
 
 // editorQuery is a query in the panel editor: PromQL is written here,
@@ -7475,9 +7574,88 @@ async function saveDashboard() {
     return;
   }
   toast(t('dbSaved'));
+  tookSaved(saved, false);
+}
+
+// tookSaved shows a dashboard just saved; again reads its variables and
+// panels again, for when more than the panels being edited changed.
+function tookSaved(saved, again) {
+  const before = db.work.range;
   Object.assign(db, { dash: saved, work: copyOf(saved), dirty: false, edit: false });
   db.data = state.data = { dash: saved };
+  if (again) {
+    if (saved.range !== before && db.range === before) db.range = saved.range;
+    db.auto = saved.refresh || 0;
+  }
   drawDashboard();
+  if (again) runDashboard();
+}
+
+// DB_DASH_KEYS are what a dashboard holds; DB_DASH_KEPT what the server
+// adds to it, which its JSON may carry and which is left alone.
+const DB_DASH_KEYS = ['title', 'description', 'range', 'refresh', 'variables', 'panels'];
+const DB_DASH_KEPT = ['id', 'owner', 'version', 'updated', 'updatedBy', 'canEdit', 'where'];
+const DB_VAR_KEYS = ['name', 'title', 'source', 'label', 'match', 'multi', 'all'];
+
+// unknownKeys is what a dashboard's JSON has that a dashboard does not
+// hold, and the server leaves out.
+function unknownKeys(x) {
+  const out = Object.keys(x).filter(k => !DB_DASH_KEYS.includes(k) && !DB_DASH_KEPT.includes(k));
+  const inner = (list, keys, prefix) => (Array.isArray(list) ? list : []).forEach(o => {
+    if (o && typeof o === 'object') out.push(...Object.keys(o).filter(k => !keys.includes(k)).map(k => prefix + k));
+  });
+  inner(x.variables, DB_VAR_KEYS, 'variables.');
+  inner(x.panels, DB_PANEL_KEYS, 'panels.');
+  return [...new Set(out)];
+}
+
+// dashJSON changes the dashboard being edited as JSON, as Export gives it,
+// or takes over a dashboard pasted in its place, a Grafana one as Import
+// does. It saves at once, with the changes made so far, through the same
+// check as Save: the server tells what is wrong, and a change someone
+// saved meanwhile is not overwritten.
+function dashJSON() {
+  const body = dashBody(db.work);
+  delete body.version;
+  const area = h('textarea', { rows: '22', class: 'mono', spellcheck: 'false', 'aria-label': t('dbImportPaste') });
+  area.value = JSON.stringify(body, null, 2);
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      let x;
+      try {
+        x = JSON.parse(area.value);
+      } catch (err) {
+        note.say(t('dbImportBad', err.message), 'bad');
+        return;
+      }
+      if (x && typeof x === 'object' && x.dashboard && typeof x.dashboard === 'object') x = x.dashboard;
+      if (!x || typeof x !== 'object' || Array.isArray(x)) {
+        note.say(t('dbImportBad', '{…}'), 'bad');
+        return;
+      }
+      const choices = importSources();
+      const grafana = isGrafana(x);
+      const { dash, skipped } = grafana ? fromGrafana(x, choices.length ? choices[0][0] : '') : { dash: plainDashboard(x), skipped: unknownKeys(x) };
+      dash.version = db.work.version;
+      let saved;
+      try {
+        saved = await api('dashboards/' + enc(db.id), { method: 'PUT', body: dash });
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        return;
+      }
+      close();
+      toast(skipped.length ? t('dbSavedLeftOut', skipped.length, skipped.slice(0, 6).join(', ')) : t('dbSaved'));
+      tookSaved(saved, true);
+    },
+  },
+  h('h2', null, t('dbImportPaste')), h('p', { class: 'muted small-text' }, t('dbJSONHelp')), area, note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  area.focus();
 }
 
 async function discardDashboard() {
@@ -7530,8 +7708,7 @@ function importDashboard() {
     }
     f.text().then(s => { area.value = s; }).catch(e => note.say(e.message, 'bad'));
   });
-  const proms = ex.sources.filter(s => s.type === 'prometheus');
-  const choices = (state.storeOn === false ? [] : [['', t('exStore')]]).concat(proms.map(s => [s.id, s.name]));
+  const choices = importSources();
   const target = choices.length > 1 ? h('select', null, choices.map(([id, name]) => h('option', { value: id }, name))) : null;
   const form = h('form', {
     class: 'dialog wide',
@@ -7568,6 +7745,13 @@ function importDashboard() {
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('dbImport'))));
   const close = modal(form);
   area.focus();
+}
+
+// importSources are what a Grafana dashboard's queries may read, the first
+// by default: the store, then the Prometheus data sources.
+function importSources() {
+  const proms = ex.sources.filter(s => s.type === 'prometheus');
+  return (state.storeOn === false ? [] : [['', t('exStore')]]).concat(proms.map(s => [s.id, s.name]));
 }
 
 function plainDashboard(x) {

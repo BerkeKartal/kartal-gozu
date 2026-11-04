@@ -64,8 +64,8 @@ tunnel), and the server works under any URL path without configuration.
 - **Dashboards.** Save charts, numbers, tables, logs and notes on pages that
   everyone sees, each panel showing what the person looking may see: one
   time range, variables to pick namespaces or pods, panels moved and resized
-  by dragging. Add a chart from Explore in a click, or import a Grafana
-  dashboard's JSON.
+  by dragging. Add a chart from Explore in a click, import a Grafana
+  dashboard's JSON, or change a dashboard's JSON in place.
 - **What changed, and what runs where.** A timeline of what changed in each
   cluster (new images, scaling, restarts, nodes going away), with who did it
   when it was done through Kartal Gözü. The versions of every app side by
@@ -797,6 +797,12 @@ sources, as Grafana's dashboards do:
   and statistics, and its `label_values()` variables; their queries read the
   store or a Prometheus data source, as you choose. What it cannot take
   (Loki panels, interval variables) is listed.
+- **As JSON, in place**: while editing, *JSON* shows the whole dashboard as
+  Export gives it. Change it there, or paste another dashboard (a Grafana
+  one too) in its place, and save: the dashboard keeps its address, and a
+  change someone saved meanwhile is not overwritten. A panel's editor has
+  *JSON* too, for that panel alone. What a dashboard does not hold is left
+  out, and named.
 
 Everyone sees every dashboard; operators make them, and a dashboard is
 changed or removed by whoever made it, or by an admin. Saving a dashboard
