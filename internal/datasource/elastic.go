@@ -316,6 +316,36 @@ func (b esBucket) keyText() string {
 	return string(b.Key)
 }
 
+// ESCount tells how many documents match a query between two times, in
+// Unix milliseconds: exactly, where a search stops counting at ten
+// thousand.
+func (c *Client) ESCount(ctx context.Context, src settings.DataSource, index, text string, start, end int64, scope Scope) (int64, error) {
+	if index == "" {
+		index = src.Index
+	}
+	if err := checkIndex(index); err != nil {
+		return 0, err
+	}
+	if end < start {
+		return 0, &QueryError{errors.New("the range ends before it starts")}
+	}
+	b, err := json.Marshal(map[string]any{"query": filter(src, text, start, end, scope)})
+	if err != nil {
+		return 0, err
+	}
+	body, err := c.do(ctx, src, request{method: http.MethodPost, path: "/" + url.PathEscape(index) + "/_count", body: b, contentType: "application/json"})
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		Count *int64 `json:"count"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil || r.Count == nil {
+		return 0, errors.New("the source does not answer as Elasticsearch does")
+	}
+	return *r.Count, nil
+}
+
 // ESLogs reads the newest documents of a query.
 func (c *Client) ESLogs(ctx context.Context, src settings.DataSource, q ESLogsQuery, scope Scope) (*Logs, error) {
 	if q.Index == "" {

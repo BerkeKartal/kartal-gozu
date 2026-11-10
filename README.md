@@ -42,6 +42,10 @@ tunnel), and the server works under any URL path without configuration.
   Critical problems can go out sooner than the others and name the people
   on call in Teams, and a restart of the server neither forgets the alerts
   nor sends them again.
+- **Alerts from the logs.** A log rule counts the lines of an Elasticsearch
+  that match a query, such as an application's database errors, and is an
+  alert when there are more than it allows: what goes wrong while the pods
+  keep running.
 - **Warnings before an outage.** Volumes that fill up, TLS certificates that
   are about to expire (in the cluster's Secrets and on any address), and URL
   checks that the server runs itself, with a 24-hour history for each.
@@ -586,8 +590,9 @@ went wrong.
 With `KARTAL_DATA_DIR` set, the alerts are kept there (`alerts.json`): after
 a restart a problem is still there since it began, and whoever was told of
 it is not told again. What ended while the server was away is resolved by
-the first report of its cluster; the URL checks and watched metrics get
-five minutes to find their problems again before these count as resolved. Without the directory a restart starts over, and sends every
+the first report of its cluster; the URL checks, watched metrics and log
+rules get five minutes to find their problems again before these count as
+resolved. Without the directory a restart starts over, and sends every
 problem that is still there once more.
 
 | Problem | When |
@@ -604,6 +609,7 @@ problem that is still there once more.
 | Certificate expiring | a TLS Secret's certificate, or that of an address a URL check asks, expires within 14 days (a warning) or 3 days (critical), or has expired |
 | Address not answering | a URL check fails: no answer, an error status, the wrong status or text, or a certificate that cannot be trusted |
 | Metric past its limit | a watched metric's latest value is above or below the limit set for it |
+| Log lines past their limit | more lines match a [log rule](#log-rules) than it allows |
 | Rollout stuck | a new version is not out after 10 minutes: not every replica runs it and is ready |
 
 The levels can be changed with `KARTAL_ALERT_VOLUME_WARNING` and
@@ -668,6 +674,32 @@ an operator of it, a whole cluster or a pattern of namespaces an operator
 of the cluster, and every cluster (the URL checks too) an operator
 everywhere. Everyone sees the silences over what they see. They are kept
 with the other settings, and every one set or ended goes to the audit log.
+
+### Log rules
+
+Some problems leave the pods running and show only in the logs: an
+application that cannot reach its database, requests that time out. A log
+rule counts, every minute, the lines of an
+[Elasticsearch data source](#data-sources-prometheus-and-elasticsearch) that
+match a query over the last while (1 minute to 24 hours), and is an alert
+when there are more than it allows:
+
+| | |
+|---|---|
+| Query | Lucene syntax, as in Explore: `log.level:ERROR AND kubernetes.namespace:shop` |
+| Count over the last | 5 minutes by default |
+| Alert above | this many lines; `0` alerts on any line |
+| Severity | warning or critical |
+| Index | another index pattern than the data source's, if need be |
+
+**Log rule** on the Alerts page (admins only, as a rule counts in every
+namespace's lines) makes one; **Count now** tells what it would find before
+it is saved. The page lists the rules with their last count. The count is
+exact, also above the ten thousand a search stops at. A rule that cannot be
+counted, because the Elasticsearch does not answer or its data source is
+gone, says so in the list and keeps its alert as it was: neither raised nor
+resolved. At most 50 rules; they are kept with the other settings, and every
+change goes to the audit log.
 
 ## URL checks
 
@@ -972,7 +1004,8 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | GET | `/api/v1/clusters/{c}/resources` | viewer | Every resource type, CRDs included |
 | GET | `/api/v1/clusters/{c}/resources/{group}/{version}/{resource}?namespace=` | viewer | A list of any type; use `core` for the core group |
 | GET | `/api/v1/clusters/{c}/resources/{group}/{version}/{resource}/{name}?namespace=` | viewer | Any object's contents |
-| GET | `/api/v1/alerts` | viewer | Active and recent problems, channels, last deliveries |
+| GET | `/api/v1/alerts` | viewer | Active and recent problems, channels, last deliveries, silences and log rules |
+| GET | `/api/v1/logrules` | viewer | The log rules with their last count |
 | GET | `/api/v1/changes?cluster=&namespace=&kind=&name=&limit=` | viewer | What changed, newest first (500 by default, at most 2,000); for operators with who made each change done through Kartal Gözü |
 | GET | `/api/v1/releases` | viewer | Every workload in every cluster with its images and readiness |
 | GET | `/api/v1/checks` | viewer | The URL checks with their latest result, uptime and last 24 hours |
@@ -994,6 +1027,10 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | PUT | `/api/v1/checks/{id}` | admin | Same body; changes a check |
 | DELETE | `/api/v1/checks/{id}` | admin | Removes a check and its results |
 | POST | `/api/v1/checks/try` | admin | Same body; asks the address once, without saving anything |
+| POST | `/api/v1/logrules` | admin | Body: `{"name", "source", "index", "query", "window", "above", "severity"}`; adds a log rule (`source` is a data source's ID, `window` in seconds) |
+| PUT | `/api/v1/logrules/{id}` | admin | Same body; changes a rule |
+| DELETE | `/api/v1/logrules/{id}` | admin | Removes a rule and its alert |
+| POST | `/api/v1/logrules/try` | admin | Same body; counts the lines once, without saving anything |
 | GET | `/api/v1/clusters/{c}/namespaces/{ns}/pods/{pod}/scrape?port=&path=` | viewer | The metrics a pod exposes, by name, with their samples |
 | GET | `/api/v1/clusters/{c}/metric-sources?namespace=` | viewer | Asks one running pod of each workload, at its likely ports (not those of databases and other servers that do not speak HTTP), whether it exposes metrics; returns where and how many, within 15 seconds |
 | GET | `/api/v1/clusters/{c}/routes?namespace=` | viewer | Traefik's IngressRoutes: hosts, entry points, services and where their certificate comes from |

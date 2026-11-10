@@ -293,7 +293,18 @@ const STRINGS = {
     silComment: 'Why', silCommentHint: 'such as the deploy or the ticket', silEndBefore: 'It must end after it starts.',
     silSaved: 'Silenced until {0}.', silEnd: 'End', silEndTitle: 'End the silence', silEndConfirm: 'The alerts it covers are notified again, from the next check.',
     silEnded: 'Silence ended.', silOn: 'on', silAhead: 'ahead', silNone: 'No silence is on or ahead.', silCovers: 'Covers', silWhen: 'When', silBy: 'By',
+    'alert.LogLimit': 'Log lines past their limit',
     alertsAfterBoth: 'A critical problem is notified once it has lasted {0}, any other after {1}; problems that start or end together go out as one message.',
+    logRules: 'Log rules', lrAdd: 'Log rule', lrNew: 'New log rule', lrEdit: 'Edit log rule', lrNone: 'No log rule yet.',
+    lrHint: 'Every minute each rule counts the log lines of an Elasticsearch data source that match its query, over the last while; more than it allows is an alert. It finds what goes wrong while the pods keep running.',
+    lrNoSource: 'Connect an Elasticsearch data source first, in Explore.',
+    lrName: 'Name', lrSource: 'Data source', lrIndex: 'Index', lrIndexHint: 'the data source’s', lrQuery: 'Query',
+    lrQueryHelp: 'Lucene syntax, as in Explore: log.level:ERROR AND kubernetes.namespace:shop',
+    lrWindow: 'Count over the last', lrAbove: 'Alert above', lrAboveHelp: 'lines; 0 alerts on any line.', lrSeverity: 'Severity',
+    lrLast: 'Last count', lrLimit: 'Limit', lrIn: 'more than {0} in {1}', lrState: 'State',
+    lrFiring: 'past its limit', lrOk: 'within its limit', lrWaiting: 'not counted yet', lrFailed: 'not counted',
+    lrTry: 'Count now', lrTried: '{0} lines in the last {1}.', lrSaved: 'Log rule saved.',
+    lrRemoveTitle: 'Remove log rule', lrRemoveConfirm: 'Remove the log rule {0}, with its alert?', lrRemoved: 'Log rule removed.',
     appmetrics: 'Metrics', 'tab.scrape': 'App metrics', 'capMissing.scrape': 'This cluster’s agent does not read the metrics of pods (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Applications often expose metrics of their own, such as requests, errors or queue lengths, at an address like :9100/metrics. Choose the port and read them.',
     readMetrics: 'Read', port: 'Port', path: 'Path', metricsFilter: 'Filter metrics', nSeries: '{0} series', moreSeries: '… and {0} more series',
@@ -733,7 +744,18 @@ const STRINGS = {
     silComment: 'Neden', silCommentHint: 'deploy ya da kayıt numarası gibi', silEndBefore: 'Bitiş başlangıçtan sonra olmalı.',
     silSaved: 'Susturuldu, bitiş: {0}.', silEnd: 'Bitir', silEndTitle: 'Susturmayı bitir', silEndConfirm: 'Kapsadığı uyarılar bir sonraki kontrolden itibaren yeniden bildirilir.',
     silEnded: 'Susturma bitti.', silOn: 'açık', silAhead: 'ileride', silNone: 'Açık ya da ileride bir susturma yok.', silCovers: 'Kapsam', silWhen: 'Zaman', silBy: 'Kuran',
+    'alert.LogLimit': 'Log satırları sınırı aştı',
     alertsAfterBoth: 'Kritik bir sorun {0}, diğerleri {1} sürerse bildirilir; birlikte başlayan ya da biten sorunlar tek mesajda gider.',
+    logRules: 'Log kuralları', lrAdd: 'Log kuralı', lrNew: 'Yeni log kuralı', lrEdit: 'Log kuralını düzenle', lrNone: 'Henüz log kuralı yok.',
+    lrHint: 'Her kural, bir Elasticsearch veri kaynağında sorgusuna uyan log satırlarını son bir süre için dakikada bir sayar; izin verdiğinden fazlası uyarı olur. Pod’lar çalışmaya devam ederken bozulan şeyleri yakalar.',
+    lrNoSource: 'Önce Keşfet’te bir Elasticsearch veri kaynağı bağlayın.',
+    lrName: 'Ad', lrSource: 'Veri kaynağı', lrIndex: 'İndeks', lrIndexHint: 'veri kaynağınınki', lrQuery: 'Sorgu',
+    lrQueryHelp: 'Keşfet’teki gibi Lucene sözdizimi: log.level:ERROR AND kubernetes.namespace:shop',
+    lrWindow: 'Sayılacak süre: son', lrAbove: 'Şundan fazlaysa uyar', lrAboveHelp: 'satır; 0, tek satırda bile uyarır.', lrSeverity: 'Önem',
+    lrLast: 'Son sayım', lrLimit: 'Sınır', lrIn: '{1} içinde {0} satırdan fazla', lrState: 'Durum',
+    lrFiring: 'sınırı aştı', lrOk: 'sınırın altında', lrWaiting: 'henüz sayılmadı', lrFailed: 'sayılamadı',
+    lrTry: 'Şimdi say', lrTried: 'Son {1} içinde {0} satır.', lrSaved: 'Log kuralı kaydedildi.',
+    lrRemoveTitle: 'Log kuralını kaldır', lrRemoveConfirm: '{0} log kuralı uyarısıyla birlikte kaldırılsın mı?', lrRemoved: 'Log kuralı kaldırıldı.',
     appmetrics: 'Metrikler', 'tab.scrape': 'Metrikler', 'capMissing.scrape': 'Bu cluster’ın agent’ı podların metriklerini okumuyor (KARTAL_POD_METRICS=false).',
     scrapeHint: 'Uygulamalar çoğu zaman istek, hata ya da kuyruk uzunluğu gibi kendi metriklerini :9100/metrics gibi bir adreste yayınlar. Portu seçip okuyun.',
     readMetrics: 'Oku', port: 'Port', path: 'Yol', metricsFilter: 'Metriklerde ara', nSeries: '{0} seri', moreSeries: '… ve {0} seri daha',
@@ -3175,7 +3197,7 @@ function renderAlerts(st) {
     h('td', null, pill(t(a.severity), a.severity === 'critical' ? 'bad' : 'warn'),
       a.silenced ? h('span', { class: 'badge', title: t('silHelp') }, t('silencedBadge')) : null),
     h('td', null, t('alert.' + a.kind)),
-    h('td', null, a.cluster || h('a', { href: routeHash({ view: 'uptime' }) }, t('uptime'))),
+    h('td', null, a.cluster || (a.kind === 'LogLimit' ? t('logRules') : h('a', { href: routeHash({ view: 'uptime' }) }, t('uptime')))),
     h('td', null, a.namespace ? a.namespace + '/' : '', alertObject(a)),
     h('td', null, a.detail),
     h('td', null, age(a.since)),
@@ -3196,12 +3218,13 @@ function renderAlerts(st) {
       h('thead', null, h('tr', null, ['severity', 'problem', 'cluster', 'object', 'detail', 'since'].concat(notify ? ['notified'] : []).map(k => h('th', null, t('col.' + k))), h('th'))),
       h('tbody', null, active.map(alertRow))) : h('div', { class: 'ok-note' }, '✓ ' + t('noAlerts'))),
     silencesPanel(st.silences || []),
+    logRulesPanel(st.logRules),
     recent.length ? panel(t('alertsRecent'), h('table', null,
       h('thead', null, h('tr', null, ['time', 'problem', 'cluster', 'object', 'detail'].map(k => h('th', null, t('col.' + k))))),
       h('tbody', null, recent.slice(0, 100).map(a => h('tr', null,
         h('td', null, age(a.resolved || a.since), ' ', h('span', { class: a.resolved ? 'status-ok' : 'status-bad' }, a.resolved ? t('resolvedAt') : t('startedAt'))),
         h('td', null, t('alert.' + a.kind)),
-        h('td', null, a.cluster || t('uptime')),
+        h('td', null, a.cluster || t(a.kind === 'LogLimit' ? 'logRules' : 'uptime')),
         h('td', null, a.namespace ? a.namespace + '/' : '', a.object),
         h('td', null, a.detail)))))) : null,
     st.deliveries.length ? panel(t('deliveries'), h('table', null,
@@ -3215,7 +3238,7 @@ function renderAlerts(st) {
 // ---- silences
 
 const ALERT_KINDS = ['AgentOffline', 'NodeNotReady', 'NodePressure', 'NodeDiskFilling', 'PodFailing', 'WorkloadDegraded', 'JobFailed',
-  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'RolloutStuck'];
+  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'LogLimit', 'RolloutStuck'];
 const SIL_FOR = [['1h', 3600e3], ['4h', 4 * 3600e3], ['1d', 86400e3], ['7d', 7 * 86400e3]];
 
 // maySilence tells whether the user may set or end a silence over a
@@ -3317,6 +3340,129 @@ async function endSilence(x) {
     return;
   }
   toast(t('silEnded'));
+  refresh();
+}
+
+// ---- log rules
+
+const LR_WINDOWS = [60, 300, 900, 1800, 3600, 21600, 86400];
+
+// logRulesPanel lists the log rules with what each last counted. It is
+// left out on a server without them.
+function logRulesPanel(rules) {
+  if (!rules) return null;
+  const admin = canEverywhere('admin');
+  const state = r => {
+    if (!r.last) return h('span', { class: 'muted' }, t('lrWaiting'));
+    if (r.last.error) return [pill(t('lrFailed'), 'warn'), h('div', { class: 'status-bad small-text' }, r.last.error)];
+    return pill(t(r.firing ? 'lrFiring' : 'lrOk'), r.firing ? 'bad' : 'ok');
+  };
+  return panel(t('logRules') + (rules.length ? ' (' + rules.length + ')' : ''), [
+    h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('lrHint')), h('span', { class: 'grow' }),
+      admin ? button('+ ' + t('lrAdd'), () => logRuleDialog(null)) : null),
+    rules.length ? h('table', null,
+      h('thead', null, h('tr', null, h('th', null, t('lrName')), h('th', null, t('lrQuery')), h('th', { class: 'num' }, t('lrLast')),
+        h('th', null, t('lrLimit')), h('th', null, t('lrState')), h('th'))),
+      h('tbody', null, rules.map(r => h('tr', { class: r.firing && r.severity === 'critical' ? 'problem' : null },
+        h('td', null, h('strong', null, r.name), h('div', { class: 'muted small-text' }, t(r.severity))),
+        h('td', null, mono(r.query), h('div', { class: 'muted small-text' }, (r.sourceName || t('exSourceGone')) + (r.index ? ' · ' + r.index : ''))),
+        h('td', { class: 'num' }, r.last && !r.last.error ? String(r.last.count) : '—',
+          r.last ? h('div', { class: 'muted small-text' }, age(r.last.time)) : null),
+        h('td', null, t('lrIn', r.above, span(r.window * 1000))),
+        h('td', null, state(r)),
+        h('td', { class: 'actions-cell' }, admin ? [button(t('edit'), () => logRuleDialog(r)), button(t('dsRemove'), () => removeLogRule(r), 'danger')] : null)))))
+      : h('div', { class: 'empty-note' }, t('lrNone')),
+  ]);
+}
+
+// logRuleDialog makes a log rule or changes one; Count now tells what it
+// would find before it is saved.
+async function logRuleDialog(r) {
+  let sources;
+  try {
+    sources = (await api('datasources')).filter(s => s.type === 'elasticsearch');
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  // A rule whose source is gone still shows where it counted.
+  if (r && !sources.some(s => s.id === r.source)) sources.push({ id: r.source, name: t('exSourceGone') });
+  if (!sources.length) {
+    toast(t('lrNoSource'), true);
+    return;
+  }
+  const name = h('input', { type: 'text', value: r ? r.name : '', maxlength: '100', autocomplete: 'off', spellcheck: 'false' });
+  const source = h('select', null, sources.map(s => h('option', { value: s.id, selected: !!r && s.id === r.source }, s.name)));
+  const index = h('input', { type: 'text', class: 'mono', value: (r && r.index) || '', placeholder: t('lrIndexHint'), autocomplete: 'off', spellcheck: 'false' });
+  const query = h('textarea', { class: 'mono', rows: '2', spellcheck: 'false', maxlength: '2000', placeholder: 'log.level:ERROR' });
+  query.value = r ? r.query : '';
+  const every = r ? r.window : 300;
+  // A rule set through the API may count over another while; it stays.
+  const windows = [...new Set([...LR_WINDOWS, every])].sort((a, b) => a - b);
+  const windowSel = h('select', null, windows.map(s => h('option', { value: String(s), selected: s === every }, span(s * 1000))));
+  const above = h('input', { type: 'number', min: '0', step: '1', value: String(r ? r.above : 0) });
+  const severity = h('select', null, ['warning', 'critical'].map(s => h('option', { value: s, selected: s === ((r && r.severity) || 'warning') }, t(s))));
+  const note = formNote();
+  const body = () => ({
+    name: name.value, source: source.value, index: index.value, query: query.value, window: Number(windowSel.value),
+    above: Math.max(0, Math.round(Number(above.value) || 0)), severity: severity.value,
+  });
+  const buttons = [];
+  const busy = on => buttons.forEach(b => { b.disabled = on; });
+  const tryIt = async () => {
+    busy(true);
+    note.say(t('trying'));
+    try {
+      // A rule is counted without its name; one not named yet is tried too.
+      const res = await api('logrules/try', { method: 'POST', body: Object.assign(body(), { name: name.value.trim() || '-' }) });
+      if (res.error) note.say('✗ ' + res.error, 'bad');
+      else note.say(t('lrTried', res.count, span(Number(windowSel.value) * 1000)), res.count > body().above ? 'bad' : 'ok');
+    } catch (e) {
+      if (e.status !== 401) note.say(e.message, 'bad');
+    }
+    busy(false);
+  };
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      busy(true);
+      try {
+        await api(r ? 'logrules/' + enc(r.id) : 'logrules', { method: r ? 'PUT' : 'POST', body: body() });
+        close();
+        toast(t('lrSaved'));
+        refresh();
+      } catch (err) {
+        if (err.status !== 401) note.say(err.message, 'bad');
+        busy(false);
+      }
+    },
+  },
+  h('h2', null, r ? t('lrEdit') : t('lrNew')), h('p', { class: 'muted small-text' }, t('lrHint')),
+  h('div', { class: 'field-row' }, dialogField(t('lrName'), name), dialogField(t('lrSource'), source)),
+  dialogField(t('lrQuery'), query, t('lrQueryHelp')),
+  h('div', { class: 'field-row' }, dialogField(t('lrWindow'), windowSel), dialogField(t('lrAbove'), above, t('lrAboveHelp'))),
+  h('div', { class: 'field-row' }, dialogField(t('lrSeverity'), severity), dialogField(t('lrIndex'), index)),
+  note,
+  h('div', { class: 'dialog-actions' },
+    buttons[0] = button(t('lrTry'), tryIt),
+    h('span', { class: 'grow' }),
+    buttons[1] = button(t('cancel'), () => close()),
+    buttons[2] = h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  (r ? query : name).focus();
+}
+
+async function removeLogRule(r) {
+  const ok = await ask({ title: t('lrRemoveTitle'), message: t('lrRemoveConfirm', r.name), confirm: t('dsRemove'), danger: true });
+  if (!ok) return;
+  try {
+    await api('logrules/' + enc(r.id), { method: 'DELETE' });
+  } catch (e) {
+    if (e.status !== 401) toast(e.message, true);
+    return;
+  }
+  toast(t('lrRemoved'));
   refresh();
 }
 

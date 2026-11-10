@@ -32,6 +32,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
+	"github.com/BerkeKartal/kartal-gozu/internal/logwatch"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 	"github.com/BerkeKartal/kartal-gozu/internal/silence"
 	"github.com/BerkeKartal/kartal-gozu/internal/sizing"
@@ -125,6 +126,8 @@ func run(log *slog.Logger) error {
 	mail := settings.NewMail(keeper, alerts.Email, env)
 	checks := uptime.New(keeper, alerts.Manager, log)
 	watches := appmetrics.New(keeper, alerts.Manager, log)
+	sources := datasource.NewManager(keeper)
+	logRules := logwatch.New(keeper, sources, alerts.Manager, log)
 	collector, err := metricStore(keeper, log)
 	if err != nil {
 		return err
@@ -208,9 +211,10 @@ func run(log *slog.Logger) error {
 		Watches:        watches,
 		Collect:        collector,
 		Sizing:         usage,
-		DataSources:    datasource.NewManager(keeper),
+		DataSources:    sources,
 		Dashboards:     dashboard.New(keeper),
 		Silences:       silences,
+		LogRules:       logRules,
 		SessionTTL:     sessionTTL,
 	}
 	if len(login) > 0 {
@@ -234,6 +238,7 @@ func run(log *slog.Logger) error {
 	go server.Watch(ctx)
 	checks.Start(ctx)
 	watches.Start(ctx)
+	logRules.Start(ctx)
 	if collector != nil {
 		// Samples still in memory are written every minute, and on the way out.
 		go collector.DB().Run(ctx, time.Minute)

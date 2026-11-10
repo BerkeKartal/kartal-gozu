@@ -42,6 +42,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/kube"
 	"github.com/BerkeKartal/kartal-gozu/internal/ldap"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
+	"github.com/BerkeKartal/kartal-gozu/internal/logwatch"
 	"github.com/BerkeKartal/kartal-gozu/internal/promtext"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
@@ -97,6 +98,8 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	// the demo's problems are only shown there.
 	email := alert.NewSwitchable("email")
 	alerts := alert.NewManager(30*time.Second, log, email)
+	// Critical problems are told sooner, as a server may be set up to.
+	alerts.AfterCritical = 10 * time.Second
 	keeper := settings.NewKeeper(ctx, settings.Memory{}, log)
 	silences := silence.New(keeper)
 	alerts.Silenced = func(a alert.Alert, now time.Time) bool {
@@ -123,6 +126,10 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	}
 	defer db.Close()
 	collector := collect.New(keeper, db, dataDir, log)
+	dataSources := datasource.NewManager(keeper)
+	// The demo counts its log rules more often than a server does.
+	logRules := logwatch.New(keeper, dataSources, alerts, log)
+	logRules.Every = 20 * time.Second
 	cfg := api.Config{
 		AgentTokens:    tokens,
 		AdminToken:     adminToken,
@@ -136,9 +143,10 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		History:        hist,
 		Sizing:         usage,
 		Collect:        collector,
-		DataSources:    datasource.NewManager(keeper),
+		DataSources:    dataSources,
 		Dashboards:     dashboard.New(keeper),
 		Silences:       silences,
+		LogRules:       logRules,
 	}
 	selfToken := adminToken
 	if withLDAP || adminToken != "" {
@@ -200,6 +208,17 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	if err := demoDashboard(ctx, cfg.Dashboards, esID); err != nil {
 		return err
 	}
+	// Two log rules: team-03's app fails a share of its requests, and
+	// nothing times out.
+	for _, r := range []settings.LogRule{
+		{Name: "Web app errors", Source: esID, Query: "log.level:ERROR", Window: 300, Above: 5},
+		{Name: "Upstream timeouts", Source: esID, Query: "message:timeout", Window: 900, Severity: "critical"},
+	} {
+		if _, err := logRules.Add(ctx, r); err != nil {
+			return err
+		}
+	}
+	logRules.Start(ctx)
 
 	for i, c := range clusters {
 		kubeURL, err := serveFake(ctx, c.kube)

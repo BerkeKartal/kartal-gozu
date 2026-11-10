@@ -141,6 +141,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"indices": []string{"logs-demo"}, "fields": fields})
 	case strings.HasSuffix(r.URL.Path, "/_search") && r.Method == http.MethodPost:
 		s.search(w, r)
+	case strings.HasSuffix(r.URL.Path, "/_count") && r.Method == http.MethodPost:
+		s.count(w, r)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":{"root_cause":[{"type":"index_not_found_exception","reason":"no such index"}],"type":"index_not_found_exception","reason":"no such index"},"status":404}`))
@@ -153,23 +155,71 @@ func fail(w http.ResponseWriter, reason string) {
 		"root_cause": []any{map[string]any{"type": "parsing_exception", "reason": reason}}}, "status": 400})
 }
 
-// search is what Explore asks: a time range, a query string and terms
-// filters; the newest documents and a date histogram, by terms or not,
-// of a count or a statistic.
-func (s *Server) search(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Size  int `json:"size"`
-		Query struct {
-			Bool struct {
-				Filter []map[string]map[string]any `json:"filter"`
-			} `json:"bool"`
-		} `json:"query"`
-		Aggs map[string]json.RawMessage `json:"aggs"`
-	}
+// request is what is asked: a time range, a query string and terms
+// filters; for a search, how many documents and which aggregations.
+type request struct {
+	Size  int `json:"size"`
+	Query struct {
+		Bool struct {
+			Filter []map[string]map[string]any `json:"filter"`
+		} `json:"bool"`
+	} `json:"query"`
+	Aggs map[string]json.RawMessage `json:"aggs"`
+}
+
+// count is what a log rule asks: how many documents match.
+func (s *Server) count(w http.ResponseWriter, r *http.Request) {
+	var body request
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		fail(w, err.Error())
 		return
 	}
+	docs, err := s.matching(body)
+	if err != nil {
+		fail(w, err.Error())
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"count": len(docs)})
+}
+
+// search is what Explore asks: the newest documents and a date histogram,
+// by terms or not, of a count or a statistic.
+func (s *Server) search(w http.ResponseWriter, r *http.Request) {
+	var body request
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		fail(w, err.Error())
+		return
+	}
+	docs, err := s.matching(body)
+	if err != nil {
+		fail(w, err.Error())
+		return
+	}
+	out := map[string]any{"took": 1, "timed_out": false}
+	hits := []any{}
+	for i := len(docs) - 1; i >= 0 && len(hits) < body.Size; i-- {
+		hits = append(hits, map[string]any{"_index": "logs-demo", "_id": strconv.FormatUint(noise(docs[i].t, docs[i].flat["kubernetes.pod.name"]), 36),
+			"_source": docs[i].fields, "sort": []int64{docs[i].t}})
+	}
+	total := len(docs)
+	relation := "eq"
+	if total > 10000 {
+		total, relation = 10000, "gte"
+	}
+	out["hits"] = map[string]any{"total": map[string]any{"value": total, "relation": relation}, "hits": hits}
+	if len(body.Aggs) > 0 {
+		aggs, err := aggregate(body.Aggs, docs)
+		if err != nil {
+			fail(w, err.Error())
+			return
+		}
+		out["aggregations"] = aggs
+	}
+	json.NewEncoder(w).Encode(out)
+}
+
+// matching are the documents a request's filters keep, oldest first.
+func (s *Server) matching(body request) ([]doc, error) {
 	now := s.now()
 	from, to := now.Add(-keep).UnixMilli(), now.UnixMilli()
 	var match []func(doc) bool
@@ -190,8 +240,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 				q, _ := spec["query"].(string)
 				m, err := parseQuery(q)
 				if err != nil {
-					fail(w, err.Error())
-					return
+					return nil, err
 				}
 				match = append(match, m)
 			case "terms":
@@ -223,27 +272,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	out := map[string]any{"took": 1, "timed_out": false}
-	hits := []any{}
-	for i := len(docs) - 1; i >= 0 && len(hits) < body.Size; i-- {
-		hits = append(hits, map[string]any{"_index": "logs-demo", "_id": strconv.FormatUint(noise(docs[i].t, docs[i].flat["kubernetes.pod.name"]), 36),
-			"_source": docs[i].fields, "sort": []int64{docs[i].t}})
-	}
-	total := len(docs)
-	relation := "eq"
-	if total > 10000 {
-		total, relation = 10000, "gte"
-	}
-	out["hits"] = map[string]any{"total": map[string]any{"value": total, "relation": relation}, "hits": hits}
-	if len(body.Aggs) > 0 {
-		aggs, err := aggregate(body.Aggs, docs)
-		if err != nil {
-			fail(w, err.Error())
-			return
-		}
-		out["aggregations"] = aggs
-	}
-	json.NewEncoder(w).Encode(out)
+	return docs, nil
 }
 
 func aggregate(specs map[string]json.RawMessage, docs []doc) (map[string]any, error) {

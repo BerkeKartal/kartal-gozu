@@ -35,6 +35,7 @@ type Settings struct {
 	Email       Email        `json:"email"`
 	Checks      []Check      `json:"checks,omitempty"`
 	Silences    []Silence    `json:"silences,omitempty"`
+	LogRules    []LogRule    `json:"logRules,omitempty"`
 	Watches     []Watch      `json:"watches,omitempty"`
 	Collect     Collect      `json:"collect"`
 	DataSources []DataSource `json:"dataSources,omitempty"`

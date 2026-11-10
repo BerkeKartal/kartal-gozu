@@ -14,6 +14,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/history"
+	"github.com/BerkeKartal/kartal-gozu/internal/logwatch"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 )
@@ -391,9 +392,14 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	out := struct {
 		alert.State
 		Silences []settings.Silence `json:"silences"`
+		// LogRules is null on a server without them.
+		LogRules []logwatch.Status `json:"logRules"`
 	}{State: st, Silences: []settings.Silence{}}
 	if s.cfg.Silences != nil {
 		out.Silences = s.visibleSilences(u)
+	}
+	if s.cfg.LogRules != nil {
+		out.LogRules = s.cfg.LogRules.List()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

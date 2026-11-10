@@ -135,6 +135,7 @@ func (s Settings) clone() Settings {
 	s.Email.To = slices.Clone(s.Email.To)
 	s.Checks = slices.Clone(s.Checks)
 	s.Silences = slices.Clone(s.Silences)
+	s.LogRules = slices.Clone(s.LogRules)
 	s.Watches = slices.Clone(s.Watches)
 	for i, w := range s.Watches {
 		s.Watches[i] = w.clone()
