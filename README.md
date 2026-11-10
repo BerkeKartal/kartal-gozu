@@ -39,6 +39,9 @@ tunnel), and the server works under any URL path without configuration.
   webhook, with a message when they are resolved. E-mail is set up right on
   that page, and tried before it is saved. A silence, or a maintenance
   window set ahead, keeps them quiet while a deploy or a fix is under way.
+  Critical problems can go out sooner than the others and name the people
+  on call in Teams, and a restart of the server neither forgets the alerts
+  nor sends them again.
 - **Warnings before an outage.** Volumes that fill up, TLS certificates that
   are about to expire (in the cluster's Secrets and on any address), and URL
   checks that the server runs itself, with a 24-hour history for each.
@@ -569,6 +572,24 @@ start together, or end together, go out as one message per cluster, and
 resolved problems are sent too. Problems that came due while no channel was
 on are sent as soon as one is.
 
+Critical problems, such as a node that is not ready or a workload with
+nothing ready, can go out sooner: `KARTAL_ALERT_AFTER_CRITICAL` (for example
+`30s`) is how long they must last. A problem people were told of as a
+warning is sent once more when it becomes critical and stays so for that
+long.
+
+A notification that cannot be delivered is sent again after 5 and after 30
+seconds before it is given up, so a relay or a webhook that is away for a
+moment loses nothing; the Alerts page lists the last deliveries with what
+went wrong.
+
+With `KARTAL_DATA_DIR` set, the alerts are kept there (`alerts.json`): after
+a restart a problem is still there since it began, and whoever was told of
+it is not told again. What ended while the server was away is resolved by
+the first report of its cluster; the URL checks and watched metrics get
+five minutes to find their problems again before these count as resolved. Without the directory a restart starts over, and sends every
+problem that is still there once more.
+
 | Problem | When |
 |---|---|
 | Agent offline | the agent has been silent longer than `KARTAL_STALE_AFTER` |
@@ -595,7 +616,12 @@ Channels, any number of them together:
 
 - **Microsoft Teams:** `KARTAL_ALERT_TEAMS_URL`, the URL of a Teams workflow
   ("Post to a channel when a webhook request is received"). Messages are
-  Adaptive Cards.
+  Adaptive Cards. A post in a channel notifies nobody by itself: name the
+  people to mention in `KARTAL_ALERT_TEAMS_MENTIONS`, by sign-in name or
+  object ID, separated by commas and optionally with the name to show
+  (`Ada Lovelace <ada@example.org>, grace@example.org`). They are mentioned
+  when a critical problem starts, or when any does with
+  `KARTAL_ALERT_TEAMS_MENTION_ON=all`; never for what was resolved.
 - **E-mail:** set up on the Alerts page, by an admin (see below), or with
   `KARTAL_SMTP_ADDR` (`host:port`), `KARTAL_SMTP_FROM`, `KARTAL_SMTP_TO`
   (comma-separated), and optionally `KARTAL_SMTP_USERNAME` and
@@ -871,7 +897,10 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_COMMAND_TIMEOUT` | `20s` | How long a management call waits for the agent's answer |
 | `KARTAL_PUBLIC_URL` | — | The UI's address, for links in notifications |
 | `KARTAL_ALERT_AFTER` | `2m` | How long a problem lasts before it is notified |
+| `KARTAL_ALERT_AFTER_CRITICAL` | as `KARTAL_ALERT_AFTER` | How long a critical problem lasts before it is notified |
 | `KARTAL_ALERT_TEAMS_URL` | — | Microsoft Teams workflow URL |
+| `KARTAL_ALERT_TEAMS_MENTIONS` | — | People the Teams cards mention: sign-in names or object IDs, separated by commas, optionally as `Name <id>` |
+| `KARTAL_ALERT_TEAMS_MENTION_ON` | `critical` | `critical` mentions them when a critical problem starts, `all` when any does |
 | `KARTAL_ALERT_WEBHOOK_URL` | — | Any URL that accepts a JSON POST |
 | `KARTAL_ALERT_VOLUME_WARNING`, `_CRITICAL` | `85`, `95` | How full a volume may get, in percent |
 | `KARTAL_ALERT_NODE_DISK_WARNING`, `_CRITICAL` | `80`, `90` | How full a node's disk may get, in percent |
@@ -879,7 +908,7 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_SMTP_ADDR`, `_FROM`, `_TO`, `_USERNAME`, `_PASSWORD` / `_PASSWORD_FILE` | — | E-mail notifications; when set, the UI cannot change them |
 | `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI (e-mail, URL checks) |
 | `KARTAL_SETTINGS_FILE` | — | File that keeps them instead, outside Kubernetes |
-| `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store), and of the workloads' usage behind right-sizing (`sizing.json`); without it there is no store and the usage is kept in memory |
+| `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store), of the workloads' usage behind right-sizing (`sizing.json`) and of the alerts (`alerts.json`); without it there is no store, and the usage and the alerts are kept in memory |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ### Agent

@@ -3,9 +3,13 @@ package alert
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -41,6 +45,48 @@ func (r *recorder) wait(t *testing.T, want int) []Notification {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]Notification(nil), r.sent...)
+}
+
+// flaky is a channel whose first sends fail.
+type flaky struct {
+	mu    sync.Mutex
+	fails int
+	tries int
+}
+
+func (f *flaky) Name() string { return "flaky" }
+func (f *flaky) Send(context.Context, Notification) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tries++
+	if f.fails > 0 {
+		f.fails--
+		return errors.New("try later")
+	}
+	return nil
+}
+
+func TestFailedNotificationsAreSentAgain(t *testing.T) {
+	for _, c := range []struct {
+		fails, tries int
+		lost         bool
+	}{{0, 1, false}, {2, 3, false}, {5, 3, true}} {
+		f := &flaky{fails: c.fails}
+		m := NewManager(0, nil, f)
+		m.Retry = []time.Duration{time.Millisecond, time.Millisecond}
+		m.Observe("prod", broken(), time.Now())
+		var sent []Delivery
+		for i := 0; i < 400 && len(sent) == 0; i++ {
+			time.Sleep(5 * time.Millisecond)
+			sent = m.State().Deliveries
+		}
+		f.mu.Lock()
+		tries := f.tries
+		f.mu.Unlock()
+		if len(sent) != 1 || (sent[0].Error != "") != c.lost || tries != c.tries {
+			t.Errorf("a channel failing %d times: %d tries, deliveries %+v", c.fails, tries, sent)
+		}
+	}
 }
 
 func broken() *protocol.Snapshot {
@@ -361,5 +407,283 @@ func TestSilencedProblemsWait(t *testing.T) {
 	sent = rec.wait(t, 3)
 	if len(sent) != 3 || len(sent[2].Resolved) != 2 || len(sent[2].Firing) != 0 {
 		t.Errorf("resolved within a silence: %+v", sent)
+	}
+}
+
+func TestWarningsThatBecomeCriticalAreToldAgain(t *testing.T) {
+	rec := &recorder{}
+	m := NewManager(time.Minute, nil, rec)
+	m.AfterCritical = 10 * time.Second
+	start := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	web := func(ready int32) *protocol.Snapshot {
+		return &protocol.Snapshot{Workloads: []protocol.Workload{{Kind: "Deployment", Namespace: "a", Name: "web", Desired: 2, Ready: ready}}}
+	}
+	m.Observe("prod", web(1), start)
+	m.Observe("prod", web(1), start.Add(time.Minute))
+	if sent := rec.wait(t, 1); len(sent) != 1 || sent[0].Firing[0].Severity != warning {
+		t.Fatalf("the warning: %+v", sent)
+	}
+	// Nothing ready any more: critical, told once that has lasted too.
+	m.Observe("prod", web(0), start.Add(2*time.Minute))
+	m.Observe("prod", web(0), start.Add(2*time.Minute+5*time.Second))
+	if sent := rec.wait(t, 1); len(sent) != 1 {
+		t.Fatalf("told of a critical problem at once: %+v", sent)
+	}
+	m.Observe("prod", web(0), start.Add(2*time.Minute+10*time.Second))
+	sent := rec.wait(t, 2)
+	if len(sent) != 2 || len(sent[1].Firing) != 1 || sent[1].Firing[0].Severity != critical ||
+		sent[1].Firing[0].Detail != "0 of 2 ready (now critical)" || len(sent[1].Resolved) != 0 {
+		t.Fatalf("the warning that became critical: %+v", sent)
+	}
+	if a := m.State().Active[0]; a.Detail != "0 of 2 ready" || a.Escalated != nil || !a.Since.Equal(start) {
+		t.Errorf("the alert afterwards: %+v", a)
+	}
+	// Told once: it stays critical, gets better and worse for a moment.
+	m.Observe("prod", web(0), start.Add(3*time.Minute))
+	m.Observe("prod", web(1), start.Add(4*time.Minute))
+	m.Observe("prod", web(0), start.Add(5*time.Minute))
+	m.Observe("prod", web(1), start.Add(5*time.Minute+5*time.Second))
+	m.Observe("prod", web(1), start.Add(6*time.Minute))
+	if sent := rec.wait(t, 2); len(sent) != 2 {
+		t.Fatalf("told again: %+v", sent[2:])
+	}
+	m.Observe("prod", web(2), start.Add(7*time.Minute))
+	if sent := rec.wait(t, 3); len(sent) != 3 || len(sent[2].Resolved) != 1 {
+		t.Errorf("resolved: %+v", sent)
+	}
+}
+
+func TestCriticalProblemsAreToldSooner(t *testing.T) {
+	rec := &recorder{}
+	m := NewManager(2*time.Minute, nil, rec)
+	m.AfterCritical = 30 * time.Second
+	start := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+
+	m.Observe("prod", broken(), start)
+	m.Observe("prod", broken(), start.Add(30*time.Second))
+	sent := rec.wait(t, 1)
+	if len(sent) != 1 || len(sent[0].Firing) != 1 || sent[0].Firing[0].Kind != "NodeNotReady" {
+		t.Fatalf("after 30s only the critical problem is told: %+v", sent)
+	}
+	m.Observe("prod", broken(), start.Add(2*time.Minute))
+	sent = rec.wait(t, 2)
+	if len(sent) != 2 || len(sent[1].Firing) != 2 {
+		t.Fatalf("after 2m the warnings follow: %+v", sent)
+	}
+	if st := m.State(); st.After != "2m0s" || st.AfterCritical != "30s" {
+		t.Errorf("state: after %q, critical %q", st.After, st.AfterCritical)
+	}
+	// Without a time of their own, critical problems wait as the others.
+	if st := NewManager(time.Minute, nil).State(); st.AfterCritical != "" {
+		t.Errorf("critical wait shown without one: %q", st.AfterCritical)
+	}
+}
+
+func TestAlertsSurviveARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alerts.json")
+	known := func(c string) bool { return c == "prod" }
+	start := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+
+	rec := &recorder{}
+	m := NewManager(time.Minute, nil, rec)
+	if err := m.Restore(path, known, start); err != nil {
+		t.Fatalf("no file yet: %v", err)
+	}
+	m.Observe("prod", broken(), start)
+	m.Observe("gone", broken(), start)
+	m.Observe("prod", broken(), start.Add(time.Minute))
+	rec.wait(t, 1)
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing changed since: the file is left alone.
+	os.Remove(path)
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("saved again though nothing changed")
+	}
+	down := []Alert{{Kind: "URLDown", Severity: critical, Object: "web", Detail: "503"}, {Kind: "URLDown", Severity: critical, Object: "api", Detail: "503"}}
+	m.ObserveChecks(down, start.Add(90*time.Second))
+	m.ObserveChecks(down, start.Add(3*time.Minute))
+	m.ObserveRollouts("prod", map[string]string{"shop\x00Deployment/web": "1 of 3 ready after 10m"}, start.Add(3*time.Minute))
+	rec.wait(t, 2)
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After a restart the problems are there since they began, those told
+	// are not told again, and a cluster the server no longer has is gone.
+	rec2 := &recorder{}
+	m2 := NewManager(time.Minute, nil, rec2)
+	again := start.Add(4 * time.Minute)
+	if err := m2.Restore(path, known, again); err != nil {
+		t.Fatal(err)
+	}
+	// A stuck rollout is followed in memory: it cannot be found again.
+	st := m2.State()
+	if len(st.Active) != 5 || m2.ActiveCount("gone", nil) != 0 || m2.ActiveCount("", nil) != 2 {
+		t.Fatalf("restored: %+v", st.Active)
+	}
+	for _, a := range st.Active {
+		if a.Kind == RolloutStuck {
+			t.Errorf("a stuck rollout was restored: %+v", a)
+		}
+	}
+	for _, a := range st.Active {
+		if a.Cluster == "prod" && (!a.Since.Equal(start) || !a.Notified) {
+			t.Errorf("restored %s: since %s, notified %v", a.Kind, a.Since, a.Notified)
+		}
+	}
+	if len(st.Recent) == 0 {
+		t.Error("the recent ones were not restored")
+	}
+	m2.Observe("prod", broken(), start.Add(5*time.Minute))
+	// The checks run one after another: the first to answer does not end
+	// the alert of the one still to run, and once that answered too it is
+	// as it was. One that then answers well is resolved at once.
+	m2.ObserveChecks(down[:1], again.Add(10*time.Second))
+	m2.ObserveChecks(down, again.Add(20*time.Second))
+	if sent := rec2.wait(t, 0); len(sent) != 0 || m2.ActiveCount("", nil) != 2 {
+		t.Fatalf("told again after the restart: %+v, %d of the checks' alerts", sent, m2.ActiveCount("", nil))
+	}
+	m2.ObserveChecks(down[:1], again.Add(30*time.Second))
+	if sent := rec2.wait(t, 1); len(sent) != 1 || len(sent[0].Resolved) != 1 || sent[0].Resolved[0].Object != "api" {
+		t.Fatalf("a check that answers again after the restart: %+v", sent)
+	}
+	// What ended while the server was away is resolved by the next snapshot.
+	fixed := broken()
+	fixed.Nodes[0].Ready, fixed.Nodes[0].Pressure = true, nil
+	m2.Observe("prod", fixed, start.Add(6*time.Minute))
+	sent := rec2.wait(t, 2)
+	if len(sent) != 2 || len(sent[1].Resolved) != 1 || sent[1].Resolved[0].Kind != "NodeNotReady" {
+		t.Errorf("resolved after the restart: %+v", sent)
+	}
+
+	// A check that never ran again is given up after a while.
+	m4 := NewManager(time.Minute, nil, &recorder{})
+	if err := m4.Restore(path, known, again); err != nil {
+		t.Fatal(err)
+	}
+	m4.ObserveChecks(nil, again.Add(restoreHold-time.Second))
+	if n := m4.ActiveCount("", nil); n != 2 {
+		t.Errorf("%d of the checks' alerts while they are kept", n)
+	}
+	m4.ObserveChecks(nil, again.Add(restoreHold))
+	if n := m4.ActiveCount("", nil); n != 0 {
+		t.Errorf("%d of the checks' alerts were kept for good", n)
+	}
+
+	// A file that cannot be read is an error, and nothing is restored.
+	os.WriteFile(path, []byte("{not json"), 0o600)
+	m3 := NewManager(time.Minute, nil)
+	if err := m3.Restore(path, known, start); err == nil || len(m3.State().Active) != 0 {
+		t.Errorf("a broken file: %v, %d active", err, len(m3.State().Active))
+	}
+}
+
+func TestLogAlertsAreKeptApartFromChecks(t *testing.T) {
+	m := NewManager(0, nil, &recorder{})
+	now := time.Now()
+	m.ObserveLogs([]Alert{{Severity: warning, Object: "Database errors", Detail: "42 in 5m0s, more than 20"}}, nil, now)
+	m.ObserveChecks([]Alert{{Kind: "URLDown", Severity: critical, Object: "web", Detail: "503"}}, now)
+	if n := m.ActiveCount("", nil); n != 2 {
+		t.Fatalf("%d alerts of no cluster, want 2", n)
+	}
+	// Each round replaces its own alerts only.
+	m.ObserveChecks(nil, now)
+	if n := m.ActiveCount("", func(a Alert) bool { return a.Kind == LogLimit }); n != 1 {
+		t.Errorf("the checks' round took the log rule's alert: %d", n)
+	}
+	// A rule that could not be counted keeps its alert, and gets none.
+	m.ObserveLogs(nil, []string{"Database errors", "Timeouts"}, now)
+	if n := m.ActiveCount("", nil); n != 1 {
+		t.Errorf("%d alerts while the rules cannot be counted, want the one there was", n)
+	}
+	m.ObserveLogs(nil, nil, now)
+	if n := m.ActiveCount("", nil); n != 0 {
+		t.Errorf("still active: %d", n)
+	}
+}
+
+func TestTeamsMentions(t *testing.T) {
+	people, err := ParseMentions(" Ada Lovelace <ada@example.org>, grace@example.org ,, 3f2504e0-4f89-11d3-9a0c-0305e82c3301 ")
+	if err != nil || len(people) != 3 || people[0] != (Mention{ID: "ada@example.org", Name: "Ada Lovelace"}) ||
+		people[1] != (Mention{ID: "grace@example.org", Name: "grace"}) || people[2].ID != people[2].Name {
+		t.Fatalf("parsed %+v, %v", people, err)
+	}
+	if twice, err := ParseMentions("ada@example.org, Ada <ADA@example.org>"); err != nil || len(twice) != 1 {
+		t.Errorf("the same person twice: %+v, %v", twice, err)
+	}
+	many := ""
+	for i := 0; i < 21; i++ {
+		many += fmt.Sprintf("p%d@example.org,", i)
+	}
+	for _, bad := range []string{"Ada <>", "two words", "A<b> <ada@example.org>", "ada@one.example.org, ada@two.example.org", many} {
+		if _, err := ParseMentions(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	if none, err := ParseMentions(""); err != nil || len(none) != 0 {
+		t.Errorf("nobody: %+v, %v", none, err)
+	}
+
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+	}))
+	defer srv.Close()
+	teams := Teams{URL: srv.URL, Mentions: people[:2]}
+	critAlert := Alert{Kind: "NodeNotReady", Severity: critical, Object: "n1", Detail: "NotReady"}
+	warnAlert := Alert{Kind: "PodFailing", Severity: warning, Namespace: "a", Object: "p", Detail: "CrashLoopBackOff"}
+	send := func(tm Teams, n Notification) string {
+		t.Helper()
+		if err := tm.Send(context.Background(), n); err != nil {
+			t.Fatal(err)
+		}
+		return bodies[len(bodies)-1]
+	}
+	// A critical problem that starts names the people, each <at> text with
+	// the entity that makes it a mention.
+	body := send(teams, Notification{Cluster: "prod", Firing: []Alert{warnAlert, critAlert}})
+	var card struct {
+		Attachments []struct {
+			Content struct {
+				Body    []struct{ Text string } `json:"body"`
+				MSTeams struct {
+					Entities []struct {
+						Type, Text string
+						Mentioned  struct{ ID, Name string }
+					} `json:"entities"`
+				} `json:"msteams"`
+			} `json:"content"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal([]byte(body), &card); err != nil {
+		t.Fatal(err)
+	}
+	c := card.Attachments[0].Content
+	if len(c.MSTeams.Entities) != 2 || c.MSTeams.Entities[0].Type != "mention" || c.MSTeams.Entities[0].Text != "<at>Ada Lovelace</at>" ||
+		c.MSTeams.Entities[0].Mentioned.ID != "ada@example.org" || c.Body[len(c.Body)-1].Text != "<at>Ada Lovelace</at> <at>grace</at>" {
+		t.Errorf("mentions: %s", body)
+	}
+	// Warnings alone, and what was resolved, name nobody; unless every
+	// problem is to.
+	for name, n := range map[string]Notification{
+		"a warning": {Cluster: "prod", Firing: []Alert{warnAlert}},
+		"resolved":  {Cluster: "prod", Resolved: []Alert{critAlert}},
+	} {
+		if body := send(teams, n); strings.Contains(body, `"msteams"`) || strings.Contains(body, "grace") {
+			t.Errorf("%s mentions people: %s", name, body)
+		}
+	}
+	teams.MentionAll = true
+	if body := send(teams, Notification{Cluster: "prod", Firing: []Alert{warnAlert}}); !strings.Contains(body, `"msteams"`) || !strings.Contains(body, "grace@example.org") {
+		t.Errorf("a warning, with everything mentioned: %s", body)
+	}
+	if body := send(teams, Notification{Cluster: "prod", Resolved: []Alert{critAlert}}); strings.Contains(body, `"msteams"`) {
+		t.Errorf("resolved, with everything mentioned: %s", body)
 	}
 }

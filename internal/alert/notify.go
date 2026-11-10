@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/smtp"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -48,6 +49,71 @@ func nonNil(a []Alert) []Alert {
 type Teams struct {
 	URL    string
 	Client *http.Client
+	// Mentions are the people a card names, so that Teams notifies them: a
+	// post in a channel notifies nobody by itself. They are named when a
+	// critical problem starts, or when any does with MentionAll; never for
+	// what was resolved.
+	Mentions   []Mention
+	MentionAll bool
+}
+
+// Mention is a person of Teams: the sign-in name (such as
+// ada@example.org) or the directory's object ID, and the name shown.
+type Mention struct {
+	ID   string
+	Name string
+}
+
+// maxMentions keeps a card from paging a whole directory.
+const maxMentions = 20
+
+// ParseMentions reads people to mention, separated by commas: a sign-in
+// name or an object ID, optionally as "Name <id>".
+func ParseMentions(list string) ([]Mention, error) {
+	var out []Mention
+	for _, item := range strings.Split(list, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		m := Mention{ID: item}
+		if open := strings.LastIndex(item, "<"); open >= 0 && strings.HasSuffix(item, ">") {
+			m.Name, m.ID = strings.TrimSpace(item[:open]), strings.TrimSpace(item[open+1:len(item)-1])
+		}
+		if m.ID == "" || len(m.ID) > 256 || strings.ContainsAny(m.ID, " 	<>\"") {
+			return nil, fmt.Errorf("%q is not a person to mention: give a sign-in name or an object ID, optionally as \"Name <id>\"", item)
+		}
+		if m.Name == "" {
+			m.Name, _, _ = strings.Cut(m.ID, "@")
+		}
+		// The name goes between <at> tags, in the card and in its entity.
+		if len(m.Name) > 100 || strings.ContainsAny(m.Name, "<>") {
+			return nil, fmt.Errorf("the name %q may be up to 100 characters, without < or >", m.Name)
+		}
+		// Each person once; Teams tells a card's mentions apart by their
+		// text, so two people cannot go by one name.
+		if slices.ContainsFunc(out, func(o Mention) bool { return strings.EqualFold(o.ID, m.ID) }) {
+			continue
+		}
+		if slices.ContainsFunc(out, func(o Mention) bool { return o.Name == m.Name }) {
+			return nil, fmt.Errorf("two people are named %q: give each a name of their own, as \"Name <id>\"", m.Name)
+		}
+		out = append(out, m)
+	}
+	if len(out) > maxMentions {
+		return nil, fmt.Errorf("at most %d people can be mentioned", maxMentions)
+	}
+	return out, nil
+}
+
+// mentioned are the people a notification names.
+func (t Teams) mentioned(n Notification) []Mention {
+	for _, a := range n.Firing {
+		if t.MentionAll || a.Severity == critical {
+			return t.Mentions
+		}
+	}
+	return nil
 }
 
 func (t Teams) Name() string { return "teams" }
@@ -59,8 +125,21 @@ func (t Teams) Send(ctx context.Context, n Notification) error {
 	}
 	card := map[string]any{
 		"$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-		"type":    "AdaptiveCard", "version": "1.4", "body": body,
+		"type":    "AdaptiveCard", "version": "1.4",
 	}
+	if people := t.mentioned(n); len(people) > 0 {
+		// Teams makes a mention of each <at> text that an entity names.
+		var tags []string
+		var entities []map[string]any
+		for _, p := range people {
+			tag := "<at>" + p.Name + "</at>"
+			tags = append(tags, tag)
+			entities = append(entities, map[string]any{"type": "mention", "text": tag, "mentioned": map[string]string{"id": p.ID, "name": p.Name}})
+		}
+		body = append(body, map[string]any{"type": "TextBlock", "wrap": true, "text": strings.Join(tags, " ")})
+		card["msteams"] = map[string]any{"entities": entities}
+	}
+	card["body"] = body
 	if n.URL != "" {
 		card["actions"] = []map[string]any{{"type": "Action.OpenUrl", "title": "Kartal Gözü", "url": n.URL}}
 	}

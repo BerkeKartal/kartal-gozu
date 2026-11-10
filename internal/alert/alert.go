@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,12 @@ type Alert struct {
 	Resolved  *time.Time `json:"resolved,omitempty"`
 	// Silenced says a silence covers it now, so it is not notified.
 	Silenced bool `json:"silenced,omitempty"`
+	// Escalated is when a problem people were told of as a warning became
+	// critical, until they are told of that too.
+	Escalated *time.Time `json:"escalated,omitempty"`
+	// restored says it was read from the alerts' file and nothing has
+	// found it again since (keep.go).
+	restored bool
 }
 
 func (a Alert) key() string {
@@ -65,6 +72,7 @@ var titles = map[string]string{
 	"CertificateExpiring": "Certificate expiring",
 	"URLDown":             "Address not answering",
 	"MetricLimit":         "Metric past its limit",
+	"LogLimit":            "Log lines past their limit",
 	"RolloutStuck":        "Rollout stuck",
 }
 
@@ -167,9 +175,17 @@ func enabled(n Notifier) bool {
 
 // Manager keeps the current alerts and sends notifications.
 type Manager struct {
-	// After is how long a problem must last before it is notified.
-	After     time.Duration
-	Notifiers []Notifier
+	// After is how long a problem must last before it is notified;
+	// AfterCritical, when set, how long a critical one must: people want to
+	// hear of a node that is gone sooner than of a disk filling up.
+	After         time.Duration
+	AfterCritical time.Duration
+	Notifiers     []Notifier
+	// Retry is how long a channel's sender waits before it sends a
+	// notification that failed once more, each time; when the last try
+	// fails too, the notification is given up. A relay or a webhook that
+	// is away for a moment then loses nothing.
+	Retry []time.Duration
 	// PublicURL, when set, is linked from notifications.
 	PublicURL string
 	Log       *slog.Logger
@@ -192,6 +208,13 @@ type Manager struct {
 	active map[string]*Alert
 	recent []Alert // newest last, at most keepRecent
 	sent   []Delivery
+	// path is the file the alerts are kept in, when they are (Restore);
+	// changed says they are not as the file has them.
+	path    string
+	changed bool
+	// holdUntil is until when the restored alerts nothing found again are
+	// kept (restoreHold).
+	holdUntil time.Time
 	// One queue and one sender per channel, so a problem's "resolved"
 	// message never overtakes the message that announced it.
 	start  sync.Once
@@ -213,7 +236,8 @@ const (
 )
 
 func NewManager(after time.Duration, log *slog.Logger, notifiers ...Notifier) *Manager {
-	return &Manager{After: after, Notifiers: notifiers, Log: log, active: map[string]*Alert{}}
+	return &Manager{After: after, Notifiers: notifiers, Log: log, active: map[string]*Alert{},
+		Retry: []time.Duration{5 * time.Second, 30 * time.Second}}
 }
 
 // Observe compares a cluster's snapshot with the alerts it had so far.
@@ -300,7 +324,7 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 	}
 	m.update(cluster, found, func(a *Alert) bool {
 		return a.Kind != "AgentOffline" && a.Kind != MetricLimit && a.Kind != RolloutStuck
-	}, now)
+	}, true, now)
 }
 
 // VolumeLevels are how full a volume may get, in percent, before it is a
@@ -434,7 +458,23 @@ func (m *Manager) ObserveChecks(alerts []Alert, now time.Time) {
 		a.Cluster = ""
 		found[a.key()] = a
 	}
-	m.update("", found, func(*Alert) bool { return true }, now)
+	m.update("", found, func(a *Alert) bool { return a.Kind != LogLimit }, false, now)
+}
+
+// LogLimit is the kind of alert for a log rule: more lines match it than
+// it allows.
+const LogLimit = "LogLimit"
+
+// ObserveLogs replaces the alerts of the log rules, which belong to no
+// cluster either. unsure names the rules that could not be counted: their
+// alerts stay as they are, neither raised nor resolved.
+func (m *Manager) ObserveLogs(alerts []Alert, unsure []string, now time.Time) {
+	found := map[string]Alert{}
+	for _, a := range alerts {
+		a.Cluster, a.Kind = "", LogLimit
+		found[a.key()] = a
+	}
+	m.update("", found, func(a *Alert) bool { return a.Kind == LogLimit && !slices.Contains(unsure, a.Object) }, false, now)
 }
 
 // MetricLimit is the kind of alert for a watched metric past its limit.
@@ -447,7 +487,7 @@ func (m *Manager) ObserveMetrics(cluster string, alerts []Alert, now time.Time) 
 		a.Cluster, a.Kind = cluster, MetricLimit
 		found[a.key()] = a
 	}
-	m.update(cluster, found, func(a *Alert) bool { return a.Kind == MetricLimit }, now)
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind == MetricLimit }, false, now)
 }
 
 // RolloutStuck is the kind of alert for a new version that does not get
@@ -463,7 +503,7 @@ func (m *Manager) ObserveRollouts(cluster string, stuck map[string]string, now t
 		a := Alert{Cluster: cluster, Kind: RolloutStuck, Severity: warning, Namespace: ns, Object: object, Detail: detail}
 		found[a.key()] = a
 	}
-	m.update(cluster, found, func(a *Alert) bool { return a.Kind == RolloutStuck }, now)
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind == RolloutStuck }, true, now)
 }
 
 // AgentStatus records whether a cluster's agent is reporting.
@@ -474,12 +514,16 @@ func (m *Manager) AgentStatus(cluster string, online bool, lastSeen, now time.Ti
 			Detail: "no report since " + lastSeen.UTC().Format(time.RFC3339)}
 		found[a.key()] = a
 	}
-	m.update(cluster, found, func(a *Alert) bool { return a.Kind == "AgentOffline" }, now)
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind == "AgentOffline" }, true, now)
 }
 
 // update replaces a cluster's alerts of the kinds owns selects with found,
-// then sends what became due.
-func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Alert) bool, now time.Time) {
+// then sends what became due. complete says found is all there is to know,
+// as a snapshot is; what looks at one thing after another (the address
+// checks, the watches, the log rules) has not seen everything right after
+// a restart, so the alerts read from the file that it has not found yet
+// are kept a while (restoreHold) rather than called resolved.
+func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Alert) bool, complete bool, now time.Time) {
 	m.mu.Lock()
 	var resolved []Alert
 	for k, a := range m.active {
@@ -489,7 +533,11 @@ func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Aler
 		if _, still := found[k]; still {
 			continue
 		}
+		if a.restored && !complete && now.Before(m.holdUntil) {
+			continue
+		}
 		delete(m.active, k)
+		m.changed = true
 		t := now
 		a.Resolved = &t
 		m.remember(*a)
@@ -499,22 +547,48 @@ func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Aler
 	}
 	for k, a := range found {
 		if cur, ok := m.active[k]; ok {
-			cur.Detail, cur.Severity = a.Detail, a.Severity
+			if cur.Detail != a.Detail || cur.Severity != a.Severity {
+				// Whoever was told of a warning hears of it once more when
+				// it becomes critical, unless it is over before the wait is.
+				switch {
+				case a.Severity != critical:
+					cur.Escalated = nil
+				case cur.Severity != critical && cur.Notified:
+					t := now
+					cur.Escalated = &t
+				}
+				cur.Detail, cur.Severity = a.Detail, a.Severity
+				m.changed = true
+			}
+			cur.restored = false
 			continue
 		}
 		a.Since = now
 		m.active[k] = &a
+		m.changed = true
 	}
 	// With no channel on, due problems wait: a channel turned on later (such
 	// as e-mail set up in the UI) gets them with the next snapshot.
 	listening := len(m.Channels()) > 0
 	var firing []Alert
 	for _, a := range m.active {
-		if listening && a.Cluster == cluster && !a.Notified && now.Sub(a.Since) >= m.After && !m.silenced(*a, now) {
-			a.Notified = true
-			firing = append(firing, *a)
-			m.remember(*a)
+		if !listening || a.Cluster != cluster || m.silenced(*a, now) {
+			continue
 		}
+		switch {
+		case !a.Notified && now.Sub(a.Since) >= m.wait(a.Severity):
+			a.Notified, a.Escalated = true, nil
+			firing = append(firing, *a)
+		case a.Escalated != nil && now.Sub(*a.Escalated) >= m.wait(critical):
+			a.Escalated = nil
+			x := *a
+			x.Detail += " (now critical)"
+			firing = append(firing, x)
+		default:
+			continue
+		}
+		m.changed = true
+		m.remember(*a)
 	}
 	m.mu.Unlock()
 	if len(firing)+len(resolved) > 0 {
@@ -522,6 +596,14 @@ func (m *Manager) update(cluster string, found map[string]Alert, owns func(*Aler
 		sortAlerts(resolved)
 		m.notify(Notification{Cluster: cluster, Firing: firing, Resolved: resolved, URL: m.PublicURL})
 	}
+}
+
+// wait is how long a problem of a severity must last before it is notified.
+func (m *Manager) wait(severity string) time.Duration {
+	if severity == critical && m.AfterCritical > 0 {
+		return m.AfterCritical
+	}
+	return m.After
 }
 
 func (m *Manager) silenced(a Alert, now time.Time) bool {
@@ -577,12 +659,22 @@ func (m *Manager) notify(n Notification) {
 }
 
 func (m *Manager) deliver(nt Notifier, n Notification) {
-	if !enabled(nt) {
-		return // turned off since the notification was queued
+	var err error
+	for try := 0; ; try++ {
+		if !enabled(nt) {
+			return // turned off since the notification was queued
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+		err = nt.Send(ctx, n)
+		cancel()
+		if err == nil || try >= len(m.Retry) {
+			break
+		}
+		if m.Log != nil {
+			m.Log.Warn("notification failed; it is sent again", "channel", nt.Name(), "in", m.Retry[try].String(), "err", err)
+		}
+		time.Sleep(m.Retry[try])
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
-	defer cancel()
-	err := nt.Send(ctx, n)
 	d := Delivery{Time: time.Now().UTC(), Channel: nt.Name(), Title: n.Title()}
 	if err != nil {
 		d.Error = err.Error()
@@ -643,12 +735,17 @@ type State struct {
 	Channels   []string   `json:"channels"`
 	Deliveries []Delivery `json:"deliveries"`
 	After      string     `json:"after"`
+	// AfterCritical is given when critical problems wait another time.
+	AfterCritical string `json:"afterCritical,omitempty"`
 }
 
 func (m *Manager) State() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := State{Enabled: true, Active: []Alert{}, Recent: []Alert{}, Channels: m.Channels(), Deliveries: []Delivery{}, After: m.After.String()}
+	if m.AfterCritical > 0 && m.AfterCritical != m.After {
+		st.AfterCritical = m.AfterCritical.String()
+	}
 	now := time.Now()
 	for _, a := range m.active {
 		x := *a

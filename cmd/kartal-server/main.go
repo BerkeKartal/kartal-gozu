@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -135,6 +136,12 @@ func run(log *slog.Logger) error {
 		if usage, err = sizing.Open(filepath.Join(dir, "sizing.json")); err != nil {
 			log.Warn("the workloads' usage could not be read; it starts over", "err", err)
 		}
+		// The alerts are kept there too, so that a restart neither forgets
+		// since when a problem lasts nor tells of it again.
+		known := func(cluster string) bool { return slices.Contains(clusters, cluster) }
+		if err := alerts.Restore(filepath.Join(dir, "alerts.json"), known, time.Now()); err != nil {
+			log.Warn("the alerts could not be read; they start over", "err", err)
+		}
 	}
 	keeper.OnLoad(mail.Reload)
 	keeper.OnLoad(checks.Reload)
@@ -246,6 +253,26 @@ func run(log *slog.Logger) error {
 	}
 	// Settings that could not be read at the start are read again.
 	go keeper.Retry(ctx, time.Minute)
+	// The alerts are written when they changed, and on the way out.
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := alerts.Save(); err != nil {
+					log.Warn("saving the alerts", "err", err)
+				}
+			}
+		}
+	}()
+	defer func() {
+		if err := alerts.Save(); err != nil {
+			log.Warn("saving the alerts", "err", err)
+		}
+	}()
 	// The workloads' usage is written every ten minutes, and on the way out.
 	go func() {
 		t := time.NewTicker(10 * time.Minute)
@@ -310,17 +337,33 @@ func notifications(log *slog.Logger) (alerting, error) {
 	if err != nil {
 		return alerting{}, err
 	}
+	// Critical problems may be told sooner than the others.
+	afterCritical, err := config.Duration("KARTAL_ALERT_AFTER_CRITICAL", after)
+	if err != nil {
+		return alerting{}, err
+	}
 	// Teams and other webhooks are often reached through an outbound proxy.
 	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
 	var notifiers []alert.Notifier
 	if u := config.String("KARTAL_ALERT_TEAMS_URL", ""); u != "" {
-		notifiers = append(notifiers, alert.Teams{URL: u, Client: client})
+		// The people a card names: a post in a channel notifies nobody
+		// by itself.
+		mentions, err := alert.ParseMentions(config.String("KARTAL_ALERT_TEAMS_MENTIONS", ""))
+		if err != nil {
+			return alerting{}, fmt.Errorf("KARTAL_ALERT_TEAMS_MENTIONS: %w", err)
+		}
+		on := config.String("KARTAL_ALERT_TEAMS_MENTION_ON", "critical")
+		if on != "critical" && on != "all" {
+			return alerting{}, fmt.Errorf("KARTAL_ALERT_TEAMS_MENTION_ON: %q is neither critical nor all", on)
+		}
+		notifiers = append(notifiers, alert.Teams{URL: u, Client: client, Mentions: mentions, MentionAll: on == "all"})
 	}
 	if u := config.String("KARTAL_ALERT_WEBHOOK_URL", ""); u != "" {
 		notifiers = append(notifiers, alert.Webhook{URL: u, Client: client})
 	}
 	email := alert.NewSwitchable("email")
 	m := alert.NewManager(after, log, append(notifiers, email)...)
+	m.AfterCritical = afterCritical
 	m.PublicURL = config.String("KARTAL_PUBLIC_URL", "")
 	if m.VolumeWarning, err = config.Number("KARTAL_ALERT_VOLUME_WARNING", 85, 1, 100); err != nil {
 		return alerting{}, err
