@@ -15,9 +15,9 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
+	"github.com/BerkeKartal/kartal-gozu/internal/netcheck"
 	"github.com/BerkeKartal/kartal-gozu/internal/settings"
 )
 
@@ -171,11 +171,11 @@ func describe(err error, timeout time.Duration) string {
 		return "the name " + dns.Name + " could not be resolved"
 	case errors.Is(err, http.ErrSchemeMismatch):
 		return "the address answers over http, not https"
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case netcheck.Refused(err):
 		return "connection refused: nothing listens there"
-	case errors.Is(err, syscall.ECONNRESET):
+	case netcheck.Reset(err):
 		return "the connection was reset"
-	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
+	case netcheck.Unreachable(err):
 		return "the host cannot be reached"
 	case errors.As(err, &op) && op.Err != nil:
 		return op.Err.Error()

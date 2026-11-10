@@ -119,7 +119,7 @@ func TestMonitor(t *testing.T) {
 	keeper := settings.NewKeeper(ctx, settings.Memory{}, nil)
 	m := New(keeper, alerts, nil)
 	fake := &fakeProbe{answers: map[string]Result{
-		"https://web.example.org": {OK: true, Status: 200, Millis: 40, Cert: &Cert{Subject: "web.example.org", NotAfter: time.Now().Add(5 * 24 * time.Hour)}},
+		"https://web.example.org": {OK: true, Status: 200, Millis: 40, Cert: &Cert{Subject: "web.example.org", NotAfter: time.Now().Add(5*24*time.Hour + time.Hour)}},
 		"https://api.example.org": {Status: 503, Error: "answered 503 Service Unavailable"},
 	}}
 	m.Probe, m.Jitter = fake.probe, func(time.Duration) time.Duration { return 0 }
@@ -155,7 +155,7 @@ func TestMonitor(t *testing.T) {
 	for _, a := range st.Active {
 		kinds[a.Kind] = a.Object + " " + a.Detail
 	}
-	if !strings.HasPrefix(kinds["URLDown"], "API answered 503") || !strings.HasPrefix(kinds["CertificateExpiring"], "Web web.example.org: expires in 4 days") {
+	if !strings.HasPrefix(kinds["URLDown"], "API answered 503") || !strings.HasPrefix(kinds["CertificateExpiring"], "Web web.example.org: expires in 5 days") {
 		t.Errorf("alerts: %v", kinds)
 	}
 

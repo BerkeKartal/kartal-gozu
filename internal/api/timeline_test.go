@@ -37,7 +37,8 @@ func TestTimelineAndReleases(t *testing.T) {
 	report(protocol.Snapshot{Workloads: []protocol.Workload{a, b}, Nodes: []protocol.Node{{Name: "n1", Ready: true}}})
 	a.Images, b.Images = []string{"web:2"}, []string{"api:2"}
 	report(protocol.Snapshot{Workloads: []protocol.Workload{a, b}, Nodes: []protocol.Node{{Name: "n1", Ready: true, Unschedulable: true}}})
-	s.audit.add(AuditEntry{Time: time.Now().UTC(), User: "admin", Role: "admin", Action: "restart", Cluster: "prod", Namespace: "team-a", Object: "deployment/web", OK: true})
+	// A moment later, also where the clock ticks slowly.
+	s.audit.add(AuditEntry{Time: time.Now().UTC().Add(time.Second), User: "admin", Role: "admin", Action: "restart", Cluster: "prod", Namespace: "team-a", Object: "deployment/web", OK: true})
 
 	var all []changes.Change
 	json.Unmarshal(do(s, "GET", "/api/v1/changes", adminTok, "").Body.Bytes(), &all)

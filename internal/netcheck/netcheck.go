@@ -113,6 +113,32 @@ func try(ctx context.Context, d Dialer, target string) protocol.Reach {
 	return r
 }
 
+// Windows has numbers of its own for these failures, which the syscall
+// package's names do not match there.
+const (
+	wsaeconnreset   = syscall.Errno(10054)
+	wsaeconnrefused = syscall.Errno(10061)
+	wsaenetunreach  = syscall.Errno(10051)
+	wsaehostunreach = syscall.Errno(10065)
+)
+
+// Refused reports whether a connection failed because nothing listens
+// there.
+func Refused(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, wsaeconnrefused)
+}
+
+// Reset reports whether the other side dropped the connection.
+func Reset(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, wsaeconnreset)
+}
+
+// Unreachable reports whether there is no way to the host or its network.
+func Unreachable(err error) bool {
+	return errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, wsaehostunreach) || errors.Is(err, wsaenetunreach)
+}
+
 // Classify names why a connection failed, in the words of protocol.Reach.
 func Classify(err error) string {
 	var dns *net.DNSError
@@ -124,9 +150,9 @@ func Classify(err error) string {
 		return "dns"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
 		return "timeout"
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case Refused(err):
 		return "refused"
-	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
+	case Unreachable(err):
 		return "unreachable"
 	}
 	var ne net.Error

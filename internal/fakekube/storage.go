@@ -180,7 +180,23 @@ func tlsSecrets() []string {
 	return tlsItems
 }
 
-// serveStorage answers the kubelet's stats and the list of TLS Secrets.
+// tlsSecret is the TLS Secret at a path of the API, if there is one.
+func tlsSecret(p string) string {
+	rest, ok := strings.CutPrefix(p, "/api/v1/namespaces/")
+	ns, name, found := strings.Cut(rest, "/secrets/")
+	if !ok || !found {
+		return ""
+	}
+	for _, s := range tlsSecrets() {
+		if strings.Contains(s, `"name":"`+name+`","namespace":"`+ns+`"`) {
+			return s
+		}
+	}
+	return ""
+}
+
+// serveStorage answers the kubelet's stats, the list of TLS Secrets and
+// each of them.
 func (f *Server) serveStorage(w http.ResponseWriter, r *http.Request, x extra, metaOnly bool) bool {
 	p, q := r.URL.Path, r.URL.Query()
 	switch {
@@ -208,6 +224,9 @@ func (f *Server) serveStorage(w http.ResponseWriter, r *http.Request, x extra, m
 			}
 		}
 		io.WriteString(w, list(items...))
+	case r.Method == http.MethodGet && tlsSecret(p) != "":
+		// A certificate opens the Secret it comes from.
+		io.WriteString(w, tlsSecret(p))
 	default:
 		return false
 	}
