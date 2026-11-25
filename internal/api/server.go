@@ -112,6 +112,15 @@ type Config struct {
 	// Version and OSV.dev for the vulnerabilities of the clusters'
 	// Kubernetes versions (ui.LookupOrigins). The server itself asks nothing.
 	VersionLookups bool
+	// RegistryURL is the image registry's admin API (kartal-registry's
+	// :5001, inside the cluster), and RegistrySecret the secret both share;
+	// without them there is no registry. RegistryPublic is where people and
+	// nodes push and pull, such as registry.example.org, shown in commands.
+	RegistryURL    string
+	RegistrySecret string
+	RegistryPublic string
+	// RegistryHTTP calls the registry; a client with a timeout when nil.
+	RegistryHTTP *http.Client
 }
 
 type Server struct {
@@ -240,6 +249,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeWorkloads(mux)
 	s.routeVersions(mux)
 	s.routeMCP(mux)
+	s.routeRegistry(mux)
 	if cfg.DataSources != nil {
 		cfg.DataSources.Attach(s.ask)
 	}
@@ -408,19 +418,32 @@ func (s *Server) agent(next func(http.ResponseWriter, *http.Request, string)) ht
 
 type userKey struct{}
 
-// require lets through users whose role somewhere reaches role, and puts
-// the user in the request context. Handlers of cluster objects check the
-// user's role where the object is (inCluster); pages spanning clusters,
-// such as alerts and the audit log, show each user their part.
+// require lets through users whose role in some cluster reaches role, and
+// puts the user in the request context. Handlers of cluster objects check
+// the user's role where the object is (inCluster); pages spanning clusters,
+// such as alerts and the audit log, show each user their part. A role in
+// the image registry alone reaches none of this.
 func (s *Server) require(role auth.Role, next http.HandlerFunc) http.HandlerFunc {
+	return s.signedIn(func(w http.ResponseWriter, r *http.Request) {
+		if has := userOf(r).ClusterRole(); has < role {
+			writeError(w, http.StatusForbidden, "the "+has.String()+" role may not do this; it needs "+role.String())
+			return
+		}
+		next(w, r)
+	})
+}
+
+// signedIn lets through anyone signed in with a role anywhere, in a cluster
+// or in the image registry, and puts the user in the request context.
+func (s *Server) signedIn(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, ok := s.lookup(bearerToken(r))
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "invalid or missing token")
 			return
 		}
-		if u.Role < role {
-			writeError(w, http.StatusForbidden, "the "+u.Role.String()+" role may not do this; it needs "+role.String())
+		if u.Role < auth.Viewer {
+			writeError(w, http.StatusForbidden, "this user has no role anywhere")
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))

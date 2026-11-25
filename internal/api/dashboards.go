@@ -33,7 +33,7 @@ func (s *Server) dashboards(w http.ResponseWriter) *dashboard.Manager {
 // mayChange tells whether a user may change a dashboard.
 func mayChange(u auth.User) func(settings.Dashboard) bool {
 	return func(d settings.Dashboard) bool {
-		return u.Role >= auth.Operator && (d.Owner == u.Name || u.Everywhere() >= auth.Admin)
+		return u.ClusterRole() >= auth.Operator && (d.Owner == u.Name || u.Everywhere() >= auth.Admin)
 	}
 }
 

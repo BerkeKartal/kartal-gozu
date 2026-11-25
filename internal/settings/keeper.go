@@ -157,5 +157,13 @@ func (s Settings) clone() Settings {
 		s.Groups[i].Members = slices.Clone(g.Members)
 		s.Groups[i].Directory = slices.Clone(g.Directory)
 	}
+	s.Robots = slices.Clone(s.Robots)
+	for i, r := range s.Robots {
+		s.Robots[i].Grants = slices.Clone(r.Grants)
+		if r.Expires != nil {
+			t := *r.Expires
+			s.Robots[i].Expires = &t
+		}
+	}
 	return s
 }

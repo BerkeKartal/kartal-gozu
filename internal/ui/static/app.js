@@ -454,6 +454,8 @@ const STRINGS = {
     'admin.saveEndsSessions': 'Saving ends the person’s open sessions, so the change applies at once.',
     'admin.addGrant': 'Add a grant',
     'admin.addEverywhere': 'Everywhere',
+    'admin.addRegistry': 'Registry project', 'admin.allProjects': 'All projects (*)', 'admin.registryScope': 'Registry',
+    'admin.badProject': '“{0}” is not a registry project: letters, digits, . _ -, or * (alone or at the end).',
     'admin.noGrants': 'No grants: only what their groups give.',
     'admin.badScope': '“{0}” is not a cluster/namespace: letters, digits, . _ -, or * (alone or at the end).',
     'admin.directory': 'Directory (Active Directory / LDAP)',
@@ -924,6 +926,8 @@ const STRINGS = {
     'admin.saveEndsSessions': 'Kaydetmek kişinin açık oturumlarını kapatır; değişiklik hemen geçerli olur.',
     'admin.addGrant': 'Yetki ekle',
     'admin.addEverywhere': 'Her yerde',
+    'admin.addRegistry': 'İmaj deposu projesi', 'admin.allProjects': 'Tüm projeler (*)', 'admin.registryScope': 'İmaj deposu',
+    'admin.badProject': '“{0}” bir imaj deposu projesi değil: harf, rakam, . _ - ya da * (tek başına ya da sonda).',
     'admin.noGrants': 'Yetki yok: yalnızca gruplarının verdikleri.',
     'admin.badScope': '“{0}” bir cluster/namespace değil: harf, rakam, . _ - ya da * (tek başına ya da sonda).',
     'admin.directory': 'Dizin (Active Directory / LDAP)',
@@ -1310,7 +1314,8 @@ function roleIn(ns, cluster = state.cluster) {
   let best = 0;
   for (const g of (state.me && state.me.grants) || []) {
     const r = RANK[g.role] || 0;
-    if (r > best && (!g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, cluster) &&
+    // The image registry's scopes (s.project) reach no cluster.
+    if (r > best && (!g.scopes.length || g.scopes.some(s => !s.project && nameMatches(s.cluster, cluster) &&
       (ns ? nameMatches(s.namespace, ns) : s.namespace === '*')))) best = r;
   }
   return best;
@@ -3671,21 +3676,27 @@ async function loadAdmin(signal) {
 }
 
 // A grant is written as the server reads it: "operator", or
-// "operator@production/payments+staging/*".
+// "operator@production/payments+staging/*", where "registry:team-a" is a
+// project of the image registry.
 function parseGrantText(text) {
   const [role, scopeText] = String(text).split('@');
   const scopes = scopeText ? scopeText.split('+').map(s => {
+    if (s.startsWith('registry:')) return { project: s.slice('registry:'.length) };
     const [cluster, namespace] = s.split('/');
     return { cluster, namespace: namespace || '*' };
   }) : [];
   return { role, scopes };
+}
+function scopeText(s) {
+  return s.project ? t('admin.registryScope') + ': ' + s.project : s.cluster + '/' + s.namespace;
 }
 function grantRole(grants, cluster, ns) {
   let best = 0;
   for (const text of grants || []) {
     const g = parseGrantText(text);
     const r = RANK[g.role] || 0;
-    if (r > best && (!g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, cluster) &&
+    // The image registry's scopes (s.project) reach no cluster.
+    if (r > best && (!g.scopes.length || g.scopes.some(s => !s.project && nameMatches(s.cluster, cluster) &&
       (ns ? nameMatches(s.namespace, ns) : s.namespace === '*')))) best = r;
   }
   return best;
@@ -3694,7 +3705,7 @@ const ROLE_OF_RANK = Object.fromEntries(Object.entries(RANK).map(([k, v]) => [v,
 
 function grantChip(text) {
   const g = parseGrantText(text);
-  const where = g.scopes.length ? g.scopes.map(s => s.cluster + '/' + s.namespace).join(', ') : t('admin.everywhere');
+  const where = g.scopes.length ? g.scopes.map(scopeText).join(', ') : t('admin.everywhere');
   return h('span', { class: 'label-chip grant-chip role-' + g.role, title: text }, h('strong', null, t('role.' + g.role)), ' · ' + where);
 }
 function grantChips(grants) {
@@ -3846,24 +3857,56 @@ function grantsEditor(grants) {
     sync();
     return row;
   }
+  // A project of the image registry: viewers pull, operators push and
+  // delete, admins run the project.
+  function addRegistryRow(role = 'viewer', project = '*') {
+    const roleSel = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === role }, t('role.' + r))));
+    const pick = scopePicker(project, t('admin.allProjects'));
+    registryProjects().then(names => pick.setNames(names));
+    const row = h('div', { class: 'grant-row' }, roleSel, h('span', { class: 'muted' }, t('admin.registryScope') + ':'), pick,
+      h('button', { type: 'button', class: 'btn', title: t('dsRemove'), onclick: () => { row.remove(); sync(); } }, '✕'));
+    row.read = () => ({ role: roleSel.value, project: pick.read() });
+    rows.append(row);
+    sync();
+    return row;
+  }
   for (const text of grants || []) {
     const g = parseGrantText(text);
     if (!g.scopes.length) addRow(g.role);
-    else for (const s of g.scopes) addRow(g.role, s.cluster, s.namespace);
+    else for (const s of g.scopes) {
+      if (s.project) addRegistryRow(g.role, s.project);
+      else addRow(g.role, s.cluster, s.namespace);
+    }
   }
   sync();
   const box = h('div', { class: 'grants-editor' }, rows, empty,
     h('div', { class: 'grant-add' },
       button('+ ' + t('admin.addGrant'), () => addRow().querySelector('.scope-pick select').focus()),
+      state.me && state.me.registry ? button('+ ' + t('admin.addRegistry'), () => addRegistryRow().querySelector('.scope-pick select').focus()) : null,
       button(t('admin.addEverywhere'), () => addRow('viewer', '*', '*'))));
   const pattern = /^(\*|[A-Za-z0-9][A-Za-z0-9._-]*\*?)$/;
   // value returns the grants as the server reads them, or throws a reason.
   box.value = () => [...rows.children].map(r => {
-    const { role, cluster, ns } = r.read();
+    const { role, cluster, ns, project } = r.read();
+    if (project !== undefined) {
+      if (!pattern.test(project)) throw new Error(t('admin.badProject', project));
+      return role + '@registry:' + project;
+    }
     if (!pattern.test(cluster) || !pattern.test(ns)) throw new Error(t('admin.badScope', cluster + '/' + ns));
     return cluster === '*' && ns === '*' ? role : role + '@' + cluster + '/' + ns;
   });
   return box;
+}
+
+// registryProjects are the names of the image registry's projects, for
+// the grant editor; none when the registry is not set up.
+async function registryProjects() {
+  if (!state.me || !state.me.registry) return [];
+  try {
+    return ((await api('registry/projects')) || []).map(p => p.name);
+  } catch {
+    return [];
+  }
 }
 
 // checkList picks some of a list of names.
@@ -3893,7 +3936,7 @@ function selfLocked(el, u) {
 function grantKeys(grants) {
   return [...new Set((grants || []).flatMap(text => {
     const g = parseGrantText(text);
-    return g.scopes.length ? g.scopes.map(s => g.role + '@' + s.cluster + '/' + s.namespace) : [g.role + '@*/*'];
+    return g.scopes.length ? g.scopes.map(s => g.role + '@' + (s.project ? 'registry:' + s.project : s.cluster + '/' + s.namespace)) : [g.role + '@*/*'];
   }))].sort();
 }
 function sameNames(a, b) {
@@ -4182,7 +4225,7 @@ function accessDialog(data, { kind, name }) {
       const whole = grantRole(grants, c, '');
       const some = Math.max(whole, ...grants.map(text => {
         const g = parseGrantText(text);
-        return !g.scopes.length || g.scopes.some(s => nameMatches(s.cluster, c)) ? RANK[g.role] || 0 : 0;
+        return !g.scopes.length || g.scopes.some(s => !s.project && nameMatches(s.cluster, c)) ? RANK[g.role] || 0 : 0;
       }), 0);
       const cell = r => r ? t('role.' + ROLE_OF_RANK[r]) : h('span', { class: 'muted' }, '—');
       return h('tr', null, h('td', null, c), h('td', null, cell(whole)), h('td', null, cell(some)));

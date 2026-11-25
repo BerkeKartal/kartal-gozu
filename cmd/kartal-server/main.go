@@ -208,6 +208,15 @@ func run(log *slog.Logger) error {
 	if !versions.ValidRepo(repo) {
 		return fmt.Errorf("KARTAL_UPDATE_REPO must be a GitHub repository as owner/name, not %q", repo)
 	}
+	// The image registry, when kartal-registry runs next to the server.
+	registryURL := config.String("KARTAL_REGISTRY_URL", "")
+	registrySecret, err := config.Secret("KARTAL_REGISTRY_SECRET")
+	if err != nil {
+		return err
+	}
+	if registryURL != "" && len(registrySecret) < auth.MinTokenLength {
+		return fmt.Errorf("KARTAL_REGISTRY_URL needs KARTAL_REGISTRY_SECRET (or _FILE) of at least %d characters, the one kartal-registry has", auth.MinTokenLength)
+	}
 
 	cfg := api.Config{
 		AgentTokens:    tokens,
@@ -230,6 +239,9 @@ func run(log *slog.Logger) error {
 		Version:        version,
 		UpdateRepo:     repo,
 		VersionLookups: lookups,
+		RegistryURL:    registryURL,
+		RegistrySecret: registrySecret,
+		RegistryPublic: config.String("KARTAL_REGISTRY_PUBLIC", ""),
 	}
 	if len(login) > 0 {
 		cfg.Login = login
@@ -329,7 +341,7 @@ func run(log *slog.Logger) error {
 	log.Info("kartal-server started", "version", version, "addr", srv.Addr, "clusters", clusters,
 		"users", len(users)+min(len(adminToken), 1)+passwords.Len(), "ui_users", len(keeper.Get().Users),
 		"notification_channels", alerts.Channels(), "settings", keeper.Where(),
-		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector), "version_lookups", lookups)
+		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector), "version_lookups", lookups, "registry", registryURL)
 
 	select {
 	case err := <-errc:

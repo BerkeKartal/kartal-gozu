@@ -31,7 +31,7 @@ const (
 // the actions that change a cluster, metrics history, alerts and audit.
 func (s *Server) routeActions(mux *http.ServeMux) {
 	const c = "/api/v1/clusters/{cluster}"
-	mux.HandleFunc("GET /api/v1/me", s.require(auth.Viewer, s.me))
+	mux.HandleFunc("GET /api/v1/me", s.signedIn(s.me))
 	mux.HandleFunc("GET "+c+"/object-events", s.inCluster(auth.Viewer, queryNamespace, s.objectEvents))
 	mux.HandleFunc("GET "+c+"/namespaces/{ns}/deployments/{name}/history", s.inCluster(auth.Viewer, pathNamespace, s.rolloutHistory))
 	mux.HandleFunc("GET "+c+"/helm", s.inCluster(auth.Viewer, anywhere, s.helm))
@@ -66,8 +66,10 @@ type AuditEntry struct {
 	OK        bool      `json:"ok"`
 	Error     string    `json:"error,omitempty"`
 	// Via is "mcp" for a change an AI assistant or agent made through the
-	// MCP endpoint.
+	// MCP endpoint, and "registry" for what happened in the image registry.
 	Via string `json:"via,omitempty"`
+	// Project is the image registry's project a change was made in.
+	Project string `json:"project,omitempty"`
 }
 
 // auditLog keeps the latest entries in memory; every entry is also logged,
@@ -132,8 +134,11 @@ func (s *Server) auditEntries(w http.ResponseWriter, r *http.Request) {
 	out := []AuditEntry{}
 	for _, e := range s.audit.newestFirst() {
 		role := u.Everywhere()
-		if e.Cluster != "" {
+		switch {
+		case e.Cluster != "":
 			role = u.RoleIn(e.Cluster, e.Namespace)
+		case e.Project != "":
+			role = u.RoleInProject(e.Project)
 		}
 		if role >= auth.Operator {
 			out = append(out, e)
@@ -171,7 +176,9 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	certWarn, certCrit := s.cfg.Alerts.CertificateLevels()
 	// Users added in the UI change their own password there.
 	ownPassword := s.cfg.Accounts != nil && s.cfg.Accounts.Has(u.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"name": u.Name, "role": u.Role.String(), "everywhere": u.Everywhere().String(), "grants": grants,
+	// role is over the clusters; the image registry's roles are apart.
+	writeJSON(w, http.StatusOK, map[string]any{"name": u.Name, "role": u.ClusterRole().String(), "everywhere": u.Everywhere().String(), "grants": grants,
+		"registry": s.cfg.RegistryURL != "", "registryRole": u.RegistryRole().String(), "registryAdmin": u.RegistryAdmin(),
 		"ownPassword": ownPassword, "users": s.cfg.Accounts != nil,
 		"levels": map[string]any{"volumeWarning": volumeWarn, "volumeCritical": volumeCrit, "nodeDiskWarning": diskWarn, "nodeDiskCritical": diskCrit,
 			"certificateWarningDays": certWarn.Hours() / 24, "certificateCriticalDays": certCrit.Hours() / 24}})

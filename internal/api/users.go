@@ -24,7 +24,7 @@ func (s *Server) routeUsers(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/groups/{name}", s.requireEverywhere(auth.Admin, s.groupRemove))
 	mux.HandleFunc("GET /api/v1/sessions", s.requireEverywhere(auth.Admin, s.sessionsList))
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.requireEverywhere(auth.Admin, s.sessionEnd))
-	mux.HandleFunc("POST /api/v1/me/password", s.require(auth.Viewer, s.ownPassword))
+	mux.HandleFunc("POST /api/v1/me/password", s.signedIn(s.ownPassword))
 }
 
 func (s *Server) accounts(w http.ResponseWriter) *accounts.Manager {

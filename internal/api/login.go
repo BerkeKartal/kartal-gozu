@@ -22,7 +22,7 @@ type Login interface {
 func (s *Server) routeLogin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/login", s.loginMethods)
 	mux.HandleFunc("POST /api/v1/login", s.login)
-	mux.HandleFunc("POST /api/v1/logout", s.require(auth.Viewer, s.logout))
+	mux.HandleFunc("POST /api/v1/logout", s.signedIn(s.logout))
 }
 
 // lookup finds the user a token stands for: a session, or a token of

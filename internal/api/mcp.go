@@ -173,7 +173,7 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 	case "tools/list":
 		list := []map[string]any{}
 		for _, t := range mcpTools {
-			if u.Role >= t.role {
+			if u.ClusterRole() >= t.role {
 				list = append(list, t.describe())
 			}
 		}
@@ -374,8 +374,8 @@ func (s *Server) callTool(r *http.Request, t *tool, raw map[string]any) toolResu
 	if err != nil {
 		return toolFailed(err.Error())
 	}
-	if u := userOf(r); u.Role < t.role {
-		return toolFailed("this needs the " + t.role.String() + " role; you have " + u.Role.String())
+	if has := userOf(r).ClusterRole(); has < t.role {
+		return toolFailed("this needs the " + t.role.String() + " role; you have " + has.String())
 	}
 	method, target, body, err := t.call(a)
 	if err != nil {

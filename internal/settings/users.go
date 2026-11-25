@@ -46,3 +46,20 @@ type Group struct {
 	Changed     time.Time `json:"changed,omitempty"`
 	ChangedBy   string    `json:"changedBy,omitempty"`
 }
+
+// Robot is an account a machine signs in to the image registry with: a CI
+// that pushes, nodes that pull. Its secret is shown once, when it is made
+// or rotated; only the secret's digest (SHA-256, hex) is kept. Its grants
+// are of the registry only ("operator@registry:team-a").
+type Robot struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	Grants      []string   `json:"grants"`
+	Hash        string     `json:"hash"`
+	Expires     *time.Time `json:"expires,omitempty"`
+	Disabled    bool       `json:"disabled,omitempty"`
+	Created     time.Time  `json:"created"`
+	By          string     `json:"by"`
+	Changed     time.Time  `json:"changed,omitempty"`
+	ChangedBy   string     `json:"changedBy,omitempty"`
+}

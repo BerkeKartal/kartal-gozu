@@ -42,6 +42,7 @@ type Settings struct {
 	Dashboards  []Dashboard  `json:"dashboards,omitempty"`
 	Users       []User       `json:"users,omitempty"`
 	Groups      []Group      `json:"groups,omitempty"`
+	Robots      []Robot      `json:"robots,omitempty"`
 }
 
 // maxRecipients keeps a mistake from mailing a whole address book.

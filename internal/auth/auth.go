@@ -48,10 +48,16 @@ func ParseRole(s string) (Role, error) {
 
 // Scope is a cluster and a namespace, each a name or a pattern: "*" is
 // every one and a trailing "*" matches the start of a name ("team-*").
+// A scope of the image registry names a project instead, with no cluster:
+// clusters' scopes never reach the registry, nor the registry's clusters.
 type Scope struct {
-	Cluster   string `json:"cluster"`
-	Namespace string `json:"namespace"`
+	Cluster   string `json:"cluster,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Project   string `json:"project,omitempty"`
 }
+
+// Registry tells whether the scope is of the image registry.
+func (s Scope) Registry() bool { return s.Project != "" }
 
 // Grant gives a role in some scopes, or everywhere when it has none.
 type Grant struct {
@@ -116,7 +122,7 @@ func (u User) RoleIn(cluster, ns string) Role {
 			continue
 		}
 		for _, s := range g.Scopes {
-			if match(s.Cluster, cluster) && ((ns == "" && s.Namespace == "*") || (ns != "" && match(s.Namespace, ns))) {
+			if !s.Registry() && match(s.Cluster, cluster) && ((ns == "" && s.Namespace == "*") || (ns != "" && match(s.Namespace, ns))) {
 				best = g.Role
 				break
 			}
@@ -137,13 +143,99 @@ func (u User) RoleSomewhere(cluster string) Role {
 			continue
 		}
 		for _, s := range g.Scopes {
-			if match(s.Cluster, cluster) {
+			if !s.Registry() && match(s.Cluster, cluster) {
 				best = g.Role
 				break
 			}
 		}
 	}
 	return best
+}
+
+// ClusterRole is the highest role the user has in any cluster: what the
+// server's pages and API outside the registry ask for.
+func (u User) ClusterRole() Role {
+	var best Role
+	for _, g := range u.grants() {
+		if g.Role <= best {
+			continue
+		}
+		if len(g.Scopes) == 0 {
+			best = g.Role
+			continue
+		}
+		for _, s := range g.Scopes {
+			if !s.Registry() {
+				best = g.Role
+				break
+			}
+		}
+	}
+	return best
+}
+
+// RoleInProject is the user's role in a project of the image registry.
+// A grant with no scope reaches it; clusters' scopes do not.
+func (u User) RoleInProject(project string) Role {
+	var best Role
+	for _, g := range u.grants() {
+		if g.Role <= best {
+			continue
+		}
+		if len(g.Scopes) == 0 {
+			best = g.Role
+			continue
+		}
+		for _, s := range g.Scopes {
+			if s.Registry() && match(s.Project, project) {
+				best = g.Role
+				break
+			}
+		}
+	}
+	return best
+}
+
+// RegistryRole is the highest role the user has in any project of the
+// image registry.
+func (u User) RegistryRole() Role {
+	var best Role
+	for _, g := range u.grants() {
+		if g.Role <= best {
+			continue
+		}
+		if len(g.Scopes) == 0 {
+			best = g.Role
+			continue
+		}
+		for _, s := range g.Scopes {
+			if s.Registry() {
+				best = g.Role
+				break
+			}
+		}
+	}
+	return best
+}
+
+// RegistryAdmin tells whether the user runs the whole image registry: an
+// admin with no scope, or of every project (admin@registry:*). Only they
+// make projects and robot accounts.
+func (u User) RegistryAdmin() bool {
+	for _, g := range u.grants() {
+		if g.Role != Admin {
+			continue
+		}
+		if len(g.Scopes) == 0 {
+			return true
+		}
+		for _, s := range g.Scopes {
+			if s.Registry() && s.Project == "*" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Everywhere is the user's role over every cluster and namespace, which is
@@ -159,7 +251,7 @@ func (u User) Everywhere() Role {
 			continue
 		}
 		for _, s := range g.Scopes {
-			if s.Cluster == "*" && s.Namespace == "*" {
+			if !s.Registry() && s.Cluster == "*" && s.Namespace == "*" {
 				best = g.Role
 				break
 			}
@@ -171,9 +263,11 @@ func (u User) Everywhere() Role {
 var patternRe = regexp.MustCompile(`^(\*|[A-Za-z0-9][A-Za-z0-9._-]*\*?)$`)
 
 // ParseGrant reads "role" (everywhere) or "role@scope+scope", where a scope
-// is "cluster/namespace" or "cluster" (all of it), either part a pattern:
+// is "cluster/namespace" or "cluster" (all of it), either part a pattern,
+// or "registry:project", a project of the image registry or a pattern:
 //
 //	operator@production/team-a+production/team-b+staging/*
+//	operator@production/team-a+registry:team-a
 func ParseGrant(s string) (Grant, error) {
 	roleText, scopeText, scoped := strings.Cut(strings.TrimSpace(s), "@")
 	role, err := ParseRole(roleText)
@@ -185,7 +279,15 @@ func ParseGrant(s string) (Grant, error) {
 		return g, nil
 	}
 	for _, item := range strings.Split(scopeText, "+") {
-		cluster, ns, _ := strings.Cut(strings.TrimSpace(item), "/")
+		item = strings.TrimSpace(item)
+		if project, ok := strings.CutPrefix(item, "registry:"); ok {
+			if !patternRe.MatchString(project) {
+				return Grant{}, fmt.Errorf("scope %q must name a registry project, with * for all", item)
+			}
+			g.Scopes = append(g.Scopes, Scope{Project: project})
+			continue
+		}
+		cluster, ns, _ := strings.Cut(item, "/")
 		if ns == "" {
 			ns = "*"
 		}
@@ -204,7 +306,11 @@ func (g Grant) String() string {
 	}
 	parts := make([]string, len(g.Scopes))
 	for i, s := range g.Scopes {
-		parts[i] = s.Cluster + "/" + s.Namespace
+		if s.Registry() {
+			parts[i] = "registry:" + s.Project
+		} else {
+			parts[i] = s.Cluster + "/" + s.Namespace
+		}
 	}
 	return g.Role.String() + "@" + strings.Join(parts, "+")
 }
