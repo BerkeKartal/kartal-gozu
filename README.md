@@ -1013,10 +1013,13 @@ published: Streamable HTTP, answered with JSON, without sessions. It takes
 the tokens of the REST API, and each tool is a call of that API made for
 the caller, so a tool sees and may do exactly what the token's user may, in
 the clusters and namespaces granted. A viewer gets the tools that read, an
-operator the actions as well. Editing YAML and the pod console are offered
-to no one. Each action is in the audit log under the token's user, marked as
-made through MCP, and every tool call is in the server's log with the
-tool's name: as a warning when it fails.
+operator the actions as well, and an admin also the pod console and the
+YAML editor, as in the UI. A save is a dry run unless the assistant asks
+otherwise, so the person it works for sees the result first, and it must
+keep the object's `resourceVersion`, so a newer version is never saved over.
+Each action, every command run in a container among them, is in the audit
+log under the token's user, marked as made through MCP, and every tool call
+is in the server's log with the tool's name: as a warning when it fails.
 
 Give the assistant a user of its own, with the least role it needs. With
 Claude Code:
@@ -1060,6 +1063,8 @@ Clients set up with JSON take the same address and header:
 | `versions` | viewer | The versions that run (see [Updates & security](#the-web-ui)); vulnerabilities are not looked up by the server |
 | `audit_log` | operator | The changes people (and assistants) made |
 | `restart_workload`, `scale_workload`, `rollback_deployment`, `delete_pod`, `cordon_node`, `run_cronjob`, `suspend_cronjob` | operator | The actions of the UI, where the token's user is an operator and the cluster's agent allows changes |
+| `exec_in_pod` | admin | Runs a command in a container with `sh -c` and returns its output and exit code, where the agent allows `exec` |
+| `edit_resource` | admin | Replaces an object with new YAML or JSON (not Secrets), as a dry run unless `dry_run` is false, where the agent allows `edit` |
 
 Answers longer than 100,000 bytes are cut, with a word on how to ask for
 less. The endpoint speaks the protocol's versions 2025-03-26, 2025-06-18 and

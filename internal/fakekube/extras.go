@@ -256,14 +256,18 @@ func (f *Server) serveExec(w http.ResponseWriter, r *http.Request) {
 
 // fakeShell answers a few common commands. The UI wraps each command so the
 // working directory survives between them: sh -c SCRIPT kartal CWD, where
-// SCRIPT ends by printing "\n\x1f" and the new directory.
+// SCRIPT ends by printing "\n\x1f" and the new directory. MCP's exec_in_pod
+// sends a plain sh -c SCRIPT.
 func fakeShell(pod string, argv []string) (stdout, stderr string, code int) {
 	cwd, command, wrapped := "/", strings.Join(argv, " "), false
-	if len(argv) == 5 && argv[0] == "sh" && argv[1] == "-c" {
+	switch {
+	case len(argv) == 5 && argv[0] == "sh" && argv[1] == "-c":
 		lines := strings.Split(argv[2], "\n")
 		if len(lines) >= 3 {
 			command, cwd, wrapped = strings.TrimSpace(strings.Join(lines[1:len(lines)-3], "\n")), argv[4], true
 		}
+	case len(argv) == 3 && argv[0] == "sh" && argv[1] == "-c":
+		command = argv[2]
 	}
 	if cwd == "" {
 		cwd = "/"

@@ -473,6 +473,11 @@ func (f *Server) find(p string, x extra) map[string]any {
 		}
 		obj["kind"] = kinds[resource]
 		obj["apiVersion"] = strings.TrimPrefix(strings.TrimPrefix(prefix, "/apis/"), "/api/")
+		// Every object of a real API server has one; the fixtures never
+		// change, so theirs stays the same.
+		if _, ok := md["resourceVersion"]; !ok && md != nil {
+			md["resourceVersion"] = "1"
+		}
 		return obj
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -196,13 +197,20 @@ func TestMCPToolsByRole(t *testing.T) {
 	if !viewer["list_clusters"] || !viewer["pod_logs"] || viewer["restart_workload"] || viewer["audit_log"] {
 		t.Errorf("viewer's tools: %v", viewer)
 	}
-	if !operator["restart_workload"] || !operator["delete_pod"] || !operator["audit_log"] || len(operator) != len(mcpTools) {
+	if !operator["restart_workload"] || !operator["delete_pod"] || !operator["audit_log"] || operator["exec_in_pod"] || operator["edit_resource"] {
 		t.Errorf("operator's tools: %v", operator)
 	}
-	// Editing YAML and the console are not offered to anyone.
-	for name := range names(adminTok) {
-		if strings.Contains(name, "exec") || strings.Contains(name, "apply") || strings.Contains(name, "edit") {
-			t.Errorf("offered %s", name)
+	// The console and the YAML editor are an admin's, as in the UI.
+	if admin := names(adminTok); !admin["exec_in_pod"] || !admin["edit_resource"] || len(admin) != len(mcpTools) {
+		t.Errorf("admin's tools: %v", admin)
+	}
+	for _, tl := range []string{"exec_in_pod", "edit_resource"} {
+		args := map[string]any{"cluster": "demo", "namespace": "a", "pod": "web-1", "command": "id"}
+		if tl == "edit_resource" {
+			args = map[string]any{"cluster": "demo", "namespace": "a", "kind": "ConfigMap", "name": "web", "object": "kind: ConfigMap"}
+		}
+		if text, failed := call(t, s, operatorTok, tl, args); !failed || !strings.Contains(text, "admin role") {
+			t.Errorf("operator ran %s: %q", tl, text)
 		}
 	}
 	if text, failed := call(t, s, viewerTok, "restart_workload", map[string]any{"cluster": "demo", "namespace": "a", "kind": "Deployment", "name": "web"}); !failed ||
@@ -319,6 +327,73 @@ func TestMCPActionIsAudited(t *testing.T) {
 	// The UI's own calls are not marked.
 	if text, failed := call(t, s, operatorTok, "audit_log", nil); failed || !strings.Contains(text, `"via":"mcp"`) {
 		t.Errorf("audit_log: %q", text)
+	}
+}
+
+func TestMCPAdminExecAndEdit(t *testing.T) {
+	st, s := newMCPServer(t)
+	// The agent answers each command, and keeps what it was asked.
+	got := make(chan protocol.Command, 8)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go func() {
+		for ctx.Err() == nil {
+			cmds, _ := st.TakeCommands(ctx, "demo", time.Second)
+			for _, c := range cmds {
+				got <- c
+				out := `{"kind":"ConfigMap","metadata":{"name":"web","resourceVersion":"8"}}`
+				if c.Type == protocol.CommandExec {
+					out = `{"stdout":"uid=101\n","stderr":"","exitCode":0}`
+				}
+				st.Deliver("demo", protocol.Result{CommandID: c.ID, OK: true, Output: out})
+			}
+		}
+	}()
+
+	text, failed := call(t, s, adminTok, "exec_in_pod", map[string]any{"cluster": "demo", "namespace": "a", "pod": "web-1", "container": "nginx", "command": "id"})
+	c := <-got
+	if failed || !strings.Contains(text, "uid=101") || c.Type != protocol.CommandExec || c.Namespace != "a" || c.Name != "web-1" || c.Container != "nginx" ||
+		strings.Join(c.Exec, "|") != "sh|-c|id" {
+		t.Errorf("exec: %v %q %+v", failed, text, c)
+	}
+
+	// Without dry_run=false nothing is saved, and a dry run is not audited.
+	obj := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: web\n  namespace: a\n  resourceVersion: \"7\"\ndata:\n  a: b\n"
+	text, failed = call(t, s, adminTok, "edit_resource", map[string]any{"cluster": "demo", "namespace": "a", "kind": "cm", "name": "web", "object": obj})
+	c = <-got
+	if failed || !strings.Contains(text, `"resourceVersion":"8"`) || c.Type != protocol.CommandApply || !c.DryRun || c.Body != strings.TrimSpace(obj) ||
+		c.Resource != "configmaps" || c.Group != "" || c.Namespace != "a" || c.Name != "web" {
+		t.Errorf("dry run: %v %q %+v", failed, text, c)
+	}
+	// A save must keep resourceVersion, so that it never overwrites a newer version.
+	text, failed = call(t, s, adminTok, "edit_resource", map[string]any{"cluster": "demo", "namespace": "a", "kind": "cm", "name": "web",
+		"object": strings.Replace(obj, "  resourceVersion: \"7\"\n", "", 1), "dry_run": false})
+	if !failed || !strings.Contains(text, "resourceVersion") {
+		t.Errorf("saved without resourceVersion: %q", text)
+	}
+	text, failed = call(t, s, adminTok, "edit_resource", map[string]any{"cluster": "demo", "namespace": "a", "kind": "cm", "name": "web", "object": obj, "dry_run": false})
+	c = <-got
+	if failed || c.Type != protocol.CommandApply || c.DryRun {
+		t.Errorf("save: %v %q %+v", failed, text, c)
+	}
+	// JSON, as get_resource answers, is taken too.
+	if !hasResourceVersion.MatchString(`{"metadata":{"name":"web","resourceVersion":"7"}}`) || hasResourceVersion.MatchString(`{"metadata":{"name":"web"}}`) {
+		t.Error("hasResourceVersion")
+	}
+
+	var audit []AuditEntry
+	json.Unmarshal(do(s, "GET", "/api/v1/audit", adminTok, "").Body.Bytes(), &audit)
+	if len(audit) != 2 {
+		t.Fatalf("audit: %+v", audit)
+	}
+	for _, e := range audit {
+		if e.Via != "mcp" || !e.OK {
+			t.Errorf("audit entry: %+v", e)
+		}
+	}
+	if !slices.ContainsFunc(audit, func(e AuditEntry) bool { return e.Action == protocol.CommandExec && e.Detail == "[nginx] sh -c id" }) ||
+		!slices.ContainsFunc(audit, func(e AuditEntry) bool { return e.Action == protocol.CommandApply && e.Object == "core/configmaps/web" }) {
+		t.Errorf("audit: %+v", audit)
 	}
 }
 

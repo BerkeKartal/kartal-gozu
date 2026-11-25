@@ -5,8 +5,9 @@ package api
 // sessions. It takes the tokens of the REST API, and every tool is a call
 // of that API made inside the server for the caller, so a tool sees and
 // may do exactly what the caller's token may: a viewer gets the tools that
-// read, an operator the actions too. Saving YAML and the pod console are
-// not offered. Actions go to the audit log as made through MCP.
+// read, an operator the actions too, and an admin also runs commands in
+// containers and saves objects' YAML. Actions go to the audit log as made
+// through MCP.
 
 import (
 	"bytes"
@@ -19,6 +20,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -44,6 +46,7 @@ const mcpInstructions = `Kartal Gözü watches Kubernetes clusters through an ag
 Start with list_clusters, then list_objects with problems=true to find what needs attention, and pod_logs, object_events and get_resource to see why.
 Lists come from each agent's latest snapshot, a few seconds old; get_resource, pod_logs, object_events and rollout_history ask the cluster live.
 Actions (restart, scale, rollback, deleting a pod, cordoning a node, running or suspending a CronJob) need the operator role where they act, and the cluster's agent must allow changes ("write" among its capabilities in list_clusters).
+Running a command in a container (exec_in_pod) and saving an object (edit_resource) need the admin role where they act, and the agent's "exec" or "edit" capability. Save with edit_resource only after a dry run the person has seen.
 Every action is written to the audit log with your user's name. Ask the person you work for before you change anything.`
 
 // viaKey marks the requests the MCP endpoint makes for its tools.
@@ -372,21 +375,23 @@ func (s *Server) callTool(r *http.Request, t *tool, raw map[string]any) toolResu
 	if err != nil {
 		return toolFailed(err.Error())
 	}
-	rd := io.Reader(http.NoBody)
-	if body != nil {
+	rd, contentType := io.Reader(http.NoBody), ""
+	if y, ok := body.(yamlBody); ok {
+		rd, contentType = strings.NewReader(string(y)), "application/yaml"
+	} else if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return toolFailed(err.Error())
 		}
-		rd = bytes.NewReader(b)
+		rd, contentType = bytes.NewReader(b), "application/json"
 	}
 	req, err := http.NewRequestWithContext(context.WithValue(r.Context(), viaKey{}, "mcp"), method, target, rd)
 	if err != nil {
 		return toolFailed(err.Error())
 	}
 	req.Header.Set("Authorization", r.Header.Get("Authorization"))
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	req.RemoteAddr, req.Host = r.RemoteAddr, r.Host
 	rec := &toolResponse{header: http.Header{}, status: http.StatusOK}
@@ -453,6 +458,14 @@ func (t *toolResponse) text() string {
 }
 
 // ---------------------------------------------------------------- the tools' REST calls
+
+// yamlBody is a tool's body sent as it is, as YAML, rather than as JSON.
+type yamlBody string
+
+// hasResourceVersion tells whether an object's YAML or JSON keeps
+// metadata.resourceVersion, which makes the API server refuse to save over
+// a newer version of the object.
+var hasResourceVersion = regexp.MustCompile(`"?resourceVersion"?\s*:\s*['"]?[0-9]`)
 
 func seg(s string) string { return url.PathEscape(s) }
 
@@ -790,6 +803,50 @@ var mcpTools = []tool{
 		call: func(a toolArgs) (string, string, any, error) {
 			path := clusterURL(a) + "/namespaces/" + seg(a.str("namespace")) + "/cronjobs/" + seg(a.str("name")) + "/suspend"
 			return http.MethodPost, path, map[string]bool{"suspend": a.flag("suspend")}, nil
+		},
+	},
+
+	// What only an admin does, as in the UI: the pod console and the YAML editor.
+	{
+		name: "exec_in_pod", title: "Run a command in a container", role: auth.Admin, destructive: true,
+		doc: "Runs a command in a pod's container with sh -c, as the UI's console does, and returns what it wrote to stdout and stderr and its exit code. " +
+			"Needs the admin role where the pod is, and the cluster's agent must allow it (\"exec\" among its capabilities in list_clusters). " +
+			"The command is written to the audit log. A container without sh cannot run it. Ask the person you work for before you run anything that changes something.",
+		args: []toolArg{clusterArg(), namespaceArg(), {name: "pod", typ: "string", doc: "The pod's name.", required: true},
+			{name: "container", typ: "string", doc: "The container; needed when the pod has several."},
+			{name: "command", typ: "string", doc: "The shell command, such as: ls -la /app && df -h", required: true}},
+		call: func(a toolArgs) (string, string, any, error) {
+			path := clusterURL(a) + "/namespaces/" + seg(a.str("namespace")) + "/pods/" + seg(a.str("pod")) + "/exec"
+			return http.MethodPost, path, map[string]any{"container": a.str("container"), "command": []string{"sh", "-c", a.str("command")}}, nil
+		},
+	},
+	{
+		name: "edit_resource", title: "Save an object", role: auth.Admin, destructive: true, repeat: true,
+		doc: "Replaces an object with new contents, as the UI's YAML editor does. Start from get_resource's answer, change only what is needed, and keep metadata.resourceVersion: " +
+			"the API server then refuses the save when the object has changed since. Without dry_run=false nothing is saved: the answer is the object as the API server would save it, " +
+			"to show the person you work for before you save. Secrets cannot be saved. Needs the admin role where the object is, and the agent's \"edit\" capability.",
+		args: []toolArg{clusterArg(),
+			{name: "kind", typ: "string", required: true, doc: "The object's kind, such as Deployment or ConfigMap (also plurals and kubectl's short names), or its type as group/version/resource."},
+			{name: "name", typ: "string", doc: "The object's name.", required: true},
+			{name: "namespace", typ: "string", doc: "The object's namespace; leave it out for cluster-wide types."},
+			{name: "object", typ: "string", doc: "The whole object as YAML or JSON, with metadata.resourceVersion.", required: true},
+			{name: "dry_run", typ: "boolean", doc: "false to save; when left out or true, only shows what would be saved."}},
+		call: func(a toolArgs) (string, string, any, error) {
+			_, gvr, err := resolveKind(a.str("kind"))
+			if err != nil {
+				return "", "", nil, err
+			}
+			save := a.has("dry_run") && !a.flag("dry_run")
+			if save && !hasResourceVersion.MatchString(a.str("object")) {
+				return "", "", nil, errors.New("the object must keep metadata.resourceVersion (as get_resource gives it), so that a newer version is never saved over")
+			}
+			parts := strings.Split(gvr, "/")
+			path := clusterURL(a) + "/resources/" + seg(parts[0]) + "/" + seg(parts[1]) + "/" + seg(parts[2]) + "/" + seg(a.str("name"))
+			q := set(url.Values{}, a, "namespace")
+			if !save {
+				q.Set("dryRun", "true")
+			}
+			return http.MethodPut, withQuery(path, q), yamlBody(a.str("object")), nil
 		},
 	},
 }
