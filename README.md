@@ -86,6 +86,10 @@ tunnel), and the server works under any URL path without configuration.
   server keeps itself, or with Active Directory or another LDAP directory,
   whose groups give them their roles. Every change is recorded with who made
   it.
+- **AI assistants through MCP.** Claude, Copilot or any other MCP client can
+  look into the clusters (lists, logs, events, any object, alerts, changes,
+  metrics) and, with an operator's token, restart, scale or roll back: with
+  the tokens, roles and audit log people have.
 - **What is newer than what runs.** One page tells the changes made to
   Kartal Gözü since the server's version, which agents run another version
   than the server, and the known vulnerabilities of each cluster's
@@ -1000,6 +1004,67 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 CPU and memory usage need [metrics-server](https://github.com/kubernetes-sigs/metrics-server)
 in the cluster. Without it, everything else still works.
 
+## MCP: AI assistants and agents
+
+AI assistants and agents (Claude, GitHub Copilot, Cursor and any other
+[Model Context Protocol](https://modelcontextprotocol.io) client) use Kartal
+Gözü through its MCP endpoint, `api/v1/mcp` below wherever the server is
+published: Streamable HTTP, answered with JSON, without sessions. It takes
+the tokens of the REST API, and each tool is a call of that API made for
+the caller, so a tool sees and may do exactly what the token's user may, in
+the clusters and namespaces granted. A viewer gets the tools that read, an
+operator the actions as well. Editing YAML and the pod console are offered
+to no one. Each action is in the audit log under the token's user, marked as
+made through MCP, and every tool call is in the server's log with the
+tool's name: as a warning when it fails.
+
+Give the assistant a user of its own, with the least role it needs. With
+Claude Code:
+
+```sh
+claude mcp add --transport http kartal https://panel.example.org/devops/kartal/api/v1/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+Clients set up with JSON take the same address and header:
+
+```json
+{
+  "mcpServers": {
+    "kartal": {
+      "type": "http",
+      "url": "https://panel.example.org/devops/kartal/api/v1/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+| Tool | Role | What it does |
+|---|---|---|
+| `list_clusters` | viewer | The clusters: agent status, versions, capacity and usage, counts of objects and problems, the actions their agent allows, active alerts |
+| `list_objects` | viewer | One kind (nodes, namespaces, workloads, pods, services, ingresses, configmaps, secrets by name, certificates, volumeclaims, jobs, cronjobs, events), optionally of a namespace and only what needs attention |
+| `get_resource` | viewer | An object's full contents, or a list of any type (CRDs too), by kind (`Deployment`, `hpa`...) or by group/version/resource; Secrets without their values |
+| `pod_logs` | viewer | A container's last lines, or those of the one before its last restart |
+| `object_events` | viewer | Every event about one object |
+| `rollout_history` | viewer | A Deployment's revisions |
+| `list_alerts` | viewer | The active and recent problems, channels, silences and log rules |
+| `list_changes` | viewer | What changed, newest first |
+| `list_rollouts` | viewer | Each new version of a workload, and whether it is stuck |
+| `app_versions` | viewer | Every workload's images in every cluster |
+| `helm_releases` | viewer | A cluster's Helm releases, without their values |
+| `resource_usage` | viewer | CPU and memory of a cluster, a node or a pod over the last hours |
+| `right_sizing` | viewer | Each workload's use against its requests and limits, and what to set |
+| `query_metrics` | viewer | PromQL over the metric store, now or over the last minutes |
+| `url_checks` | viewer | The URL checks and their last day |
+| `versions` | viewer | The versions that run (see [Updates & security](#the-web-ui)); vulnerabilities are not looked up by the server |
+| `audit_log` | operator | The changes people (and assistants) made |
+| `restart_workload`, `scale_workload`, `rollback_deployment`, `delete_pod`, `cordon_node`, `run_cronjob`, `suspend_cronjob` | operator | The actions of the UI, where the token's user is an operator and the cluster's agent allows changes |
+
+Answers longer than 100,000 bytes are cut, with a word on how to ask for
+less. The endpoint speaks the protocol's versions 2025-03-26, 2025-06-18 and
+2025-11-25.
+
 ## Management API
 
 The web UI uses this API, and so can your scripts. Paths work at the root or
@@ -1040,6 +1105,7 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | GET | `/api/v1/releases` | viewer | Every workload in every cluster with its images and readiness |
 | GET | `/api/v1/checks` | viewer | The URL checks with their latest result, uptime and last 24 hours |
 | GET | `/api/v1/versions` | viewer | The server's version and repository, whether the browser may look up what is newer, and each cluster's agent version (and whether it is the server's) and Kubernetes versions: the API server's and the nodes', with the upstream release each stands for |
+| POST | `/api/v1/mcp` | viewer | The [MCP endpoint](#mcp-ai-assistants-and-agents): one JSON-RPC message a request |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/workloads/{kind}/{name}/restart` | operator | `deployment`, `statefulset`, `daemonset` |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/workloads/{kind}/{name}/scale` | operator | Body: `{"replicas": N}` |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/deployments/{name}/rollback` | operator | Body: `{"revision": N}` |
@@ -1152,6 +1218,9 @@ are `api/v1/`, `agent/v1/` and `_ui/`.
   the Kubernetes version numbers, and nothing about the clusters. With
   `KARTAL_VERSION_LOOKUPS=false` nothing is asked, and the page's policy
   allows neither service.
+- MCP clients sign in with the tokens people use, have their roles and leave
+  the same audit log. No tool edits YAML or runs commands in containers. A
+  request that a page of another site sends through a browser is refused.
 - Containers run as a non-root user, with a read-only file system and all
   Linux capabilities dropped.
 

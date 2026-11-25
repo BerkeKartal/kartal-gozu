@@ -65,6 +65,9 @@ type AuditEntry struct {
 	Detail    string    `json:"detail,omitempty"`
 	OK        bool      `json:"ok"`
 	Error     string    `json:"error,omitempty"`
+	// Via is "mcp" for a change an AI assistant or agent made through the
+	// MCP endpoint.
+	Via string `json:"via,omitempty"`
 }
 
 // auditLog keeps the latest entries in memory; every entry is also logged,
@@ -99,7 +102,7 @@ func (s *Server) record(r *http.Request, cmd protocol.Command, object, detail st
 	u := userOf(r)
 	e := AuditEntry{
 		Time: s.now().UTC(), User: u.Name, Role: u.Role.String(), Action: cmd.Type,
-		Cluster: r.PathValue("cluster"), Namespace: cmd.Namespace, Object: object, Detail: detail, OK: ok,
+		Cluster: r.PathValue("cluster"), Namespace: cmd.Namespace, Object: object, Detail: detail, OK: ok, Via: via(r),
 	}
 	if !ok {
 		e.Error = res.Error
@@ -109,7 +112,7 @@ func (s *Server) record(r *http.Request, cmd protocol.Command, object, detail st
 	}
 	s.audit.add(e)
 	s.log.Info("audit", "user", e.User, "action", e.Action, "cluster", e.Cluster, "namespace", e.Namespace,
-		"object", e.Object, "detail", e.Detail, "ok", e.OK, "error", e.Error)
+		"object", e.Object, "detail", e.Detail, "ok", e.OK, "error", e.Error, "via", e.Via)
 }
 
 // act dispatches a command that changes something, records it and answers

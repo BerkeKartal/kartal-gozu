@@ -103,8 +103,9 @@ type Config struct {
 	// DirectoryRules are the rules of KARTAL_LDAP_GROUPS ("group => grant"),
 	// which the admin panel shows next to the groups mapped in the UI.
 	DirectoryRules []string
-	// Version is the server's own, which the agents' are compared with;
-	// UpdateRepo the GitHub repository ("owner/name") it is built from.
+	// Version is the server's own, which the agents' are compared with and
+	// MCP clients are told; UpdateRepo the GitHub repository ("owner/name")
+	// it is built from.
 	Version    string
 	UpdateRepo string
 	// VersionLookups lets the browser ask GitHub for the changes made since
@@ -238,6 +239,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeNetwork(mux)
 	s.routeWorkloads(mux)
 	s.routeVersions(mux)
+	s.routeMCP(mux)
 	if cfg.DataSources != nil {
 		cfg.DataSources.Attach(s.ask)
 	}
@@ -345,6 +347,10 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case routeStart(r.URL.EscapedPath()) >= 0:
 		writeError(w, http.StatusNotFound, "no such route")
+	case strings.Contains(p, "/.well-known/"):
+		// Nothing is published there. An MCP client whose token was refused
+		// looks for OAuth's metadata there, and must not be given the UI.
+		writeError(w, http.StatusNotFound, "not found")
 	case strings.HasSuffix(p, "/"):
 		s.index(w, r)
 	case strings.Contains(path.Base(p), "."):
