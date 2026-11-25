@@ -358,10 +358,12 @@ func TestMCPAdminExecAndEdit(t *testing.T) {
 	}
 
 	// Without dry_run=false nothing is saved, and a dry run is not audited.
-	obj := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: web\n  namespace: a\n  resourceVersion: \"7\"\ndata:\n  a: b\n"
+	// The YAML arrives as it was sent: the last line break is part of a's
+	// value, which trimming it would change from "b\n" to "b".
+	obj := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: web\n  namespace: a\n  resourceVersion: \"7\"\ndata:\n  a: |\n    b\n"
 	text, failed = call(t, s, adminTok, "edit_resource", map[string]any{"cluster": "demo", "namespace": "a", "kind": "cm", "name": "web", "object": obj})
 	c = <-got
-	if failed || !strings.Contains(text, `"resourceVersion":"8"`) || c.Type != protocol.CommandApply || !c.DryRun || c.Body != strings.TrimSpace(obj) ||
+	if failed || !strings.Contains(text, `"resourceVersion":"8"`) || c.Type != protocol.CommandApply || !c.DryRun || c.Body != obj ||
 		c.Resource != "configmaps" || c.Group != "" || c.Namespace != "a" || c.Name != "web" {
 		t.Errorf("dry run: %v %q %+v", failed, text, c)
 	}

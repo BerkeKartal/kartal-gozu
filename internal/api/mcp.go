@@ -233,8 +233,11 @@ func toolFailed(msg string) toolResult {
 type toolArg struct {
 	name, typ, doc string // typ: "string", "integer" or "boolean"
 	required       bool
-	enum           []string
-	min, max       int // for integers, when max > min
+	// verbatim keeps a string as it came: an object's YAML, whose spaces and
+	// last line break can be part of its values.
+	verbatim bool
+	enum     []string
+	min, max int // for integers, when max > min
 }
 
 type tool struct {
@@ -321,11 +324,14 @@ func (t *tool) check(raw map[string]any) (toolArgs, error) {
 			if !ok {
 				return nil, fmt.Errorf("%s must be a string", a.name)
 			}
-			if s = strings.TrimSpace(s); s == "" {
+			if strings.TrimSpace(s) == "" {
 				if a.required {
 					return nil, fmt.Errorf("%s is required", a.name)
 				}
 				continue
+			}
+			if !a.verbatim {
+				s = strings.TrimSpace(s)
 			}
 			if len(a.enum) > 0 {
 				i := slices.IndexFunc(a.enum, func(e string) bool { return strings.EqualFold(e, s) })
@@ -829,7 +835,7 @@ var mcpTools = []tool{
 			{name: "kind", typ: "string", required: true, doc: "The object's kind, such as Deployment or ConfigMap (also plurals and kubectl's short names), or its type as group/version/resource."},
 			{name: "name", typ: "string", doc: "The object's name.", required: true},
 			{name: "namespace", typ: "string", doc: "The object's namespace; leave it out for cluster-wide types."},
-			{name: "object", typ: "string", doc: "The whole object as YAML or JSON, with metadata.resourceVersion.", required: true},
+			{name: "object", typ: "string", doc: "The whole object as YAML or JSON, with metadata.resourceVersion.", required: true, verbatim: true},
 			{name: "dry_run", typ: "boolean", doc: "false to save; when left out or true, only shows what would be saved."}},
 		call: func(a toolArgs) (string, string, any, error) {
 			_, gvr, err := resolveKind(a.str("kind"))
