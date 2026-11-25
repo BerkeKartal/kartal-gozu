@@ -309,6 +309,7 @@ td.actions-cell { width: 1%; white-space: nowrap; }
 .status-idle { color: var(--muted); }
 .issue code.detail { display: block; margin-top: 2px; }
 .more-note { color: var(--muted); padding: 8px 2px; font-size: 13px; }
+.upd-sev { flex: 0 0 auto; min-width: 74px; }
 .errors { border-color: var(--warn); }
 .errors li { color: var(--muted); }
 .group-title { margin: 14px 0 6px; font-family: var(--mono); font-size: 12px; color: var(--muted); }

@@ -35,7 +35,7 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 			files[name] = string(a.body)
 		}
 	}
-	for _, name := range []string{"app.js", "app.css", "yaml.js", "chart.js", "plot.js"} {
+	for _, name := range []string{"app.js", "app.css", "yaml.js", "chart.js", "plot.js", "versions.js"} {
 		if _, ok := files[name]; !ok {
 			t.Fatalf("%s is not embedded", name)
 		}
@@ -47,6 +47,15 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 	for _, example := range []string{"http://prometheus-server.monitoring.svc:9090", "https://elastic.example.org:9200"} {
 		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
 	}
+	// What versions.js asks, only where the server lets the page reach it
+	// (Page), and the links to what it found.
+	for _, o := range append(LookupOrigins, "https://github.com/", "https://osv.dev/vulnerability/") {
+		if !strings.Contains(files["versions.js"], "'"+o+"'") {
+			t.Errorf("versions.js does not use %s", o)
+		}
+		files["versions.js"] = strings.Replace(files["versions.js"], "'"+o+"'", "", 1)
+	}
+	files["app.js"] = strings.Replace(files["app.js"], "outLink('https://github.com/'", "outLink(", 1)
 	files["chart.js"] = strings.Replace(files["chart.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	files["app.js"] = strings.Replace(files["app.js"], "'http://www.w3.org/2000/svg'", "", 1)
 	files["plot.js"] = strings.Replace(files["plot.js"], "'http://www.w3.org/2000/svg'", "", 1)
@@ -56,6 +65,17 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 				t.Errorf("%s contains %q", name, bad)
 			}
 		}
+	}
+}
+
+func TestPageReachesOnlyWhatItIsAllowed(t *testing.T) {
+	csp := func(h http.HandlerFunc) string { return get(h, "/").Header().Get("Content-Security-Policy") }
+	if got := csp(Index); !strings.Contains(got, "connect-src 'self';") || got != policy {
+		t.Errorf("Index: %s", got)
+	}
+	if got := csp(Page(LookupOrigins...)); !strings.Contains(got, "connect-src 'self' https://api.github.com https://api.osv.dev;") ||
+		!strings.Contains(got, "default-src 'none'") {
+		t.Errorf("Page: %s", got)
 	}
 }
 

@@ -687,3 +687,24 @@ func TestTeamsMentions(t *testing.T) {
 		t.Errorf("resolved, with everything mentioned: %s", body)
 	}
 }
+
+func TestAgentVersionAlert(t *testing.T) {
+	rec := &recorder{}
+	m := NewManager(0, nil, rec)
+	now := time.Now()
+	m.ObserveAgentVersion("prod", "the agent is 72a9486, the server 7804c92", now)
+	// A snapshot does not clear it; only the comparison does.
+	m.Observe("prod", &protocol.Snapshot{}, now.Add(time.Second))
+	if n := m.ActiveCount("prod", func(Alert) bool { return true }); n != 1 {
+		t.Fatalf("%d active, want 1", n)
+	}
+	m.ObserveAgentVersion("prod", "", now.Add(time.Minute))
+	sent := rec.wait(t, 2)
+	if len(sent) != 2 || sent[0].Firing[0].Kind != AgentVersion || sent[0].Firing[0].Severity != warning ||
+		sent[1].Resolved[0].Kind != AgentVersion {
+		t.Fatalf("sent: %+v", sent)
+	}
+	if s := sent[0].Firing[0].Summary(); s != "Agent version differs prod: the agent is 72a9486, the server 7804c92" {
+		t.Errorf("summary %q", s)
+	}
+}

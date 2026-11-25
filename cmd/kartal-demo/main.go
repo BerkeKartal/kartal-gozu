@@ -53,6 +53,15 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
 )
 
+// agentVersion is the version the demo's agents say they are: the last
+// cluster's agent was not upgraded with the server.
+func agentVersion(i, n int) string {
+	if i == n-1 {
+		return "demo-previous"
+	}
+	return "demo"
+}
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "address to serve the UI and API on")
 	adminToken := flag.String("admin-token", "", "token to sign in with; empty leaves the demo open")
@@ -147,6 +156,11 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		Dashboards:     dashboard.New(keeper),
 		Silences:       silences,
 		LogRules:       logRules,
+		// The browser looks up what is newer: Kartal Gözü's commits, and the
+		// vulnerabilities of the made-up clusters' Kubernetes.
+		Version:        "demo",
+		UpdateRepo:     "BerkeKartal/kartal-gozu",
+		VersionLookups: true,
 	}
 	selfToken := adminToken
 	if withLDAP || adminToken != "" {
@@ -230,7 +244,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 			ServerURL: serverURL,
 			Token:     fmt.Sprintf("demo-agent-token-%02d", i),
 			HTTP:      &http.Client{Timeout: 30 * time.Second},
-			Collector: &agent.Collector{Kube: kc, Version: "demo", IncludeSecrets: true, VolumeStats: true, TLSSecrets: true},
+			Collector: &agent.Collector{Kube: kc, Version: agentVersion(i, len(clusters)), IncludeSecrets: true, VolumeStats: true, TLSSecrets: true},
 			Executor: &agent.Executor{Kube: kc, AllowWrite: true, AllowExec: true, AllowEdit: true, AllowScrape: true, DataSourceURLs: sources(c.name, esAllowed),
 				// Network checks start their pods in the fake API, which makes up
 				// what they find; the agent's own attempts are real.

@@ -86,6 +86,11 @@ tunnel), and the server works under any URL path without configuration.
   server keeps itself, or with Active Directory or another LDAP directory,
   whose groups give them their roles. Every change is recorded with who made
   it.
+- **What is newer than what runs.** One page tells the changes made to
+  Kartal Gözü since the server's version, which agents run another version
+  than the server, and the known vulnerabilities of each cluster's
+  Kubernetes, with the version that fixes each. The browser asks GitHub and
+  OSV.dev itself, so a server with no way out to the internet is no obstacle.
 - **Fast to get around.** A namespace picker scopes every view. Every column
   sorts. Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd> to jump anywhere. Star
   a namespace or any row to pin it to the top.
@@ -99,7 +104,8 @@ tunnel), and the server works under any URL path without configuration.
 - **No dependencies.** The server and agent use only the Go standard library,
   with a small Kubernetes client of their own. The web UI is plain HTML, CSS
   and JavaScript embedded in the server binary. There is no build step and no
-  CDN, and it works air-gapped.
+  CDN, and it works air-gapped; only the Updates & security page asks two
+  public services, from the browser, and that can be turned off.
 - **Light on the network.** Every list carries an ETag computed from its
   content. A list that did not change answers the UI's 10-second refresh with
   an empty `304`, and the page is not redrawn. Larger responses are
@@ -167,7 +173,7 @@ where it was left.
     - Applications: Helm releases, Versions, Rollouts, Right-sizing, Probes
     - Cluster: Nodes, Namespaces, Events, Placement, Network check (for
       admins)
-    - Operations: Changes, Audit log, Users (for admins)
+    - Operations: Changes, Audit log, Updates & security, Users (for admins)
     - All resources: a browser for every API type, including CRDs
 
     In Observe: Dashboards, Explore, Metrics, Alerts, URL checks.
@@ -183,6 +189,27 @@ where it was left.
 - **Versions:** every app's images in every cluster, side by side. Rows whose
   versions differ are marked, and "Only differences" keeps those and the apps
   missing from a cluster. A cell opens the app in that cluster.
+- **Updates & security:** what runs, and what is newer.
+  - **Kartal Gözü:** the server's version against its repository on GitHub
+    (`KARTAL_UPDATE_REPO`): up to date, or how many commits came since, the
+    newest of them listed with links. A version is a commit, `git describe`'s
+    output or a release's tag, as `make image` sets it.
+  - **Agents:** each cluster's agent version, marked when it is not the
+    server's; an agent that stays so for 30 minutes is an alert.
+  - **Kubernetes:** each cluster's versions, its API server's and its nodes',
+    with their known vulnerabilities from [OSV.dev](https://osv.dev), the
+    open source vulnerability database: how severe each is, its CVE and
+    advisories, and the version that fixes it, or that none does yet.
+    Packaged Kubernetes (EKS, GKE, k3s, RKE2...) is matched by the upstream
+    release it stands for; its own bulletins have the last word.
+
+  The browser asks GitHub and OSV.dev, not the server, which may have no way
+  out to the internet. It sends them the repository's name and the version
+  numbers, nothing about the clusters, and keeps what they answer for six
+  hours. The menu counts, for the cluster, an agent of another version and
+  each vulnerability a newer version fixes; for admins, a newer Kartal Gözü
+  too. `KARTAL_VERSION_LOOKUPS=false` turns the asking off: the page then
+  only compares the versions with each other.
 - **Compare** (a tab of a Deployment, StatefulSet or DaemonSet): the
   workloads named the same in the other namespaces and clusters you may see,
   such as one app's test, staging and production, side by side, setting by
@@ -611,6 +638,7 @@ problem that is still there once more.
 | Metric past its limit | a watched metric's latest value is above or below the limit set for it |
 | Log lines past their limit | more lines match a [log rule](#log-rules) than it allows |
 | Rollout stuck | a new version is not out after 10 minutes: not every replica runs it and is ready |
+| Agent version differs | a cluster's agent has run another version than the server for 30 minutes, which may not report all the server asks of it; nothing is told while either was built without a version |
 
 The levels can be changed with `KARTAL_ALERT_VOLUME_WARNING` and
 `KARTAL_ALERT_VOLUME_CRITICAL` (percent), `KARTAL_ALERT_NODE_DISK_WARNING`
@@ -941,6 +969,8 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_SETTINGS_SECRET` | — | Secret, in the server's namespace, that keeps the settings made in the UI (e-mail, URL checks) |
 | `KARTAL_SETTINGS_FILE` | — | File that keeps them instead, outside Kubernetes |
 | `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store), of the workloads' usage behind right-sizing (`sizing.json`) and of the alerts (`alerts.json`); without it there is no store, and the usage and the alerts are kept in memory |
+| `KARTAL_VERSION_LOOKUPS` | `true` | Let the browser ask GitHub and OSV.dev what is newer than what runs, for the [Updates & security](#the-web-ui) page; the server asks nothing itself |
+| `KARTAL_UPDATE_REPO` | `BerkeKartal/kartal-gozu` | The GitHub repository (`owner/name`) the server is built from, whose commits it is compared with |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ### Agent
@@ -1009,6 +1039,7 @@ is the least role a call needs. In the table, `{c}` is the cluster name.
 | GET | `/api/v1/changes?cluster=&namespace=&kind=&name=&limit=` | viewer | What changed, newest first (500 by default, at most 2,000); for operators with who made each change done through Kartal Gözü |
 | GET | `/api/v1/releases` | viewer | Every workload in every cluster with its images and readiness |
 | GET | `/api/v1/checks` | viewer | The URL checks with their latest result, uptime and last 24 hours |
+| GET | `/api/v1/versions` | viewer | The server's version and repository, whether the browser may look up what is newer, and each cluster's agent version (and whether it is the server's) and Kubernetes versions: the API server's and the nodes', with the upstream release each stands for |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/workloads/{kind}/{name}/restart` | operator | `deployment`, `statefulset`, `daemonset` |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/workloads/{kind}/{name}/scale` | operator | Body: `{"replicas": N}` |
 | POST | `/api/v1/clusters/{c}/namespaces/{ns}/deployments/{name}/rollback` | operator | Body: `{"revision": N}` |
@@ -1111,10 +1142,16 @@ are `api/v1/`, `agent/v1/` and `_ui/`.
   only open TCP connections to the addresses given and print the results;
   the agent removes them once it has read them, and any left behind after
   ten minutes.
-- The UI is served with a strict Content-Security-Policy: same-origin only, no
-  inline code except one hashed line, and no framing. The token stays in the
+- The UI is served with a strict Content-Security-Policy: same-origin only
+  (but for the two services below), no inline code except one hashed line,
+  and no framing. The token stays in the
   browser. It is kept in session storage, or in local storage when "Remember
   on this device" is ticked.
+- The server itself asks nothing of the internet. What is newer than what
+  runs is asked by the browser: GitHub gets the repository's name and OSV.dev
+  the Kubernetes version numbers, and nothing about the clusters. With
+  `KARTAL_VERSION_LOOKUPS=false` nothing is asked, and the page's policy
+  allows neither service.
 - Containers run as a non-root user, with a read-only file system and all
   Linux capabilities dropped.
 

@@ -1,6 +1,8 @@
 // Package ui embeds the web interface: plain HTML, CSS and ES modules.
 // There is nothing to build and nothing is fetched from the internet, so the
-// UI works in air-gapped networks exactly as it does anywhere else.
+// UI works in air-gapped networks exactly as it does anywhere else. The one
+// exception is opt-out: the page may ask GitHub and OSV.dev what is newer
+// than the versions that run (Page).
 package ui
 
 import (
@@ -114,9 +116,25 @@ func Assets() http.Handler {
 }
 
 // Index serves the page itself; the caller decides at which paths.
-func Index(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Security-Policy", policy)
-	serve(w, r, index)
+func Index(w http.ResponseWriter, r *http.Request) { Page()(w, r) }
+
+// LookupOrigins are the services the page asks what is newer than the
+// versions that run (versions.js): GitHub for Kartal Gözü's commits, OSV.dev
+// for the vulnerabilities of Kubernetes releases. The page reaches them only
+// when it is served with Page(LookupOrigins...).
+var LookupOrigins = []string{"https://api.github.com", "https://api.osv.dev"}
+
+// Page serves the page, which may also connect to the given origins, such
+// as LookupOrigins; with none, only to the server.
+func Page(connect ...string) http.HandlerFunc {
+	p := policy
+	if len(connect) > 0 {
+		p = strings.Replace(policy, "connect-src 'self'", "connect-src 'self' "+strings.Join(connect, " "), 1)
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", p)
+		serve(w, r, index)
+	}
 }
 
 // serve sends an embedded file. "no-cache" with an ETag means browsers keep

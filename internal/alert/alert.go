@@ -74,6 +74,7 @@ var titles = map[string]string{
 	"MetricLimit":         "Metric past its limit",
 	"LogLimit":            "Log lines past their limit",
 	"RolloutStuck":        "Rollout stuck",
+	AgentVersion:          "Agent version differs",
 }
 
 // podFailing are the pod reasons worth telling someone about; a pod merely
@@ -322,9 +323,13 @@ func (m *Manager) Observe(cluster string, snap *protocol.Snapshot, now time.Time
 			add(a)
 		}
 	}
-	m.update(cluster, found, func(a *Alert) bool {
-		return a.Kind != "AgentOffline" && a.Kind != MetricLimit && a.Kind != RolloutStuck
-	}, true, now)
+	m.update(cluster, found, func(a *Alert) bool { return !ownedElsewhere[a.Kind] }, true, now)
+}
+
+// ownedElsewhere are the kinds of a cluster's alerts that something other
+// than its snapshot finds.
+var ownedElsewhere = map[string]bool{
+	"AgentOffline": true, MetricLimit: true, RolloutStuck: true, AgentVersion: true,
 }
 
 // VolumeLevels are how full a volume may get, in percent, before it is a
@@ -504,6 +509,21 @@ func (m *Manager) ObserveRollouts(cluster string, stuck map[string]string, now t
 		found[a.key()] = a
 	}
 	m.update(cluster, found, func(a *Alert) bool { return a.Kind == RolloutStuck }, true, now)
+}
+
+// AgentVersion is the kind of alert for an agent built from another
+// version than the server, which may lack what the server asks of it.
+const AgentVersion = "AgentVersion"
+
+// ObserveAgentVersion records whether a cluster's agent is of another
+// version than the server: detail says how, and is empty when it is not.
+func (m *Manager) ObserveAgentVersion(cluster, detail string, now time.Time) {
+	found := map[string]Alert{}
+	if detail != "" {
+		a := Alert{Cluster: cluster, Kind: AgentVersion, Severity: warning, Object: cluster, Detail: detail}
+		found[a.key()] = a
+	}
+	m.update(cluster, found, func(a *Alert) bool { return a.Kind == AgentVersion }, true, now)
 }
 
 // AgentStatus records whether a cluster's agent is reporting.

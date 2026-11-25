@@ -103,6 +103,14 @@ type Config struct {
 	// DirectoryRules are the rules of KARTAL_LDAP_GROUPS ("group => grant"),
 	// which the admin panel shows next to the groups mapped in the UI.
 	DirectoryRules []string
+	// Version is the server's own, which the agents' are compared with;
+	// UpdateRepo the GitHub repository ("owner/name") it is built from.
+	Version    string
+	UpdateRepo string
+	// VersionLookups lets the browser ask GitHub for the changes made since
+	// Version and OSV.dev for the vulnerabilities of the clusters'
+	// Kubernetes versions (ui.LookupOrigins). The server itself asks nothing.
+	VersionLookups bool
 }
 
 type Server struct {
@@ -120,6 +128,11 @@ type Server struct {
 	sessions *auth.Sessions
 	throttle throttle
 	handler  http.Handler
+	// index serves the page, with the origins it may reach.
+	index http.HandlerFunc
+	// agentSince is since when each cluster's agent has been of another
+	// version than the server; only Watch uses it.
+	agentSince map[string]time.Time
 }
 
 // New returns the server. It answers under any path prefix (see
@@ -142,13 +155,17 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 		sz = sizing.New()
 	}
 	s := &Server{cfg: cfg, st: st, log: log, now: time.Now, users: auth.NewDirectory(users), history: hist, sizing: sz,
-		changes: changes.New(), rollouts: rollout.New(), audit: newAuditLog()}
+		changes: changes.New(), rollouts: rollout.New(), audit: newAuditLog(), agentSince: map[string]time.Time{}}
 	if cfg.Login != nil {
 		ttl := cfg.SessionTTL
 		if ttl <= 0 {
 			ttl = 12 * time.Hour
 		}
 		s.sessions = auth.NewSessions(ttl)
+	}
+	s.index = ui.Page()
+	if cfg.VersionLookups {
+		s.index = ui.Page(ui.LookupOrigins...)
 	}
 
 	mux := http.NewServeMux()
@@ -220,6 +237,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 	s.routeUsers(mux)
 	s.routeNetwork(mux)
 	s.routeWorkloads(mux)
+	s.routeVersions(mux)
 	if cfg.DataSources != nil {
 		cfg.DataSources.Attach(s.ask)
 	}
@@ -235,7 +253,8 @@ func New(cfg Config, st *store.Store, log *slog.Logger) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
 
 // Watch runs the server's periodic work until ctx ends: it tells the alert
-// manager which agents have gone silent.
+// manager which agents have gone silent and which run another version than
+// the server.
 func (s *Server) Watch(ctx context.Context) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
@@ -253,6 +272,7 @@ func (s *Server) Watch(ctx context.Context) {
 			if st := s.status(ci); st != statusNever {
 				s.cfg.Alerts.AgentStatus(ci.Name, st == statusOnline, ci.LastSeen, now)
 			}
+			s.watchVersions(ci, now)
 		}
 	}
 }
@@ -326,7 +346,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	case routeStart(r.URL.EscapedPath()) >= 0:
 		writeError(w, http.StatusNotFound, "no such route")
 	case strings.HasSuffix(p, "/"):
-		ui.Index(w, r)
+		s.index(w, r)
 	case strings.Contains(path.Base(p), "."):
 		writeError(w, http.StatusNotFound, "not found")
 	default:
@@ -616,6 +636,9 @@ type clusterSummary struct {
 	Capabilities []string `json:"capabilities"`
 	// Alerts counts the cluster's active problems.
 	Alerts int `json:"alerts"`
+	// AgentDiffers says its agent was built from another version than the
+	// server.
+	AgentDiffers bool `json:"agentDiffers"`
 }
 
 const (
@@ -649,6 +672,7 @@ func (s *Server) summarize(u auth.User, ci store.ClusterInfo) clusterSummary {
 	if snap == nil {
 		return sum
 	}
+	sum.AgentDiffers = s.agentDiffers(snap.AgentVersion)
 	t := snap.CollectedAt
 	sum.CollectedAt = &t
 	sum.KubeVersion, sum.AgentVersion, sum.Errors = snap.KubeVersion, snap.AgentVersion, snap.Errors

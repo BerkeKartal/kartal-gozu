@@ -39,6 +39,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/store"
 	"github.com/BerkeKartal/kartal-gozu/internal/tsdb"
 	"github.com/BerkeKartal/kartal-gozu/internal/uptime"
+	"github.com/BerkeKartal/kartal-gozu/internal/versions"
 )
 
 var version = "dev"
@@ -197,6 +198,16 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The browser asks GitHub and OSV.dev what is newer than what runs;
+	// the server itself asks nothing, as it may not reach the internet.
+	lookups, err := config.Bool("KARTAL_VERSION_LOOKUPS", true)
+	if err != nil {
+		return err
+	}
+	repo := config.String("KARTAL_UPDATE_REPO", "BerkeKartal/kartal-gozu")
+	if !versions.ValidRepo(repo) {
+		return fmt.Errorf("KARTAL_UPDATE_REPO must be a GitHub repository as owner/name, not %q", repo)
+	}
 
 	cfg := api.Config{
 		AgentTokens:    tokens,
@@ -216,6 +227,9 @@ func run(log *slog.Logger) error {
 		Silences:       silences,
 		LogRules:       logRules,
 		SessionTTL:     sessionTTL,
+		Version:        version,
+		UpdateRepo:     repo,
+		VersionLookups: lookups,
 	}
 	if len(login) > 0 {
 		cfg.Login = login
@@ -315,7 +329,7 @@ func run(log *slog.Logger) error {
 	log.Info("kartal-server started", "version", version, "addr", srv.Addr, "clusters", clusters,
 		"users", len(users)+min(len(adminToken), 1)+passwords.Len(), "ui_users", len(keeper.Get().Users),
 		"notification_channels", alerts.Channels(), "settings", keeper.Where(),
-		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector))
+		"url_checks", len(keeper.Get().Checks), "metric_store", storeDir(collector), "version_lookups", lookups)
 
 	select {
 	case err := <-errc:

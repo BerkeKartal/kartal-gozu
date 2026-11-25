@@ -1,10 +1,13 @@
 // Kartal Gözü web UI: dependency-free ES modules. No framework, no build
-// step, nothing fetched from the internet. API calls use relative URLs, so
-// the page works under whatever path the server is published at.
+// step, nothing fetched from the internet but, unless the server turns it
+// off, what is newer than the versions that run (versions.js). API calls use
+// relative URLs, so the page works under whatever path the server is
+// published at.
 
 import { toYAML, diffLines } from './yaml.js';
 import { lineChart } from './chart.js';
 import { plot, sparkline } from './plot.js';
+import { lookSelf, lookVulns, LookupError } from './versions.js';
 
 const REFRESH_MS = 10000;
 const FOLLOW_MS = 3000;
@@ -15,12 +18,12 @@ const TOKEN_KEY = 'kartal.token';
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
   'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources',
-  'placement', 'netcheck', 'sizing', 'probes', 'rollouts'];
+  'placement', 'netcheck', 'sizing', 'probes', 'rollouts', 'updates'];
 // Views that are not about one namespace.
 const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users',
-  'placement', 'netcheck']);
+  'placement', 'netcheck', 'updates']);
 // Views that show every cluster at once.
-const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards']);
+const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards', 'updates']);
 // Views of the server itself: the addresses it checks, its users.
 const SERVER_VIEWS = new Set(['uptime', 'users']);
 // Views whose data the agent fetches live; they reload on demand only.
@@ -64,7 +67,7 @@ const NAV = [
   { group: 'grpStorage', items: ['volumeclaims'] },
   { group: 'grpApps', items: ['helm', 'releases', 'rollouts', 'sizing', 'probes'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events', 'placement', 'netcheck'] },
-  { group: 'grpOps', items: ['changes', 'audit', 'users'] },
+  { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
 ];
@@ -75,7 +78,7 @@ const NAV_COUNT = {
   services: ['services'], ingresses: ['ingresses'], configmaps: ['configMaps'], secrets: ['secrets'],
   volumeclaims: ['volumeClaims', ['volumeClaimsUnbound', 'volumeClaimsFilling']], nodes: ['nodes', 'nodesNotReady'],
   certificates: ['certificates', 'certificatesExpiring'],
-  namespaces: ['namespaces'], events: [null, 'warnings'], alerts: [null, 'alerts'],
+  namespaces: ['namespaces'], events: [null, 'warnings'], alerts: [null, 'alerts'], updates: [null, 'versionIssues'],
 };
 const RANK = { viewer: 1, operator: 2, admin: 3 };
 
@@ -294,6 +297,24 @@ const STRINGS = {
     silSaved: 'Silenced until {0}.', silEnd: 'End', silEndTitle: 'End the silence', silEndConfirm: 'The alerts it covers are notified again, from the next check.',
     silEnded: 'Silence ended.', silOn: 'on', silAhead: 'ahead', silNone: 'No silence is on or ahead.', silCovers: 'Covers', silWhen: 'When', silBy: 'By',
     'alert.LogLimit': 'Log lines past their limit',
+    'alert.AgentVersion': 'Agent version differs',
+    updates: 'Updates & security',
+    updHint: 'What runs, and what is newer. Your browser asks GitHub and OSV.dev, the open source vulnerability database, itself: the server may have no way out to the internet. Only the repository’s name and the version numbers are sent.',
+    updOff: 'Looking up what is newer is turned off on this server (KARTAL_VERSION_LOOKUPS=false): the versions are only compared with each other.',
+    updAgain: 'Look again', updLooking: 'Looking up…', updChecked: 'checked {0} ago', updFailed: 'Could not look it up: {0}',
+    updServer: 'This server', updFrom: 'built from {0}', updCurrent: 'up to date', updBehind: '{0} newer changes', updOneBehind: '1 newer change',
+    updMore: 'and {0} more', updAll: 'All changes on GitHub', updDirty: 'built with changes that were not committed',
+    'upd.noVersion': 'This server was built without a version, so it cannot be compared: build it with VERSION set, as make image does.',
+    'upd.notRecent': '{0} is not one of the newest {1} commits of the repository: an older build, or one of changes that are not there.',
+    'upd.notInRepo': 'The repository has no tag or commit named {0}.',
+    'upd.notComparable': '{0} names no commit or release, so it cannot be compared with the repository.',
+    updAgents: 'Agents', updAgentSame: 'same as the server', updAgentDiffers: 'not the server’s {0}', updAgentNone: 'not reported yet',
+    updAgentHint: 'An agent of another version than the server may not report all the server asks of it. A difference that lasts 30 minutes is an alert.',
+    updKube: 'Kubernetes', updWhereAPI: 'API server', updOneNode: '1 node', updNodes: '{0} nodes', updNoVulns: 'no known vulnerabilities',
+    updVulns: '{0} known, {1} fixed in a newer version', updNotYet: 'not looked up yet', updNoFix: 'no fix yet', updFixedIn: 'fixed in {0}',
+    updNoKube: 'No cluster has reported its version yet.',
+    updDistro: 'Packaged Kubernetes (EKS, GKE, AKS, k3s, RKE2, OpenShift…) may carry fixes in versions of its own; its bulletins have the last word. Versions are matched by the upstream release they stand for.',
+    'sev.CRITICAL': 'critical', 'sev.HIGH': 'high', 'sev.MODERATE': 'moderate', 'sev.LOW': 'low', 'sev.unknown': 'severity unknown',
     alertsAfterBoth: 'A critical problem is notified once it has lasted {0}, any other after {1}; problems that start or end together go out as one message.',
     logRules: 'Log rules', lrAdd: 'Log rule', lrNew: 'New log rule', lrEdit: 'Edit log rule', lrNone: 'No log rule yet.',
     lrHint: 'Every minute each rule counts the log lines of an Elasticsearch data source that match its query, over the last while; more than it allows is an alert. It finds what goes wrong while the pods keep running.',
@@ -745,6 +766,24 @@ const STRINGS = {
     silSaved: 'Susturuldu, bitiş: {0}.', silEnd: 'Bitir', silEndTitle: 'Susturmayı bitir', silEndConfirm: 'Kapsadığı uyarılar bir sonraki kontrolden itibaren yeniden bildirilir.',
     silEnded: 'Susturma bitti.', silOn: 'açık', silAhead: 'ileride', silNone: 'Açık ya da ileride bir susturma yok.', silCovers: 'Kapsam', silWhen: 'Zaman', silBy: 'Kuran',
     'alert.LogLimit': 'Log satırları sınırı aştı',
+    'alert.AgentVersion': 'Agent sürümü farklı',
+    updates: 'Güncellemeler ve güvenlik',
+    updHint: 'Çalışan sürümler ve daha yenileri. GitHub’a ve açık kaynak zafiyet veritabanı OSV.dev’e tarayıcınız kendisi sorar, çünkü sunucunun internete çıkışı olmayabilir. Yalnızca deponun adı ve sürüm numaraları gönderilir.',
+    updOff: 'Bu sunucuda yeni sürüm sorgusu kapalı (KARTAL_VERSION_LOOKUPS=false): sürümler yalnızca birbiriyle karşılaştırılıyor.',
+    updAgain: 'Tekrar bak', updLooking: 'Sorgulanıyor…', updChecked: '{0} önce bakıldı', updFailed: 'Sorgulanamadı: {0}',
+    updServer: 'Bu sunucu', updFrom: '{0} deposundan derlenmiş', updCurrent: 'güncel', updBehind: '{0} yeni değişiklik var', updOneBehind: '1 yeni değişiklik var',
+    updMore: 've {0} tane daha', updAll: 'Tüm değişiklikler GitHub’da', updDirty: 'commit edilmemiş değişikliklerle derlenmiş',
+    'upd.noVersion': 'Bu sunucu sürüm bilgisi olmadan derlenmiş, karşılaştırılamıyor: VERSION vererek derleyin (make image bunu yapar).',
+    'upd.notRecent': '{0}, deponun en yeni {1} commit’i arasında yok: ya daha eski bir derleme ya da depoda olmayan değişikliklerden derlenmiş.',
+    'upd.notInRepo': 'Depoda {0} adında bir etiket ya da commit yok.',
+    'upd.notComparable': '{0} bir commit ya da sürüm adı değil, depoyla karşılaştırılamıyor.',
+    updAgents: 'Agent’lar', updAgentSame: 'sunucuyla aynı', updAgentDiffers: 'sunucunun sürümü ({0}) değil', updAgentNone: 'henüz raporlamadı',
+    updAgentHint: 'Sunucudan farklı sürümdeki bir agent, sunucunun istediği her şeyi raporlamayabilir. Fark 30 dakika sürerse alarm olur.',
+    updKube: 'Kubernetes', updWhereAPI: 'API sunucusu', updOneNode: '1 node', updNodes: '{0} node', updNoVulns: 'bilinen açık yok',
+    updVulns: '{0} bilinen açık, {1} tanesi yeni bir sürümde düzeltilmiş', updNotYet: 'henüz sorgulanmadı', updNoFix: 'henüz düzeltme yok',
+    updFixedIn: '{0} sürümünde düzeltildi', updNoKube: 'Henüz hiçbir cluster sürümünü raporlamadı.',
+    updDistro: 'Paketlenmiş Kubernetes dağıtımları (EKS, GKE, AKS, k3s, RKE2, OpenShift…) düzeltmeleri kendi sürümlerine de alabilir; son sözü onların duyuruları söyler. Sürümler, karşılık geldikleri upstream sürümüyle eşleştirilir.',
+    'sev.CRITICAL': 'kritik', 'sev.HIGH': 'yüksek', 'sev.MODERATE': 'orta', 'sev.LOW': 'düşük', 'sev.unknown': 'önemi bilinmiyor',
     alertsAfterBoth: 'Kritik bir sorun {0}, diğerleri {1} sürerse bildirilir; birlikte başlayan ya da biten sorunlar tek mesajda gider.',
     logRules: 'Log kuralları', lrAdd: 'Log kuralı', lrNew: 'Yeni log kuralı', lrEdit: 'Log kuralını düzenle', lrNone: 'Henüz log kuralı yok.',
     lrHint: 'Her kural, bir Elasticsearch veri kaynağında sorgusuna uyan log satırlarını son bir süre için dakikada bir sayar; izin verdiğinden fazlası uyarı olur. Pod’lar çalışmaya devam ederken bozulan şeyleri yakalar.',
@@ -1496,6 +1535,7 @@ async function refresh({ auto = false } = {}) {
     const [clusters, me] = await Promise.all([api('clusters', { signal }), state.me ? state.me : api('me', { signal })]);
     if (my !== seq) return;
     state.clusters = clusters;
+    maybeVersions();
     if (!state.me) {
       // What the user may do decides which tabs and buttons appear.
       state.me = me;
@@ -1580,7 +1620,7 @@ function sameData(a, b) {
     if (k === 'summary') return shown(a.summary) === shown(b.summary);
     // Alerts, the audit log, changes, versions and checks have no ETag; they
     // are small.
-    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime', 'appmetrics', 'rollouts', 'ingresses', 'certificates'].includes(state.view)) {
+    if (k === 'alerts' || ['audit', 'changes', 'releases', 'uptime', 'appmetrics', 'rollouts', 'ingresses', 'certificates', 'updates'].includes(state.view)) {
       return JSON.stringify(a[k]) === JSON.stringify(b[k]);
     }
     return false;
@@ -1661,6 +1701,14 @@ async function loadView(signal) {
     }
     case 'releases':
       return { items: await api('releases', { signal }) };
+    case 'updates': {
+      // The page shows what the browser found so far; what is due is
+      // looked up meanwhile, and drawn when it comes.
+      const page = await api('versions', { signal });
+      vers.asked = Date.now();
+      checkVersions(page);
+      return { versions: page };
+    }
     case 'explore':
       // Explore runs its own queries; refreshing runs them again, after
       // reading how often the store reads, which its windows go by.
@@ -1972,10 +2020,11 @@ function renderPinned() {
 // the whole cluster's. Nodes, namespaces and alerts are always the cluster's.
 function navCounts() {
   const c = currentCluster();
-  const cluster = Object.assign({}, (c && c.counts) || {}, { alerts: c ? c.alerts || 0 : 0 });
+  const cluster = Object.assign({}, (c && c.counts) || {}, { alerts: c ? c.alerts || 0 : 0, versionIssues: versionIssues(c) });
   if (!state.ns) return cluster;
   return Object.assign({}, (state.namespaces || []).find(n => n.name === state.ns),
-    { nodes: cluster.nodes, nodesNotReady: cluster.nodesNotReady, namespaces: cluster.namespaces, alerts: cluster.alerts });
+    { nodes: cluster.nodes, nodesNotReady: cluster.nodesNotReady, namespaces: cluster.namespaces, alerts: cluster.alerts,
+      versionIssues: cluster.versionIssues });
 }
 
 // The navigation's groups are open, so that every view is in sight; a click
@@ -2305,7 +2354,7 @@ function navItem(id, counts, other) {
       navIcon(id),
       h('span', { class: 'nav-label' }, t(id)),
       other ? h('span', { class: 'nav-other' }, t(spaceOf(id) === 'observe' ? 'spaceObserve' : 'spaceCluster')) : null,
-      problems ? h('span', { class: 'nav-alert ' + (id === 'events' ? 'warn' : 'bad'), title: t('navNeedsAttention', problems) }, problems) : null,
+      problems ? h('span', { class: 'nav-alert ' + (id === 'events' || id === 'updates' ? 'warn' : 'bad'), title: t('navNeedsAttention', problems) }, problems) : null,
       total != null ? h('span', { class: 'nav-count' }, total) : null),
     h('button', {
       type: 'button', class: fav ? 'nav-star on' : 'nav-star', title: t(fav ? 'navFavRemove' : 'navFavAdd'),
@@ -2333,6 +2382,7 @@ const NAV_ICONS = {
   volumeclaims: [[3, 13, 18, 7, 2], 'M3 13l3-8h12l3 8', 'M7 16.5h.01'],
   helm: [[12, 12, 7], [12, 12, 2], 'M12 3v4', 'M12 17v4', 'M3 12h4', 'M17 12h4', 'M5.6 5.6l2.9 2.9', 'M15.5 15.5l2.9 2.9', 'M5.6 18.4l2.9-2.9', 'M15.5 8.5l2.9-2.9'],
   releases: ['M3 12V4h8l10 10-8 8z', [7.5, 8, 1.3]],
+  updates: [[12, 12, 9], 'M12 16.5V8', 'M8.5 11.5L12 8l3.5 3.5'],
   rollouts: ['M12 20V7', 'M6.5 12.5L12 7l5.5 5.5', 'M5 4h14'],
   sizing: ['M4 18a8 8 0 1 1 16 0', 'M12 18l4-6', [12, 18, 1.2]],
   probes: ['M3 12h4l2-5 4 10 2-5h6'],
@@ -2480,6 +2530,7 @@ function renderContent() {
     case 'audit': body = renderAudit(state.data.items); break;
     case 'changes': body = renderChanges(state.data.items); break;
     case 'releases': body = renderReleases(state.data.items); break;
+    case 'updates': body = renderUpdates(state.data.versions); break;
     case 'uptime': body = renderUptime(state.data.checks); break;
     case 'users': body = renderUsers(state.data); break;
     case 'placement': body = renderPlacement(state.data); break;
@@ -3238,7 +3289,7 @@ function renderAlerts(st) {
 // ---- silences
 
 const ALERT_KINDS = ['AgentOffline', 'NodeNotReady', 'NodePressure', 'NodeDiskFilling', 'PodFailing', 'WorkloadDegraded', 'JobFailed',
-  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'LogLimit', 'RolloutStuck'];
+  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'LogLimit', 'RolloutStuck', 'AgentVersion'];
 const SIL_FOR = [['1h', 3600e3], ['4h', 4 * 3600e3], ['1d', 86400e3], ['7d', 7 * 86400e3]];
 
 // maySilence tells whether the user may set or end a silence over a
@@ -4936,6 +4987,222 @@ function renderReleases(items) {
       button(t('showMore'), () => { state.limit += 1000; renderContent(); })) : null,
     h('div', { class: 'more-note' }, t('versionsHint')),
   ];
+}
+
+// ---------------------------------------------------------------- updates and security
+
+// What is newer than what runs: the browser asks GitHub and OSV.dev itself
+// (versions.js), as the server may have no way out to the internet. What it
+// found is kept in this browser for VERS_TTL, so that not every page load
+// asks again; a lookup that failed is tried again after VERS_RETRY.
+const VERS_KEY = 'kartal.versions.v1';
+const VERS_TTL = 6 * 3600e3;
+const VERS_RETRY = 30 * 60e3;
+const vers = Object.assign({ page: null, busy: false, asked: 0, self: null, kube: {} }, versStored());
+
+function versStored() {
+  try {
+    const v = JSON.parse(readStore('localStorage', VERS_KEY) || 'null');
+    if (!v || typeof v !== 'object') return {};
+    return { self: v.self && typeof v.self === 'object' ? v.self : null, kube: v.kube && typeof v.kube === 'object' ? v.kube : {} };
+  } catch {
+    return {};
+  }
+}
+
+function versFresh(entry) {
+  return !!entry && Date.now() - entry.at < (entry.error ? VERS_RETRY : VERS_TTL);
+}
+
+function lookupText(e) {
+  return e instanceof LookupError ? e.message : String((e && e.message) || e);
+}
+
+// upstreamsOf are the Kubernetes releases the clusters run, each once.
+function upstreamsOf(page) {
+  return [...new Set(page.clusters.flatMap(c => c.kubernetes.map(k => k.upstream)))];
+}
+
+// checkVersions looks up what it does not know, or no longer: at most every
+// VERS_TTL, after a failure every VERS_RETRY, and now when forced.
+async function checkVersions(page, force) {
+  if (page) vers.page = page;
+  page = vers.page;
+  if (!page || !page.server.lookups || vers.busy) return;
+  const key = page.server.version + '@' + page.server.repo;
+  const due = upstreamsOf(page).filter(v => force || !versFresh(vers.kube[v]));
+  const selfDue = force || !versFresh(vers.self) || vers.self.key !== key;
+  if (!selfDue && !due.length) return;
+  vers.busy = true;
+  if (state.view === 'updates') renderContent();
+  try {
+    if (selfDue) {
+      try {
+        vers.self = { key, at: Date.now(), value: await lookSelf(page.server.version, page.server.repo) };
+      } catch (e) {
+        vers.self = { key, at: Date.now(), error: lookupText(e) };
+      }
+    }
+    for (const v of due) {
+      try {
+        vers.kube[v] = { at: Date.now(), vulns: await lookVulns(v) };
+      } catch (e) {
+        // What was found before stays, with why it could not be asked again.
+        vers.kube[v] = { at: Date.now(), vulns: (vers.kube[v] && vers.kube[v].vulns) || null, error: lookupText(e) };
+      }
+    }
+    // Releases no cluster runs any more are forgotten.
+    const run = new Set(upstreamsOf(page));
+    for (const v of Object.keys(vers.kube)) if (!run.has(v)) delete vers.kube[v];
+    writeStore('localStorage', VERS_KEY, JSON.stringify({ self: vers.self, kube: vers.kube }));
+  } finally {
+    vers.busy = false;
+  }
+  if (state.view === 'updates') renderContent();
+  renderNav();
+}
+
+// maybeVersions keeps the menu's count of what the updates page marks: the
+// server's part is asked for once an hour, the lookups when they are due.
+function maybeVersions() {
+  if (Date.now() - vers.asked < 3600e3) return;
+  vers.asked = Date.now();
+  api('versions').then(page => checkVersions(page), () => {});
+}
+
+// versionIssues counts what the updates page marks for a cluster: an agent
+// of another version than the server, each vulnerability of its Kubernetes
+// that a newer version fixes, and, for admins of everything, a newer Kartal
+// Gözü.
+function versionIssues(c) {
+  if (!c) return 0;
+  let n = c.agentDiffers ? 1 : 0;
+  const page = vers.page;
+  if (!page || !page.server.lookups) return n;
+  const pc = page.clusters.find(x => x.name === c.name);
+  const ids = new Set();
+  for (const k of (pc && pc.kubernetes) || []) {
+    for (const v of (vers.kube[k.upstream] && vers.kube[k.upstream].vulns) || []) if (v.fixed) ids.add(v.id);
+  }
+  n += ids.size;
+  if (canEverywhere('admin') && vers.self && vers.self.value && vers.self.value.state === 'behind') n++;
+  return n;
+}
+
+// outLink links to a page of the web, in a tab of its own. The address
+// comes from a service's answer, so it is used only when it is one.
+function outLink(href, ...children) {
+  return h('a', { href: /^https:\/\//.test(String(href)) ? href : null, target: '_blank', rel: 'noopener noreferrer' }, ...children);
+}
+
+function sevPill(severity) {
+  const kind = !severity ? 'idle' : severity === 'CRITICAL' || severity === 'HIGH' ? 'bad' : severity === 'MODERATE' ? 'warn' : 'idle';
+  return h('span', { class: 'upd-sev status-' + kind }, t(severity ? 'sev.' + severity : 'sev.unknown'));
+}
+
+function knownVersion(v) {
+  return !!v && v.trim() !== '' && v.trim() !== 'dev';
+}
+
+function renderUpdates(page) {
+  const looks = page.server.lookups;
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  return [
+    panel(null, h('div', { class: 'issue' },
+      h('div', { class: 'what' },
+        h('div', { class: 'detail' }, t('updHint')),
+        looks ? null : h('div', { class: 'detail status-warn' }, t('updOff'))),
+      looks ? h('div', { class: 'actions' },
+        h('button', { type: 'button', class: 'btn', disabled: vers.busy, onclick: () => checkVersions(page, true) },
+          vers.busy ? t('updLooking') : t('updAgain'))) : null)),
+    updSelf(page),
+    updAgents(page, words),
+    updKube(page, words),
+  ];
+}
+
+// updSelf is the server's version against its repository.
+function updSelf(page) {
+  const s = page.server;
+  const got = vers.self && vers.self.key === s.version + '@' + s.repo ? vers.self : null;
+  const v = got && got.value;
+  let mark = null;
+  if (!s.lookups) mark = null;
+  else if (!got) mark = h('span', { class: 'muted' }, vers.busy ? t('updLooking') : t('updNotYet'));
+  else if (got.error) mark = h('span', { class: 'status-bad' }, t('updFailed', got.error));
+  else if (v.state === 'current') mark = pill('✓ ' + t('updCurrent'), 'ok');
+  else if (v.state === 'behind') mark = pill(v.behind === 1 ? t('updOneBehind') : t('updBehind', v.behind), 'warn');
+  const rows = [h('div', { class: 'issue' },
+    h('div', { class: 'what' },
+      h('div', { class: 'title' }, t('updServer'), ' ', mono(s.version || 'dev')),
+      h('div', { class: 'detail' }, t('updFrom', s.repo), ' · ', outLink('https://github.com/' + s.repo, 'GitHub'),
+        v && v.dirty ? ' · ' + t('updDirty') : null,
+        got && !got.error ? ' · ' + t('updChecked', ago(got.at)) : null),
+      v && v.state === 'unknown' ? h('div', { class: 'detail status-warn' }, t('upd.' + v.reason, v.sha || v.ref || '', v.count || 0)) : null),
+    mark)];
+  if (v && v.state === 'behind') {
+    for (const c of v.commits) {
+      rows.push(h('div', { class: 'issue' }, h('div', { class: 'what' },
+        h('div', { class: 'title' }, outLink(c.url, c.title || c.sha.slice(0, 7))),
+        h('div', { class: 'detail' }, mono(c.sha.slice(0, 7)), ' · ', age(c.date)))));
+    }
+    rows.push(h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' },
+      v.behind > v.commits.length ? t('updMore', v.behind - v.commits.length) + ' · ' : null, outLink(v.url, t('updAll'))))));
+  }
+  return panel('Kartal Gözü', rows);
+}
+
+// updAgents compares each cluster's agent with the server.
+function updAgents(page, words) {
+  const rows = page.clusters.filter(c => matches(words, [c.name, c.agentVersion]));
+  if (!rows.length) return null;
+  const comparable = knownVersion(page.server.version);
+  return panel(t('updAgents'), [
+    rows.map(c => h('div', { class: 'issue' },
+      h('div', { class: 'what' },
+        h('div', { class: 'title' }, h('a', { href: routeHash({ cluster: c.name, view: 'overview', ns: '' }) }, c.name)),
+        h('div', { class: 'detail' }, c.agentVersion ? mono(c.agentVersion) : t('updAgentNone'))),
+      !c.agentVersion || !comparable || !knownVersion(c.agentVersion) ? null
+        : c.agentDiffers ? pill('≠ ' + t('updAgentDiffers', page.server.version), 'warn') : pill('✓ ' + t('updAgentSame'), 'ok'))),
+    h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail' }, t('updAgentHint')))),
+  ]);
+}
+
+// updKube is each cluster's Kubernetes versions with their known
+// vulnerabilities, a panel each.
+function updKube(page, words) {
+  const looks = page.server.lookups;
+  const out = [];
+  for (const c of page.clusters) {
+    for (const k of c.kubernetes) {
+      const found = looks ? vers.kube[k.upstream] : null;
+      const all = (found && found.vulns) || [];
+      const vulns = all.filter(v => matches(words, [c.name, k.version, v.id, v.summary].concat(v.aliases)));
+      if (words.length && !vulns.length && !matches(words, [c.name, k.version])) continue;
+      const where = [k.apiServer ? t('updWhereAPI') : null,
+        k.nodes && k.nodes.length ? (k.nodes.length === 1 ? t('updOneNode') : t('updNodes', k.nodes.length)) : null].filter(Boolean).join(', ');
+      let mark = null;
+      if (looks && !found) mark = h('span', { class: 'muted' }, vers.busy ? t('updLooking') : t('updNotYet'));
+      else if (found && found.vulns && !all.length) mark = pill('✓ ' + t('updNoVulns'), 'ok');
+      else if (all.length) {
+        const fixable = all.filter(v => v.fixed).length;
+        mark = h('span', { class: fixable ? 'status-warn' : 'muted' }, t('updVulns', all.length, fixable));
+      }
+      const title = h('span', null, c.name, ' · ', mono(k.version), where ? h('span', { class: 'muted', title: (k.nodes || []).join(', ') || null }, ' · ' + where) : null);
+      const rows = vulns.map(v => h('div', { class: 'issue' },
+        sevPill(v.severity),
+        h('div', { class: 'what' },
+          h('div', { class: 'title' }, v.summary || v.id),
+          h('div', { class: 'detail' }, outLink(v.url, mono(v.id)), v.aliases.length ? ' · ' + v.aliases.join(', ') : null)),
+        v.fixed ? h('span', { class: 'status-warn' }, t('updFixedIn', v.fixed)) : h('span', { class: 'muted' }, t('updNoFix'))));
+      if (found && found.error) {
+        rows.unshift(h('div', { class: 'issue' }, h('div', { class: 'what' }, h('div', { class: 'detail status-bad' }, t('updFailed', found.error)))));
+      }
+      out.push(panel(null, [h('h2', null, t('updKube'), ' ', title, h('span', { class: 'toolbar-end' }, mark)), rows]));
+    }
+  }
+  if (!out.length) return words.length ? emptyState(t('noMatch')) : emptyState(t('updNoKube'));
+  return [out, h('div', { class: 'more-note' }, t('updDistro'))];
 }
 
 // ---------------------------------------------------------------- URL checks
@@ -10168,6 +10435,10 @@ async function showLogin(message) {
   els.nsPicker = els.nsMenuList = els.pinned = els.nav = els.spaceLabel = els.navSearch = els.chooser = null;
   state.nsMenuOpen = false;
   state.me = null;
+  // The next one to sign in may see other clusters; what the lookups found
+  // is public and stays.
+  vers.page = null;
+  vers.asked = 0;
   try {
     const res = await fetch('api/v1/login', { headers: { Accept: 'application/json' }, cache: 'no-cache' });
     loginMethods = res.ok ? await res.json() : { password: false };
