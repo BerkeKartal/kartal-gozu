@@ -3,7 +3,7 @@
 // helpers (ui) and the data it loaded with loadRegistry; nothing here keeps
 // state of its own.
 
-export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'robots'];
+export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regjobs', 'robots'];
 
 const enc = encodeURIComponent;
 
@@ -40,6 +40,8 @@ export async function loadRegistry(view, rest, api, signal) {
       ]);
       return { info, project, repo, artifact };
     }
+    case 'regjobs':
+      return { info, jobs: await api('registry/jobs?limit=100', { signal }) };
     case 'robots':
       return { info, robots: await api('registry/robots', { signal }) };
   }
@@ -106,6 +108,7 @@ export function renderRegistry(view, data, ui) {
     case 'regproject': return projectPage(data, ui);
     case 'regrepo': return repositoryPage(data, ui);
     case 'regartifact': return artifactPage(data, ui);
+    case 'regjobs': return jobsPage(data, ui);
     case 'robots': return robotsPage(data, ui);
   }
   return null;
@@ -452,6 +455,88 @@ function artifactPage(data, ui) {
       h('pre', { class: 'mono' }, JSON.stringify(a.manifest, null, 2))));
   }
   return parts;
+}
+
+// ---------------------------------------------------------------- jobs
+
+// jobSummary says what a job did, from its report.
+function jobSummary(ui, j) {
+  const { t, bytes } = ui;
+  const r = j.report || {};
+  if (j.kind === 'gc' && r.started) {
+    return t(r.dryRun ? 'reg.gcDrySummary' : 'reg.gcSummary', r.unlinked, r.blobs, bytes(r.freed), r.uploads, r.spared);
+  }
+  if (j.kind === 'verify' && r.started) {
+    return t('reg.verifySummary', r.checked, bytes(r.bytes), (r.corrupt || []).length, (r.missing || []).length);
+  }
+  return j.summary || '';
+}
+
+function jobState(ui, j) {
+  if (j.status === 'running') return ui.pill(ui.t('reg.state.running'), 'warn');
+  if (j.status === 'failed') return ui.pill(ui.t('reg.state.failed'), 'bad');
+  return j.alarm ? ui.pill(ui.t('reg.state.alarm'), 'bad') : ui.pill(ui.t('reg.state.done'), 'ok');
+}
+
+function jobsPage(data, ui) {
+  const { h, t, button, age, emptyState, api, mono } = ui;
+  const { jobs = [], schedules = [], zone = '' } = data.jobs || {};
+  const start = (kind, dryRun) => act(ui, () => api('registry/jobs', { method: 'POST', body: { kind, dryRun } }), t('reg.jobStarted'));
+  const head = ui.panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' }, h('div', { class: 'detail' }, t('reg.jobsHint', zone))),
+    h('div', { class: 'actions' },
+      button(t('reg.gcDry'), () => start('gc', true)),
+      button(t('reg.gcNow'), async () => {
+        if (await ui.ask({ title: t('reg.gcNow'), message: t('reg.gcConfirm'), confirm: t('reg.gcNow'), danger: true })) start('gc', false);
+      }, 'danger'),
+      button(t('reg.verifyNow'), () => start('verify', false)))));
+  const sched = ui.panel(t('reg.schedules'), h('table', { class: 'flat' },
+    h('thead', null, h('tr', null, ['job', 'cron', 'next', 'lastRun'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
+    h('tbody', null, schedules.map(sc => h('tr', null,
+      h('td', null, t('reg.job.' + sc.kind)),
+      h('td', null, mono(sc.cron), sc.enabled ? null : [' ', ui.pill(t('reg.scheduleOff'), 'warn')]),
+      h('td', null, sc.next ? ui.until(sc.next) : '—'),
+      h('td', null, sc.last ? age(sc.last) : h('span', { class: 'muted' }, t('reg.never'))),
+      h('td', { class: 'actions-cell' }, button(t('edit'), () => scheduleDialog(ui, sc, zone))))))), 'reg-events');
+  const history = jobs.length ? h('table', null,
+    h('thead', null, h('tr', null, ['job', 'by', 'started', 'took', 'status', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
+    h('tbody', null, jobs.map(j => h('tr', { class: j.status === 'failed' || j.alarm ? 'problem' : null },
+      h('td', null, t('reg.job.' + j.kind), j.dryRun ? h('span', { class: 'muted' }, ' · ' + t('reg.dryRun')) : null),
+      h('td', null, j.by === 'schedule' ? h('span', { class: 'muted' }, t('reg.bySchedule')) : j.by),
+      h('td', null, age(j.started)),
+      h('td', null, j.finished ? ui.duration(j.started, j.finished) : '…'),
+      h('td', null, jobState(ui, j)),
+      h('td', null, j.error ? h('span', { class: 'status-bad' }, j.error) : [jobSummary(ui, j),
+        j.alarm ? h('div', { class: 'status-bad small-text' }, t('reg.verifyAlarm', ((j.report || {}).corrupt || []).length,
+          ((j.report || {}).missing || []).length)) : null]))))) : emptyState(t('reg.noJobs'));
+  return [problem(ui, data.info), head, sched, h('div', { class: 'reg-events' }, history)];
+}
+
+function scheduleDialog(ui, sc, zone) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const expr = h('input', { type: 'text', class: 'mono', required: true, value: sc.cron });
+  const on = h('input', { type: 'checkbox', checked: sc.enabled });
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      try {
+        await api('registry/schedules/' + enc(sc.kind), { method: 'PUT', body: { cron: expr.value.trim(), enabled: on.checked } });
+        close();
+        ui.toast(t('reg.scheduleSaved'));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t('reg.editSchedule', t('reg.job.' + sc.kind))),
+  dialogField(t('reg.col.cron'), expr, t('reg.cronHelp', zone)),
+  h('label', { class: 'check-item' }, on, ' ', t('reg.scheduleOn')),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  expr.focus();
 }
 
 // ---------------------------------------------------------------- robot accounts

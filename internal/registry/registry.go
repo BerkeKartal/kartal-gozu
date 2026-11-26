@@ -72,7 +72,10 @@ type Config struct {
 	Service string
 	// TokenTTL is how long a token lasts (5 minutes when zero).
 	TokenTTL time.Duration
-	Log      *slog.Logger
+	// Zone is the time zone the jobs' schedules are read in;
+	// cron.DefaultZone when nil.
+	Zone *time.Location
+	Log  *slog.Logger
 }
 
 // Server is a registry.
@@ -87,6 +90,11 @@ type Server struct {
 
 	// gcMu lets one garbage collection run at a time.
 	gcMu sync.Mutex
+
+	jobMu  sync.Mutex
+	jobCtx context.Context
+	// running are the jobs running, by kind: their IDs.
+	running map[string]string
 }
 
 // grant is what a token allows.
@@ -111,7 +119,7 @@ func New(cfg Config) *Server {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}}
+	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{}}
 }
 
 // ---------------------------------------------------------------- errors

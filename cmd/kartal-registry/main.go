@@ -21,6 +21,7 @@ import (
 
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/config"
+	"github.com/BerkeKartal/kartal-gozu/internal/cron"
 	"github.com/BerkeKartal/kartal-gozu/internal/logging"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/blobstore"
@@ -66,14 +67,21 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The jobs' schedules are read in this time zone.
+	zone, err := cron.Zone(config.String("KARTAL_REGISTRY_TIMEZONE", cron.DefaultZone))
+	if err != nil {
+		return fmt.Errorf("KARTAL_REGISTRY_TIMEZONE: %w", err)
+	}
 	events := registry.NewForwarder(serverURL, secret, log)
 	db.SetOnEvent(events.Hand)
 	go events.Run(ctx)
 	reg := registry.New(registry.Config{
-		Store: store, DB: db, Log: log,
+		Store: store, DB: db, Log: log, Zone: zone,
 		Auth:      &registry.ServerAuth{URL: serverURL, Secret: secret},
 		PublicURL: config.String("KARTAL_REGISTRY_PUBLIC_URL", ""),
 	})
+	// Garbage collection and the blobs' checks, on their schedules.
+	reg.Start(ctx)
 	// Pull counts are written every half minute.
 	go func() {
 		t := time.NewTicker(30 * time.Second)

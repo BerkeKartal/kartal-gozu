@@ -45,6 +45,10 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/registry/tag", s.signedIn(s.registryPutTag))
 	mux.HandleFunc("DELETE /api/v1/registry/tag", s.signedIn(s.registryDeleteTag))
 	mux.HandleFunc("GET /api/v1/registry/events", s.signedIn(s.registryEventList))
+	mux.HandleFunc("GET /api/v1/registry/jobs", s.signedIn(s.registryAdminRelay))
+	mux.HandleFunc("POST /api/v1/registry/jobs", s.signedIn(s.registryStartJob))
+	mux.HandleFunc("GET /api/v1/registry/jobs/{id}", s.signedIn(s.registryAdminRelay))
+	mux.HandleFunc("PUT /api/v1/registry/schedules/{kind}", s.signedIn(s.registrySetSchedule))
 	mux.HandleFunc("GET /api/v1/registry/robots", s.signedIn(s.robotList))
 	mux.HandleFunc("POST /api/v1/registry/robots", s.signedIn(s.robotAdd))
 	mux.HandleFunc("PUT /api/v1/registry/robots/{name}", s.signedIn(s.robotUpdate))
@@ -468,6 +472,49 @@ func (s *Server) registryEventList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relay(w, r, http.MethodGet, "/admin/v1/events", q, nil)
+}
+
+// ---------------------------------------------------------------- jobs
+
+// registryAdminRelay hands a read of the registry's own (its jobs) to it,
+// for its admins.
+func (s *Server) registryAdminRelay(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	path := "/admin/v1/jobs"
+	if id := r.PathValue("id"); id != "" {
+		path += "/" + url.PathEscape(id)
+	}
+	s.relay(w, r, http.MethodGet, path, r.URL.Query(), nil)
+}
+
+func (s *Server) registryStartJob(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	var body struct {
+		Kind   string `json:"kind"`
+		DryRun bool   `json:"dryRun"`
+	}
+	if !readJSON(w, r, &body, `{"kind": "gc"|"verify", "dryRun"}`) {
+		return
+	}
+	s.relay(w, r, http.MethodPost, "/admin/v1/jobs", nil, body)
+}
+
+func (s *Server) registrySetSchedule(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	var body struct {
+		Cron    string `json:"cron"`
+		Enabled bool   `json:"enabled"`
+	}
+	if !readJSON(w, r, &body, `{"cron": "0 3 * * *", "enabled"}`) {
+		return
+	}
+	s.relay(w, r, http.MethodPut, "/admin/v1/schedules/"+url.PathEscape(r.PathValue("kind")), nil, body)
 }
 
 // ---------------------------------------------------------------- robot accounts

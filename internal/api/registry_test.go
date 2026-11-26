@@ -273,3 +273,34 @@ func TestRegistryProjectRules(t *testing.T) {
 		t.Errorf("the project: %d %s", code, b)
 	}
 }
+
+// The registry's jobs are its admins'.
+func TestRegistryJobs(t *testing.T) {
+	e := newRegEnv(t)
+	if code, _ := e.call("GET", "/api/v1/registry/jobs", regLeadTok, ""); code != 403 {
+		t.Errorf("a project's admin lists the jobs: %d", code)
+	}
+	if code, _ := e.call("POST", "/api/v1/registry/jobs", regLeadTok, `{"kind":"gc"}`); code != 403 {
+		t.Errorf("a project's admin starts a job: %d", code)
+	}
+	code, b := e.call("POST", "/api/v1/registry/jobs", bossTok, `{"kind":"gc","dryRun":true}`)
+	var j struct {
+		ID, By string
+	}
+	if json.Unmarshal(b, &j); code != 202 || j.By != "boss" {
+		t.Fatalf("start a dry run: %d %s", code, b)
+	}
+	if code, b := e.call("GET", "/api/v1/registry/jobs/"+j.ID, bossTok, ""); code != 200 || !strings.Contains(string(b), `"kind":"gc"`) {
+		t.Errorf("the job: %d %s", code, b)
+	}
+	if code, b := e.call("PUT", "/api/v1/registry/schedules/verify", bossTok, `{"cron":"0 5 * * 6","enabled":true}`); code != 200 ||
+		!strings.Contains(string(b), `"next"`) {
+		t.Errorf("a schedule: %d %s", code, b)
+	}
+	if code, _ := e.call("PUT", "/api/v1/registry/schedules/verify", bossTok, `{"cron":"soon","enabled":true}`); code != 400 {
+		t.Errorf("a schedule that cannot be read: %d", code)
+	}
+	if code, b := e.call("GET", "/api/v1/registry/jobs", bossTok, ""); code != 200 || !strings.Contains(string(b), `"zone":"Europe/Istanbul"`) {
+		t.Errorf("the jobs: %d %s", code, b)
+	}
+}

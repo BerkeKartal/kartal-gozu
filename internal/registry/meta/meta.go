@@ -213,6 +213,45 @@ type Event struct {
 	Detail  string    `json:"detail,omitempty"`
 }
 
+// Job is a task the registry ran, or runs: collecting garbage, checking
+// the blobs.
+type Job struct {
+	ID       string     `json:"id"`
+	Kind     string     `json:"kind"`
+	DryRun   bool       `json:"dryRun,omitempty"`
+	By       string     `json:"by"`
+	Started  time.Time  `json:"started"`
+	Finished *time.Time `json:"finished,omitempty"`
+	Status   string     `json:"status"`
+	Summary  string     `json:"summary,omitempty"`
+	// Error is why it failed; Alarm what it found wrong, though it ran.
+	Error  string          `json:"error,omitempty"`
+	Alarm  string          `json:"alarm,omitempty"`
+	Report json.RawMessage `json:"report,omitempty"`
+}
+
+// A job's states.
+const (
+	JobRunning = "running"
+	JobDone    = "done"
+	JobFailed  = "failed"
+)
+
+// keepJobs is how many jobs are remembered.
+const keepJobs = 200
+
+// Schedule runs a kind of job by itself, as a cron expression says.
+type Schedule struct {
+	Kind    string `json:"kind"`
+	Cron    string `json:"cron"`
+	Enabled bool   `json:"enabled"`
+	// Since is when it was set: it first runs at the first time after it.
+	Since time.Time `json:"since"`
+	// Last is when it last started a job.
+	Last *time.Time `json:"last,omitempty"`
+	By   string     `json:"by,omitempty"`
+}
+
 // keepEvents is how many events are kept.
 const keepEvents = 2000
 
@@ -232,12 +271,16 @@ type entry struct {
 	Pulls    int64      `json:"pulls,omitempty"`
 	At       *time.Time `json:"at,omitempty"`
 	Event    *Event     `json:"event,omitempty"`
+	Job      *Job       `json:"job,omitempty"`
+	Schedule *Schedule  `json:"schedule,omitempty"`
 }
 
 type state struct {
-	Projects []*Project    `json:"projects"`
-	Repos    []*Repository `json:"repositories"`
-	Events   []Event       `json:"events"`
+	Projects  []*Project    `json:"projects"`
+	Repos     []*Repository `json:"repositories"`
+	Events    []Event       `json:"events"`
+	Jobs      []Job         `json:"jobs,omitempty"`
+	Schedules []Schedule    `json:"schedules,omitempty"`
 }
 
 // DB is the registry's metadata.
@@ -252,10 +295,12 @@ type DB struct {
 	lines int
 	// snapErr is the last snapshot's failure; the log keeps everything
 	// meanwhile, and the next change tries again.
-	snapErr  error
-	projects map[string]*Project
-	repos    map[string]*Repository
-	events   []Event
+	snapErr   error
+	projects  map[string]*Project
+	repos     map[string]*Repository
+	events    []Event
+	jobs      []Job
+	schedules map[string]Schedule
 	// pulled are the artifacts pulled since their counts were last written.
 	pulled map[[2]string]bool
 	// onEvent hears of each event as it is written.
@@ -276,7 +321,8 @@ func Open(dir string) (*DB, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{}}
+	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{},
+		schedules: map[string]Schedule{}}
 	if b, err := os.ReadFile(d.path("snapshot.json")); err == nil {
 		var s state
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -290,6 +336,10 @@ func Open(dir string) (*DB, error) {
 			d.repos[r.Name] = r
 		}
 		d.events = s.Events
+		d.jobs = s.Jobs
+		for _, sc := range s.Schedules {
+			d.schedules[sc.Kind] = sc
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -432,6 +482,19 @@ func (d *DB) apply(e entry) {
 		if len(d.events) > keepEvents {
 			d.events = append([]Event(nil), d.events[len(d.events)-keepEvents:]...)
 		}
+	case "job":
+		for i := range d.jobs {
+			if d.jobs[i].ID == e.Job.ID {
+				d.jobs[i] = *e.Job
+				return
+			}
+		}
+		d.jobs = append(d.jobs, *e.Job)
+		if len(d.jobs) > keepJobs {
+			d.jobs = append([]Job(nil), d.jobs[len(d.jobs)-keepJobs:]...)
+		}
+	case "schedule":
+		d.schedules[e.Schedule.Kind] = *e.Schedule
 	}
 }
 
@@ -487,7 +550,11 @@ func (d *DB) Healthy() error {
 
 // snapshot writes the state and starts the log over; the lock is held.
 func (d *DB) snapshot() error {
-	s := state{Events: d.events}
+	s := state{Events: d.events, Jobs: d.jobs}
+	for _, sc := range d.schedules {
+		s.Schedules = append(s.Schedules, sc)
+	}
+	sort.Slice(s.Schedules, func(i, j int) bool { return s.Schedules[i].Kind < s.Schedules[j].Kind })
 	for _, p := range d.projects {
 		s.Projects = append(s.Projects, p)
 	}
@@ -891,6 +958,79 @@ func (d *DB) Uses() map[string][]string {
 		sort.Strings(out[name])
 	}
 	return out
+}
+
+// ---------------------------------------------------------------- jobs
+
+// PutJob records a job, or what became of it.
+func (d *DB) PutJob(j Job) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.commit(entry{Op: "job", Job: &j})
+}
+
+// Jobs are the jobs remembered, the newest first, at most n (0 for all).
+func (d *DB) Jobs(n int) []Job {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]Job, 0, len(d.jobs))
+	for i := len(d.jobs) - 1; i >= 0 && (n == 0 || len(out) < n); i-- {
+		out = append(out, d.jobs[i])
+	}
+	return out
+}
+
+// Job is one job.
+func (d *DB) Job(id string) (Job, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, j := range d.jobs {
+		if j.ID == id {
+			return j, true
+		}
+	}
+	return Job{}, false
+}
+
+// Schedules are the jobs' schedules, by kind.
+func (d *DB) Schedules() []Schedule {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]Schedule, 0, len(d.schedules))
+	for _, sc := range d.schedules {
+		out = append(out, sc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
+// SetSchedule sets a kind of job's schedule. A user's change is logged; the
+// registry's own defaults are not.
+func (d *DB) SetSchedule(sc Schedule, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	entries := []entry{{Op: "schedule", Schedule: &sc}}
+	if user != "" {
+		state := "off"
+		if sc.Enabled {
+			state = "on"
+		}
+		entries = append(entries, d.event(user, "schedule", "", "", "", "", sc.Kind+": "+sc.Cron+" ("+state+")"))
+	}
+	return d.commit(entries...)
+}
+
+// MarkScheduled notes that a schedule started its job.
+func (d *DB) MarkScheduled(kind string, at time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sc, ok := d.schedules[kind]
+	if !ok {
+		return ErrNotFound
+	}
+	at = at.UTC()
+	sc.Last = &at
+	return d.commit(entry{Op: "schedule", Schedule: &sc})
 }
 
 // Blob is a blob's size, when the repository may read it.

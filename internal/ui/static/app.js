@@ -78,7 +78,7 @@ const NAV = [
   { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
-  { items: ['registry', 'robots'] },
+  { items: ['registry', 'regjobs', 'robots'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -584,6 +584,21 @@ const STRINGS = {
     'reg.immutableHelp': 'Patterns, such as v*, release-*: such a tag, once pushed, is not moved or removed, and its artifact is not deleted.',
     'reg.quota': 'Quota (GiB)', 'reg.quotaShort': 'Quota', 'reg.quotaUse': '{0} of {1} ({2}%)',
     'reg.quotaHelp': 'How much the project may hold, each layer counted once; empty for no limit. The registry’s admins set it.',
+    regjobs: 'Jobs', 'reg.job.gc': 'Garbage collection', 'reg.job.verify': 'Blob check',
+    'reg.jobsHint': 'Garbage collection deletes what no artifact uses, sparing what is newer than two hours for the pushes under way; the check reads every blob again. Schedules are read in {0}.',
+    'reg.gcDry': 'Collect garbage: dry run', 'reg.gcNow': 'Collect garbage', 'reg.verifyNow': 'Check the blobs', 'reg.jobStarted': 'Started.',
+    'reg.gcConfirm': 'Collect garbage now? What no artifact uses, older than two hours, is deleted for good.',
+    'reg.schedules': 'Schedules', 'reg.scheduleOff': 'off', 'reg.dryRun': 'dry run', 'reg.bySchedule': 'schedule',
+    'reg.noJobs': 'No job has run yet.', 'reg.col.job': 'Job', 'reg.col.cron': 'Schedule', 'reg.col.next': 'Next', 'reg.col.lastRun': 'Last run',
+    'reg.col.by': 'By', 'reg.col.started': 'Started', 'reg.col.took': 'Took', 'reg.col.status': 'Status',
+    'reg.state.running': 'running', 'reg.state.done': 'done', 'reg.state.failed': 'failed', 'reg.state.alarm': 'found problems',
+    'reg.gcSummary': '{0} links and {1} blobs ({2}) collected, {3} uploads removed, {4} blobs spared',
+    'reg.gcDrySummary': 'would collect {0} links and {1} blobs ({2}) and {3} uploads; {4} blobs spared',
+    'reg.verifySummary': '{0} blobs ({1}) checked: {2} corrupt, {3} missing',
+    'reg.verifyAlarm': '{0} blobs are not their digest any more, and {1} that artifacts use are gone: those artifacts do not pull.',
+    'reg.editSchedule': 'Schedule of the {0}', 'reg.scheduleOn': 'Run on this schedule', 'reg.scheduleSaved': 'Schedule saved.',
+    'reg.cronHelp': 'Five fields, minute hour day month weekday, in {0}: 0 3 * * * is every night at 03:00, 0 4 * * 0 every Sunday at 04:00; @daily and @weekly too.',
+    'reg.action.gc': 'garbage collected', 'reg.action.verify': 'blobs checked', 'reg.action.schedule': 'schedule changed',
     dashboards: 'Dashboards', exAddToDash: 'Add to dashboard', exApplyPanel: 'Apply to the panel',
     exEditingPanel: 'Editing the queries of the panel “{0}” of the dashboard {1}. Variables have the values picked there.',
     dbHint: 'Saved pages of charts, numbers, tables and logs of the store and the data sources. Each panel shows what the person looking may see.',
@@ -1116,6 +1131,21 @@ const STRINGS = {
     'reg.immutableHelp': 'Desenler, örneğin v*, release-*: böyle bir tag bir kez push edilince taşınmaz, kaldırılmaz, artifact’i de silinmez.',
     'reg.quota': 'Kota (GiB)', 'reg.quotaShort': 'Kota', 'reg.quotaUse': '{0} / {1} (%{2})',
     'reg.quotaHelp': 'Projenin tutabileceği alan, her katman bir kez sayılır; boşsa sınır yok. İmaj deposunun yöneticileri belirler.',
+    regjobs: 'Görevler', 'reg.job.gc': 'Çöp toplama', 'reg.job.verify': 'Blob denetimi',
+    'reg.jobsHint': 'Çöp toplama hiçbir artifact’in kullanmadığını siler; süren push’lar için iki saatten yeni olanları korur. Denetim her blob’u yeniden okur. Zamanlamalar {0} saatiyle okunur.',
+    'reg.gcDry': 'Çöp toplama: deneme', 'reg.gcNow': 'Çöp topla', 'reg.verifyNow': 'Blob’ları denetle', 'reg.jobStarted': 'Başladı.',
+    'reg.gcConfirm': 'Çöp şimdi toplansın mı? Hiçbir artifact’in kullanmadığı, iki saatten eski her şey kalıcı olarak silinir.',
+    'reg.schedules': 'Zamanlamalar', 'reg.scheduleOff': 'kapalı', 'reg.dryRun': 'deneme', 'reg.bySchedule': 'zamanlama',
+    'reg.noJobs': 'Henüz çalışan görev yok.', 'reg.col.job': 'Görev', 'reg.col.cron': 'Zamanlama', 'reg.col.next': 'Sonraki', 'reg.col.lastRun': 'Son çalışma',
+    'reg.col.by': 'Başlatan', 'reg.col.started': 'Başladı', 'reg.col.took': 'Süre', 'reg.col.status': 'Durum',
+    'reg.state.running': 'çalışıyor', 'reg.state.done': 'bitti', 'reg.state.failed': 'başarısız', 'reg.state.alarm': 'sorun buldu',
+    'reg.gcSummary': '{0} bağlantı ve {1} blob ({2}) toplandı, {3} yükleme silindi, {4} blob korundu',
+    'reg.gcDrySummary': '{0} bağlantı, {1} blob ({2}) ve {3} yükleme toplanırdı; {4} blob korunur',
+    'reg.verifySummary': '{0} blob ({1}) denetlendi: {2} bozuk, {3} eksik',
+    'reg.verifyAlarm': '{0} blob artık digest’i değil, artifact’lerin kullandığı {1} blob da yok: o artifact’ler pull edilemez.',
+    'reg.editSchedule': '{0} zamanlaması', 'reg.scheduleOn': 'Bu zamanlamayla çalıştır', 'reg.scheduleSaved': 'Zamanlama kaydedildi.',
+    'reg.cronHelp': 'Beş alan, dakika saat gün ay haftanın-günü, {0} saatiyle: 0 3 * * * her gece 03:00, 0 4 * * 0 her pazar 04:00; @daily ve @weekly de olur.',
+    'reg.action.gc': 'çöp toplandı', 'reg.action.verify': 'blob’lar denetlendi', 'reg.action.schedule': 'zamanlama değişti',
     dashboards: 'Panolar', exAddToDash: 'Panoya ekle', exApplyPanel: 'Panele uygula',
     exEditingPanel: '{1} panosundaki “{0}” panelinin sorgularını düzenliyorsunuz. Değişkenler orada seçilen değerleri alır.',
     dbHint: 'Deponun ve veri kaynaklarının grafik, sayı, tablo ve loglarından oluşan kayıtlı sayfalar. Her panel, bakan kişinin görebildiğini gösterir.',
@@ -2370,7 +2400,7 @@ function viewAllowed(id) {
   const me = state.me;
   if (spaceOf(id) === 'registry') {
     // The registry's projects, and its robot accounts for its admins.
-    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (id !== 'robots' || !!me.registryAdmin);
+    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && ((id !== 'robots' && id !== 'regjobs') || !!me.registryAdmin);
   }
   if (me && me.role === 'none') return false;
   return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
@@ -2626,6 +2656,7 @@ const NAV_ICONS = {
   uptime: ['M3 12h4l2.5-6 4 12 2.5-6H21'],
   registry: ['M12 3l8 4v10l-8 4-8-4V7z', 'M4 7l8 4 8-4', 'M12 11v10', 'M8 5l8 4'],
   robots: [[5, 8, 14, 11, 3], 'M12 4v4', [12, 3.5, 1], [9.5, 13, 1], [14.5, 13, 1], 'M10 16.5h4'],
+  regjobs: [[12, 12, 9], 'M12 7v5l3.5 2'],
 };
 
 function navIcon(id) {
@@ -2742,7 +2773,7 @@ let drawnAt = 0;
 
 // regUI is what the image registry's pages (registry.js) draw with.
 const regUI = {
-  h, t, button, pill, panel, emptyState, mono, bytes, age, ago, copyText, modal, ask, toast, dialogField, formNote, api,
+  h, t, button, pill, panel, emptyState, mono, bytes, age, ago, duration, copyText, modal, ask, toast, dialogField, formNote, api,
   grantChips, matches, routeHash, go, refresh: () => refresh(),
   words: () => state.q.toLowerCase().split(/\s+/).filter(Boolean),
   // until is how long until a time, or since it passed.
@@ -2780,7 +2811,7 @@ function renderContent() {
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
-    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'robots':
+    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regjobs': case 'robots':
       body = renderRegistry(state.view, state.data, regUI);
       break;
     case 'certificates':

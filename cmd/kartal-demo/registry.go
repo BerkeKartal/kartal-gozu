@@ -80,6 +80,16 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	}
 	go servers[0].Serve(pub)
 	go servers[1].Serve(adm)
+	reg.Start(ctx)
+	// Something in the jobs' history from the start.
+	for _, job := range []struct {
+		kind string
+		dry  bool
+	}{{registry.JobVerify, false}, {registry.JobGC, true}} {
+		if _, err := reg.StartJob(job.kind, job.dry, "ayse"); err != nil {
+			log.Warn("demo registry: a first job", "err", err)
+		}
+	}
 	flushed := make(chan struct{})
 	go func() {
 		defer close(flushed)

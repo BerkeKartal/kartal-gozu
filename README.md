@@ -1062,6 +1062,16 @@ users, passwords, directory and roles the rest has.
   repositories hold them; metadata is kept in memory and written to a log
   on the same volume before a change is answered. A push is never half
   there after a crash.
+- **Jobs.** *Garbage collection* runs while the registry serves: it takes
+  from each repository the blobs none of its artifacts uses, deletes the
+  blobs no repository has, and the uploads left behind for a day. What is
+  newer than two hours is spared, for the pushes under way, and a blob a
+  push uses again is never taken. *The blob check* reads every blob again
+  to see that it is still its digest, and finds what artifacts use that is
+  gone. Both run on schedules, cron expressions read in
+  `KARTAL_REGISTRY_TIMEZONE` (every night at 03:00, and Sundays at 04:00,
+  to begin with), or when an admin starts them on the Jobs page, which
+  also has a dry run and keeps what each job did.
 
 To install it, add a `registry-secret` key (`openssl rand -hex 24`) to the
 server's Secret, uncomment the `KARTAL_REGISTRY_*` variables in
@@ -1087,6 +1097,7 @@ limiting a request's size or cutting a long upload. The images go on a
 | `KARTAL_REGISTRY_DATA_DIR` | `/var/lib/kartal-registry` | Its blobs and metadata |
 | `KARTAL_REGISTRY_LISTEN` | `:5000` | docker's API and the sign-in |
 | `KARTAL_REGISTRY_ADMIN_LISTEN` | `:5001` | The admin API, for the server only |
+| `KARTAL_REGISTRY_TIMEZONE` | `Europe/Istanbul` | The time zone the jobs' schedules are read in |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## MCP: AI assistants and agents

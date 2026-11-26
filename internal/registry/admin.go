@@ -39,6 +39,10 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("PUT /admin/v1/tag", s.putTag)
 	mux.HandleFunc("DELETE /admin/v1/tag", s.deleteTag)
 	mux.HandleFunc("GET /admin/v1/events", s.events)
+	mux.HandleFunc("GET /admin/v1/jobs", s.listJobs)
+	mux.HandleFunc("POST /admin/v1/jobs", s.startJob)
+	mux.HandleFunc("GET /admin/v1/jobs/{id}", s.getJob)
+	mux.HandleFunc("PUT /admin/v1/schedules/{kind}", s.putSchedule)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		tok := ""
@@ -453,6 +457,86 @@ func (s *Server) deleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ScheduleView is a schedule with when it runs next.
+type ScheduleView struct {
+	meta.Schedule
+	Next *time.Time `json:"next,omitempty"`
+}
+
+func (s *Server) scheduleView(sc meta.Schedule) ScheduleView {
+	v := ScheduleView{Schedule: sc}
+	if next := s.NextRun(sc); !next.IsZero() {
+		next = next.UTC()
+		v.Next = &next
+	}
+	return v
+}
+
+func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	schedules := []ScheduleView{}
+	for _, sc := range s.cfg.DB.Schedules() {
+		schedules = append(schedules, s.scheduleView(sc))
+	}
+	adminJSON(w, http.StatusOK, map[string]any{"jobs": s.cfg.DB.Jobs(limit), "schedules": schedules, "zone": s.zone().String()})
+}
+
+func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Kind   string `json:"kind"`
+		DryRun bool   `json:"dryRun"`
+	}
+	if !readBody(w, r, &in) {
+		return
+	}
+	j, err := s.StartJob(in.Kind, in.DryRun, actor(r))
+	switch {
+	case errors.Is(err, ErrRunning):
+		adminError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrJob):
+		adminError(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		s.adminInternal(w, "starting a job", err)
+	default:
+		adminJSON(w, http.StatusAccepted, j)
+	}
+}
+
+func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
+	j, ok := s.cfg.DB.Job(r.PathValue("id"))
+	if !ok {
+		adminError(w, http.StatusNotFound, "no such job")
+		return
+	}
+	adminJSON(w, http.StatusOK, j)
+}
+
+func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Cron    string `json:"cron"`
+		Enabled bool   `json:"enabled"`
+	}
+	if !readBody(w, r, &in) {
+		return
+	}
+	sc, err := s.SetSchedule(r.PathValue("kind"), in.Cron, in.Enabled, actor(r))
+	switch {
+	case errors.Is(err, ErrJob):
+		adminError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrSchedule):
+		adminError(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		s.adminInternal(w, "setting a schedule", err)
+	default:
+		adminJSON(w, http.StatusOK, s.scheduleView(sc))
+	}
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
