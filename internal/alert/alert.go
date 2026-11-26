@@ -73,6 +73,11 @@ var titles = map[string]string{
 	"URLDown":             "Address not answering",
 	"MetricLimit":         "Metric past its limit",
 	"LogLimit":            "Log lines past their limit",
+	RegistryUnreachable:   "Image registry unreachable",
+	RegistryMetadata:      "Image registry cannot save its metadata",
+	RegistryJobFailed:     "Image registry job failed",
+	RegistryDamaged:       "Image registry blobs damaged",
+	RegistryQuota:         "Image registry project near its quota",
 	"RolloutStuck":        "Rollout stuck",
 	AgentVersion:          "Agent version differs",
 }
@@ -463,7 +468,9 @@ func (m *Manager) ObserveChecks(alerts []Alert, now time.Time) {
 		a.Cluster = ""
 		found[a.key()] = a
 	}
-	m.update("", found, func(a *Alert) bool { return a.Kind != LogLimit }, false, now)
+	// The log rules' and the image registry's alerts belong to no cluster
+	// either, and are not the checks'.
+	m.update("", found, func(a *Alert) bool { return a.Kind != LogLimit && !IsRegistry(a.Kind) }, false, now)
 }
 
 // LogLimit is the kind of alert for a log rule: more lines match it than
@@ -524,6 +531,31 @@ func (m *Manager) ObserveAgentVersion(cluster, detail string, now time.Time) {
 		found[a.key()] = a
 	}
 	m.update(cluster, found, func(a *Alert) bool { return a.Kind == AgentVersion }, true, now)
+}
+
+// The kinds of the image registry's alerts, which belong to no cluster.
+const (
+	RegistryUnreachable = "RegistryUnreachable"
+	RegistryMetadata    = "RegistryMetadata"
+	RegistryJobFailed   = "RegistryJobFailed"
+	RegistryDamaged     = "RegistryDamaged"
+	RegistryQuota       = "RegistryQuota"
+)
+
+// IsRegistry tells whether an alert is the image registry's.
+func IsRegistry(kind string) bool { return strings.HasPrefix(kind, "Registry") }
+
+// ObserveRegistry replaces the image registry's alerts. While it cannot be
+// reached, the others stay as they were.
+func (m *Manager) ObserveRegistry(alerts []Alert, now time.Time) {
+	found := map[string]Alert{}
+	reached := true
+	for _, a := range alerts {
+		a.Cluster = ""
+		found[a.key()] = a
+		reached = reached && a.Kind != RegistryUnreachable
+	}
+	m.update("", found, func(a *Alert) bool { return IsRegistry(a.Kind) && (reached || a.Kind == RegistryUnreachable) }, false, now)
 }
 
 // AgentStatus records whether a cluster's agent is reporting.

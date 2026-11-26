@@ -268,6 +268,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.S
 // manager which agents have gone silent and which run another version than
 // the server.
 func (s *Server) Watch(ctx context.Context) {
+	if s.cfg.RegistryURL != "" && s.cfg.Alerts != nil {
+		go s.watchRegistry(ctx)
+	}
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 	for {
@@ -761,9 +764,13 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request) {
 
 // alertVisible tells whether a user may see an alert: one about a namespace
 // needs a role there, one about a cluster (a node, a silent agent) a role
-// anywhere in it. Alerts about no cluster, such as URL checks, are for all.
+// anywhere in it. Alerts about no cluster, such as URL checks, are for all,
+// but the image registry's: a project's are for its people, the rest for
+// the registry's admins.
 func alertVisible(u auth.User, a alert.Alert) bool {
 	switch {
+	case alert.IsRegistry(a.Kind):
+		return u.RegistryAdmin() || (a.Kind == alert.RegistryQuota && u.RoleInProject(a.Object) >= auth.Viewer)
 	case a.Cluster == "":
 		return true
 	case a.Namespace != "":

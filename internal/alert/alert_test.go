@@ -708,3 +708,26 @@ func TestAgentVersionAlert(t *testing.T) {
 		t.Errorf("summary %q", s)
 	}
 }
+
+// The image registry's alerts belong to no cluster either, and neither the
+// checks nor the log rules replace them; while it cannot be reached, its
+// other alerts stay.
+func TestRegistryAlertsAreTheirOwn(t *testing.T) {
+	m := NewManager(time.Minute, nil)
+	now := time.Now()
+	quota := Alert{Kind: RegistryQuota, Severity: warning, Object: "team-a", Detail: "9.1 GiB of 10.0 GiB (91%)"}
+	m.ObserveRegistry([]Alert{quota}, now)
+	m.ObserveChecks(nil, now)
+	m.ObserveLogs(nil, nil, now)
+	if n := m.ActiveCount("", nil); n != 1 {
+		t.Fatalf("after the checks and the log rules: %d", n)
+	}
+	m.ObserveRegistry([]Alert{{Kind: RegistryUnreachable, Severity: critical, Object: "kartal-registry", Detail: "refused"}}, now)
+	if n := m.ActiveCount("", nil); n != 2 {
+		t.Errorf("while unreachable: %d", n)
+	}
+	m.ObserveRegistry(nil, now)
+	if n := m.ActiveCount("", nil); n != 0 {
+		t.Errorf("all well: %d", n)
+	}
+}

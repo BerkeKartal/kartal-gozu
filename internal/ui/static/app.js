@@ -307,6 +307,9 @@ const STRINGS = {
     silEnded: 'Silence ended.', silOn: 'on', silAhead: 'ahead', silNone: 'No silence is on or ahead.', silCovers: 'Covers', silWhen: 'When', silBy: 'By',
     'alert.LogLimit': 'Log lines past their limit',
     'alert.AgentVersion': 'Agent version differs',
+    'alert.RegistryUnreachable': 'Image registry unreachable', 'alert.RegistryMetadata': 'Image registry cannot save its metadata',
+    'alert.RegistryJobFailed': 'Image registry job failed', 'alert.RegistryDamaged': 'Image registry blobs damaged',
+    'alert.RegistryQuota': 'Image registry project near its quota',
     updates: 'Updates & security',
     updHint: 'What runs, and what is newer. Your browser asks GitHub and OSV.dev, the open source vulnerability database, itself: the server may have no way out to the internet. Only the repository’s name and the version numbers are sent.',
     updOff: 'Looking up what is newer is turned off on this server (KARTAL_VERSION_LOOKUPS=false): the versions are only compared with each other.',
@@ -871,6 +874,9 @@ const STRINGS = {
     silEnded: 'Susturma bitti.', silOn: 'açık', silAhead: 'ileride', silNone: 'Açık ya da ileride bir susturma yok.', silCovers: 'Kapsam', silWhen: 'Zaman', silBy: 'Kuran',
     'alert.LogLimit': 'Log satırları sınırı aştı',
     'alert.AgentVersion': 'Agent sürümü farklı',
+    'alert.RegistryUnreachable': 'İmaj deposuna ulaşılamıyor', 'alert.RegistryMetadata': 'İmaj deposu metadata’sını kaydedemiyor',
+    'alert.RegistryJobFailed': 'İmaj deposu görevi başarısız', 'alert.RegistryDamaged': 'İmaj deposunda bozuk blob’lar',
+    'alert.RegistryQuota': 'İmaj deposu projesi kotasına yakın',
     updates: 'Güncellemeler ve güvenlik',
     updHint: 'Çalışan sürümler ve daha yenileri. GitHub’a ve açık kaynak zafiyet veritabanı OSV.dev’e tarayıcınız kendisi sorar, çünkü sunucunun internete çıkışı olmayabilir. Yalnızca deponun adı ve sürüm numaraları gönderilir.',
     updOff: 'Bu sunucuda yeni sürüm sorgusu kapalı (KARTAL_VERSION_LOOKUPS=false): sürümler yalnızca birbiriyle karşılaştırılıyor.',
@@ -3555,7 +3561,7 @@ function renderAlerts(st) {
     h('td', null, pill(t(a.severity), a.severity === 'critical' ? 'bad' : 'warn'),
       a.silenced ? h('span', { class: 'badge', title: t('silHelp') }, t('silencedBadge')) : null),
     h('td', null, t('alert.' + a.kind)),
-    h('td', null, a.cluster || (a.kind === 'LogLimit' ? t('logRules') : h('a', { href: routeHash({ view: 'uptime' }) }, t('uptime')))),
+    h('td', null, a.cluster || alertPlace(a)),
     h('td', null, a.namespace ? a.namespace + '/' : '', alertObject(a)),
     h('td', null, a.detail),
     h('td', null, age(a.since)),
@@ -3582,7 +3588,7 @@ function renderAlerts(st) {
       h('tbody', null, recent.slice(0, 100).map(a => h('tr', null,
         h('td', null, age(a.resolved || a.since), ' ', h('span', { class: a.resolved ? 'status-ok' : 'status-bad' }, a.resolved ? t('resolvedAt') : t('startedAt'))),
         h('td', null, t('alert.' + a.kind)),
-        h('td', null, a.cluster || t(a.kind === 'LogLimit' ? 'logRules' : 'uptime')),
+        h('td', null, a.cluster || alertPlace(a)),
         h('td', null, a.namespace ? a.namespace + '/' : '', a.object),
         h('td', null, a.detail)))))) : null,
     st.deliveries.length ? panel(t('deliveries'), h('table', null,
@@ -3593,10 +3599,22 @@ function renderAlerts(st) {
   ];
 }
 
+// alertPlace is where an alert about no cluster comes from: the log rules,
+// the URL checks or the image registry, a link to it.
+function alertPlace(a) {
+  if (a.kind === 'LogLimit') return t('logRules');
+  if (a.kind.startsWith('Registry')) {
+    const quota = a.kind === 'RegistryQuota';
+    return h('a', { href: routeHash({ view: quota ? 'regproject' : 'regjobs', rest: quota ? [a.object] : [], ns: '' }) }, t('spaceRegistryTitle'));
+  }
+  return h('a', { href: routeHash({ view: 'uptime' }) }, t('uptime'));
+}
+
 // ---- silences
 
 const ALERT_KINDS = ['AgentOffline', 'NodeNotReady', 'NodePressure', 'NodeDiskFilling', 'PodFailing', 'WorkloadDegraded', 'JobFailed',
-  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'LogLimit', 'RolloutStuck', 'AgentVersion'];
+  'VolumeClaimUnbound', 'VolumeFilling', 'CertificateExpiring', 'URLDown', 'MetricLimit', 'LogLimit', 'RolloutStuck', 'AgentVersion',
+  'RegistryUnreachable', 'RegistryMetadata', 'RegistryJobFailed', 'RegistryDamaged', 'RegistryQuota'];
 const SIL_FOR = [['1h', 3600e3], ['4h', 4 * 3600e3], ['1d', 86400e3], ['7d', 7 * 86400e3]];
 
 // maySilence tells whether the user may set or end a silence over a

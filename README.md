@@ -1084,6 +1084,12 @@ users, passwords, directory and roles the rest has.
   03:00, and the check on Sundays at 04:00, to begin with), or when an
   admin starts them on the Jobs page, which also has dry runs and keeps
   what each job did.
+- **Alerts.** The server looks at the registry every minute and tells of
+  its problems as of any other, on the Alerts page and through the
+  notification channels: it cannot be reached, it cannot save its
+  metadata, a job failed, the check found damaged or missing blobs, or a
+  project holds 90% of its quota or more. A project's alerts are for its
+  people, the others for the registry's admins.
 
 To install it, add a `registry-secret` key (`openssl rand -hex 24`) to the
 server's Secret, uncomment the `KARTAL_REGISTRY_*` variables in

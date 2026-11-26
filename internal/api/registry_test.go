@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/accounts"
+	"github.com/BerkeKartal/kartal-gozu/internal/alert"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
 	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry"
@@ -36,6 +37,7 @@ const (
 
 type regEnv struct {
 	t      *testing.T
+	srv    *Server
 	st     *store.Store
 	api    *httptest.Server
 	public *httptest.Server
@@ -73,6 +75,7 @@ func newRegEnv(t *testing.T) *regEnv {
 		AgentTokens: map[string]string{agentTok: "demo"}, Users: users, StaleAfter: time.Minute, CommandTimeout: time.Second,
 		Accounts: accts, RegistryURL: adm.URL, RegistrySecret: regSecret, RegistryPublic: "registry.example.org",
 	}, e.st, log)
+	e.srv = srv
 	e.api = httptest.NewServer(srv)
 	t.Cleanup(e.api.Close)
 	// The registry asks the server, which is up by now.
@@ -372,5 +375,77 @@ func TestRegistryProjectRetention(t *testing.T) {
 	}
 	if code, _ := e.call("POST", "/api/v1/registry/jobs", regLeadTok, `{"kind":"retention"}`); code != 403 {
 		t.Errorf("every project's retention: %d", code)
+	}
+}
+
+// The registry's problems become alerts, for its admins and, of a
+// project, its people.
+func TestRegistryAlerts(t *testing.T) {
+	e := newRegEnv(t)
+	ctx := context.Background()
+	if got := e.srv.registryAlerts(ctx); len(got) != 0 {
+		t.Errorf("a sound registry: %+v", got)
+	}
+	if code, b := e.call("POST", "/api/v1/registry/projects", bossTok, `{"name":"team-a"}`); code != 201 {
+		t.Fatalf("make a project: %d %s", code, b)
+	}
+	tok, _ := e.token("dev", regTeamTok, "repository:team-a/web:pull,push")
+	blob := []byte("a layer of team-a")
+	if resp := e.v2("POST", "/v2/team-a/web/blobs/uploads/?digest="+url.QueryEscape(blobstore.Digest(blob)), tok, blob, ""); resp.StatusCode != 201 {
+		t.Fatalf("push: %d", resp.StatusCode)
+	}
+	// Full, and with rules that cannot run: the registry is not told what
+	// runs in the clusters here.
+	body := `{"quota":` + strconv.Itoa(len(blob)) + `,"retention":[{"tags":"**","keep":"latestPushed","count":1}]}`
+	if code, b := e.call("PUT", "/api/v1/registry/projects/team-a", bossTok, body); code != 200 {
+		t.Fatalf("rules: %d %s", code, b)
+	}
+	code, b := e.call("POST", "/api/v1/registry/jobs", bossTok, `{"kind":"retention","project":"team-a"}`)
+	var j struct{ ID string }
+	if json.Unmarshal(b, &j); code != 202 {
+		t.Fatalf("retention: %d %s", code, b)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, b := e.call("GET", "/api/v1/registry/jobs/"+j.ID, bossTok, ""); !strings.Contains(string(b), `"status":"running"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the job did not end")
+		}
+	}
+	got := e.srv.registryAlerts(ctx)
+	kinds := map[string]alert.Alert{}
+	for _, a := range got {
+		kinds[a.Kind] = a
+	}
+	if q := kinds[alert.RegistryQuota]; q.Object != "team-a" || q.Severity != "critical" || !strings.Contains(q.Detail, "(100%)") {
+		t.Errorf("the quota: %+v", got)
+	}
+	if f := kinds[alert.RegistryJobFailed]; f.Object != "retention of team-a" || !strings.Contains(f.Detail, "what runs") {
+		t.Errorf("the failed job: %+v", got)
+	}
+	lead, _ := auth.ParseGrant("admin@registry:team-a")
+	ops, _ := auth.ParseGrant("admin@*/*")
+	if !alertVisible(auth.NewUser("lead", []auth.Grant{lead}), kinds[alert.RegistryQuota]) ||
+		alertVisible(auth.NewUser("lead", []auth.Grant{lead}), kinds[alert.RegistryJobFailed]) ||
+		alertVisible(auth.NewUser("ops", []auth.Grant{ops}), kinds[alert.RegistryQuota]) ||
+		!alertVisible(auth.User{Name: "boss", Role: auth.Admin}, kinds[alert.RegistryJobFailed]) {
+		t.Error("who sees the registry's alerts")
+	}
+	// Unreachable, it says so, and its other alerts stay as they were.
+	m := alert.NewManager(time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m.ObserveRegistry(got, time.Now())
+	away := New(Config{RegistryURL: "http://127.0.0.1:1", RegistrySecret: regSecret}, store.New(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	down := away.registryAlerts(ctx)
+	if len(down) != 1 || down[0].Kind != alert.RegistryUnreachable {
+		t.Fatalf("unreachable: %+v", down)
+	}
+	m.ObserveRegistry(down, time.Now())
+	if n := m.ActiveCount("", func(a alert.Alert) bool { return alert.IsRegistry(a.Kind) }); n != 3 {
+		t.Errorf("while unreachable: %d alerts", n)
+	}
+	m.ObserveRegistry(nil, time.Now())
+	if n := m.ActiveCount("", nil); n != 0 {
+		t.Errorf("all well again: %d alerts", n)
 	}
 }
