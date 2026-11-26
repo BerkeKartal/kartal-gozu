@@ -476,6 +476,13 @@ func TestRegistrySources(t *testing.T) {
 	if code, _ := e.call("POST", "/api/v1/registry/sources", bossTok, `not json`); code != 400 {
 		t.Errorf("a body that is not JSON: %d", code)
 	}
+	// Moving projects here is the registry's admins'.
+	if code, _ := e.call("POST", "/api/v1/registry/sources/"+src.ID+"/migrate", regLeadTok, `{"projects":["team-a"]}`); code != 403 {
+		t.Errorf("a project's admin moves projects: %d", code)
+	}
+	if code, b := e.call("POST", "/api/v1/registry/sources/"+src.ID+"/migrate", bossTok, `{"projects":[]}`); code != 400 {
+		t.Errorf("moving nothing: %d %s", code, b)
+	}
 	if code, _ := e.call("DELETE", "/api/v1/registry/sources/"+src.ID, bossTok, ""); code != 204 {
 		t.Errorf("delete: %d", code)
 	}

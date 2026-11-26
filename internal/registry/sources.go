@@ -220,22 +220,156 @@ func sourceError(w http.ResponseWriter, s *Server, what string, err error) {
 	}
 }
 
+// AddSource adds a source.
+func (s *Server) AddSource(in SourceInput, by string) (meta.Source, error) {
+	b := make([]byte, 8)
+	rand.Read(b)
+	src, err := s.source(in, meta.Source{ID: hex.EncodeToString(b), Created: s.now().UTC(), By: by})
+	if err != nil {
+		return meta.Source{}, err
+	}
+	return src, s.cfg.DB.PutSource(src, by)
+}
+
 func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 	var in SourceInput
 	if !readBody(w, r, &in) {
 		return
 	}
-	b := make([]byte, 8)
-	rand.Read(b)
-	src, err := s.source(in, meta.Source{ID: hex.EncodeToString(b), Created: s.now().UTC(), By: actor(r)})
-	if err == nil {
-		err = s.cfg.DB.PutSource(src, actor(r))
-	}
+	src, err := s.AddSource(in, actor(r))
 	if err != nil {
 		sourceError(w, s, "adding a source", err)
 		return
 	}
 	adminJSON(w, http.StatusCreated, sourceView(src))
+}
+
+// Migration is what migrating a project of a source did: whether the
+// project was made here, the rule that copies it, and its first run.
+type Migration struct {
+	Project string `json:"project"`
+	Created bool   `json:"created"`
+	Public  bool   `json:"public"`
+	Rule    string `json:"rule,omitempty"`
+	Job     string `json:"job,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// Migrate moves projects of a source here: each is made (public as it is
+// there), a rule copies all its repositories, and runs now; with sync it
+// runs every hour too, while people move over. Migrating a project again
+// runs its rule again.
+func (s *Server) Migrate(ctx context.Context, sourceID string, projects []string, sync bool, by string) ([]Migration, error) {
+	src, ok := s.cfg.DB.Source(sourceID)
+	if !ok {
+		return nil, fmt.Errorf("%w: no such source", ErrSource)
+	}
+	rs, c, err := s.remoteSource(src)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	there, err := remote.Projects(ctx, rs, c)
+	if err != nil {
+		return nil, fmt.Errorf("listing %s: %w", src.Name, err)
+	}
+	public := map[string]bool{}
+	for _, p := range there {
+		public[p.Name] = p.Public
+	}
+	rules := map[string]meta.ReplicationRule{}
+	for _, r := range s.cfg.DB.Rules() {
+		rules[strings.ToLower(r.Name)] = r
+	}
+	var out []Migration
+	for _, name := range projects {
+		m := Migration{Project: name, Public: public[name]}
+		pub, listed := public[name]
+		switch {
+		case !listed:
+			m.Error = "the source has no such project"
+		case !ValidProject(name):
+			m.Error = "not a project's name here: lower-case letters and digits, which . _ - may join"
+		}
+		if m.Error != "" {
+			out = append(out, m)
+			continue
+		}
+		if _, ok := s.cfg.DB.Project(name); !ok {
+			if err := s.cfg.DB.CreateProject(meta.Project{Name: name, Public: pub, Description: "Moved from " + src.Name}, by); err != nil {
+				m.Error = err.Error()
+				out = append(out, m)
+				continue
+			}
+			m.Created = true
+		}
+		ruleName := "Migration of " + name
+		if len(ruleName) > 64 {
+			ruleName = ruleName[:64]
+		}
+		r, exists := rules[strings.ToLower(ruleName)]
+		if !exists || r.Source != src.ID {
+			b := make([]byte, 8)
+			rand.Read(b)
+			now := s.now().UTC()
+			r = meta.ReplicationRule{ID: hex.EncodeToString(b), Name: ruleName, Source: src.ID, Repositories: name + "/**", Tags: "**",
+				Project: name, Referrers: true, Concurrency: 2, Created: now, By: by, Since: now}
+			if exists {
+				r.Name = ruleName[:min(len(ruleName), 56)] + " " + r.ID[:7]
+			}
+		}
+		if sync {
+			if r.Cron != "0 * * * *" || !r.Enabled {
+				r.Since = s.now().UTC()
+			}
+			r.Cron, r.Enabled = "0 * * * *", true
+		}
+		if err := s.checkRule(r); err == nil {
+			err = s.cfg.DB.PutRule(r, by)
+			if err != nil {
+				m.Error = err.Error()
+			}
+		} else {
+			m.Error = err.Error()
+		}
+		if m.Error != "" {
+			out = append(out, m)
+			continue
+		}
+		m.Rule = r.ID
+		if j, err := s.StartReplication(r.ID, false, by); err != nil {
+			m.Error = err.Error()
+		} else {
+			m.Job = j.ID
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+func (s *Server) migrate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Projects []string `json:"projects"`
+		Sync     bool     `json:"sync"`
+	}
+	if !readBody(w, r, &in) {
+		return
+	}
+	if len(in.Projects) == 0 || len(in.Projects) > 200 {
+		adminError(w, http.StatusBadRequest, "name between 1 and 200 projects to move")
+		return
+	}
+	out, err := s.Migrate(r.Context(), r.PathValue("id"), in.Projects, in.Sync, actor(r))
+	if err != nil {
+		if errors.Is(err, ErrSource) {
+			adminError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		adminError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	adminJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {

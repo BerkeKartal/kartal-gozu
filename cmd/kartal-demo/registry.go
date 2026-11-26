@@ -82,6 +82,19 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	go servers[0].Serve(pub)
 	go servers[1].Serve(adm)
 	reg.Start(ctx)
+	// An old registry to move from.
+	upstream, stopUpstream, err := demoUpstream(ctx, filepath.Join(dir, "upstream"), log)
+	if err != nil {
+		cancel()
+		for _, s := range servers {
+			s.Close()
+		}
+		db.Close()
+		return "", "", nil, fmt.Errorf("the demo's old registry: %w", err)
+	}
+	if err := upstreamSourceFor(reg, db, upstream); err != nil {
+		log.Warn("demo registry: the old registry as a source", "err", err)
+	}
 	// Something in the jobs' history from the start.
 	for _, job := range []struct {
 		kind string
@@ -112,6 +125,7 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 		for _, s := range servers {
 			s.Close()
 		}
+		stopUpstream()
 		<-flushed
 		if err := db.Close(); err != nil {
 			log.Warn("demo registry: closing its metadata", "err", err)

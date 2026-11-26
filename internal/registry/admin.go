@@ -49,6 +49,7 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("PUT /admin/v1/sources/{id}", s.updateSource)
 	mux.HandleFunc("DELETE /admin/v1/sources/{id}", s.deleteSource)
 	mux.HandleFunc("GET /admin/v1/sources/{id}/projects", s.sourceProjects)
+	mux.HandleFunc("POST /admin/v1/sources/{id}/migrate", s.migrate)
 	mux.HandleFunc("GET /admin/v1/rules", s.listRules)
 	mux.HandleFunc("POST /admin/v1/rules", s.createRule)
 	mux.HandleFunc("PUT /admin/v1/rules/{id}", s.updateRule)

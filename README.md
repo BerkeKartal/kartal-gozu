@@ -146,9 +146,9 @@ minutes, a new build of one app in production. Options:
 - `-listen 127.0.0.1:9090` serves on another address.
 - `-registry=false` leaves out the [image registry](#image-registry), which
   the demo otherwise runs with a public project of base images and a team's
-  signed builds. It prints the registry's address; `docker pull` works
-  anonymously from the public project, and pushing needs `-admin-token` or
-  `-ldap`.
+  signed builds, and an old registry with two projects to move from. It
+  prints the registry's address; `docker pull` works anonymously from the
+  public project, and pushing needs `-admin-token` or `-ldap`.
 
 ## The web UI
 
@@ -1100,6 +1100,11 @@ users, passwords, directory and roles the rest has.
   immutable one), and limit how many images it copies at once and its
   bandwidth. A dry run lists what would be copied; a run shows its
   progress and can be stopped.
+- **Moving from Harbor or Nexus.** A source's *Move from here* lists its
+  projects; those picked are made here (public as they are there, where
+  the source tells, as Harbor does), and a rule for each copies all its
+  repositories at once, and, if asked, every hour while people move
+  over.
 - **Alerts.** The server looks at the registry every minute and tells of
   its problems as of any other, on the Alerts page and through the
   notification channels: it cannot be reached, it cannot save its

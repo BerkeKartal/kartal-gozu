@@ -866,6 +866,7 @@ function sourcesPage(data, ui) {
         h('td', null, x.username || h('span', { class: 'muted' }, '—')),
         h('td', null, age(x.created), x.by ? h('div', { class: 'muted small-text' }, x.by) : null),
         h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
+          button(t('reg.migrate'), () => migrateDialog(ui, x)),
           button(t('edit'), () => sourceDialog(ui, x)),
           button(t('reg.deleteSource'), async () => {
             if (!(await ask({ title: t('reg.deleteSource'), message: t('reg.deleteSourceConfirm', x.name), confirm: t('reg.deleteSource'), danger: true }))) return;
@@ -937,6 +938,90 @@ function sourceDialog(ui, src) {
     h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
   const close = modal(form);
   name.focus();
+}
+
+// migrateDialog moves projects of a source here: they are made, and a
+// rule copies each, now, and every hour while people move over if asked.
+async function migrateDialog(ui, src) {
+  const { h, t, button, modal, api, routeHash } = ui;
+  const body = h('div', null, h('p', { class: 'muted' }, t('reg.loadingProjects')));
+  const box = h('div', { class: 'dialog wide' }, h('h2', null, t('reg.migrateTitle', src.name)), body);
+  const close = modal(box);
+  let theirs;
+  let ours;
+  try {
+    [theirs, ours] = await Promise.all([api('registry/sources/' + enc(src.id) + '/projects'), api('registry/projects')]);
+  } catch (e) {
+    body.replaceChildren(h('p', { class: 'status-bad' }, e.message), h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close())));
+    return;
+  }
+  const here = new Set(ours.map(p => p.name));
+  const picks = theirs.map(p => ({ p, input: h('input', { type: 'checkbox', checked: !here.has(p.name), 'aria-label': p.name }) }));
+  const sync = h('input', { type: 'checkbox' });
+  const note = ui.formNote();
+  const runs = out => {
+    const rows = out.map(m => ({ m, status: h('td', null, m.error ? h('span', { class: 'status-bad' }, m.error) : t('reg.waitJob')) }));
+    body.replaceChildren(
+      h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, ['project', 'here', 'status'].map(k => h('th', null, t('reg.col.' + k))))),
+        h('tbody', null, rows.map(r => h('tr', { class: r.m.error ? 'problem' : null },
+          h('td', null, h('a', { href: routeHash({ view: 'regproject', rest: [r.m.project], ns: '' }) }, r.m.project)),
+          h('td', null, r.m.error ? '—' : t(r.m.created ? 'reg.madeHere' : 'reg.hereAlready')),
+          r.status)))),
+      h('div', { class: 'dialog-actions' },
+        h('a', { class: 'btn', href: routeHash({ view: 'regreplication', rest: [], ns: '' }), onclick: () => close() }, t('reg.toReplication')),
+        h('button', { type: 'button', class: 'btn primary', onclick: () => close() }, t('done'))));
+    const poll = async () => {
+      if (!box.isConnected) return;
+      let running = 0;
+      for (const r of rows) {
+        if (!r.m.job) continue;
+        try {
+          const j = await api('registry/jobs/' + enc(r.m.job));
+          if (j.status === 'running') {
+            running++;
+            r.status.replaceChildren(progressText(ui, j.progress));
+          } else {
+            r.status.replaceChildren(j.error ? h('span', { class: 'status-bad' }, j.error) : jobSummary(ui, j));
+          }
+        } catch (e) {
+          r.status.replaceChildren(h('span', { class: 'status-bad' }, e.message));
+        }
+      }
+      if (running) setTimeout(poll, 1500);
+      else ui.refresh();
+    };
+    poll();
+  };
+  const start = async () => {
+    const projects = picks.filter(x => x.input.checked).map(x => x.p.name);
+    if (!projects.length) {
+      note.say(t('reg.pickProjects'), 'bad');
+      return;
+    }
+    note.say(t('reg.waitJob'));
+    try {
+      runs(await api('registry/sources/' + enc(src.id) + '/migrate', { method: 'POST', body: { projects, sync: sync.checked } }));
+    } catch (e) {
+      note.say(e.message, 'bad');
+    }
+  };
+  body.replaceChildren(...[
+    h('p', { class: 'muted small-text' }, t('reg.migrateHint')),
+    theirs.length ? h('table', { class: 'flat' },
+      h('thead', null, h('tr', null, h('th'), ['project', 'repositories', 'access', 'here'].map(k => h('th', null, t('reg.col.' + k))))),
+      h('tbody', null, picks.map(x => h('tr', null,
+        h('td', null, x.input),
+        h('td', null, h('strong', null, x.p.name)),
+        h('td', null, x.p.repositories),
+        h('td', null, src.kind === 'harbor' ? t(x.p.public ? 'reg.public' : 'reg.private') : h('span', { class: 'muted' }, '—')),
+        h('td', null, here.has(x.p.name) ? t('reg.hereAlready') : h('span', { class: 'muted' }, '—'))))))
+      : h('p', null, t('reg.noProjectsThere')),
+    h('label', { class: 'check-item' }, sync, ' ', t('reg.migrateSync')),
+    note,
+    h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()),
+      theirs.length ? h('button', { type: 'button', class: 'btn primary', onclick: start }, t('reg.migrateStart')) : null),
+  ].filter(Boolean));
 }
 
 // ---------------------------------------------------------------- robot accounts

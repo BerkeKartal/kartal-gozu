@@ -319,3 +319,49 @@ func TestRulesThroughTheAdminAPI(t *testing.T) {
 		t.Errorf("deleting the source then: %d %s", a.code, a.body)
 	}
 }
+
+func TestMigrate(t *testing.T) {
+	up := newUpstream(t)
+	root := up.token("root", "repository:pub/tools:pull,push")
+	up.pushImage("pub/tools", "1", root, "amd64")
+	e := newEnv(t)
+	src := e.source(t, up.srv.URL)
+	// Here neither infra nor pub is yet.
+	for _, p := range []string{"infra", "pub"} {
+		if err := e.db.DeleteProject(p, "root"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := e.reg.Migrate(context.Background(), src, []string{"infra", "pub", "nope"}, true, "ayse")
+	if err != nil || len(out) != 3 {
+		t.Fatalf("migrate: %+v %v", out, err)
+	}
+	// A registry of the Distribution API does not tell which projects are
+	// public, as Harbor does: they are made private.
+	if !out[0].Created || out[0].Public || out[0].Job == "" || !out[1].Created || out[1].Public || out[2].Error == "" {
+		t.Errorf("what it did: %+v", out)
+	}
+	r, _ := e.db.Rule(out[0].Rule)
+	if r.Repositories != "infra/**" || r.Project != "infra" || r.Cron != "0 * * * *" || !r.Enabled || !r.Referrers {
+		t.Errorf("the rule: %+v", r)
+	}
+	if done := e.wait(out[0].Job); done.Status != meta.JobDone || !strings.Contains(done.Summary, "copied 4") {
+		t.Errorf("the first run: %+v", done)
+	}
+	if d, ok := e.db.Resolve("infra/proxy", "multi"); !ok || d != up.index {
+		t.Errorf("infra/proxy:multi here: %s %v", d, ok)
+	}
+	e.wait(out[1].Job)
+	// Again: the same rule runs again, and nothing more is made.
+	rules := len(e.db.Rules())
+	again, err := e.reg.Migrate(context.Background(), src, []string{"infra"}, false, "ayse")
+	if err != nil || again[0].Created || again[0].Rule != out[0].Rule || len(e.db.Rules()) != rules {
+		t.Errorf("again: %+v %v", again, err)
+	}
+	if done := e.wait(again[0].Job); !strings.Contains(done.Summary, "4 here already") {
+		t.Errorf("the second run: %+v", done)
+	}
+	if _, err := e.reg.Migrate(context.Background(), "nope", []string{"infra"}, false, "ayse"); !errors.Is(err, ErrSource) {
+		t.Errorf("an unknown source: %v", err)
+	}
+}

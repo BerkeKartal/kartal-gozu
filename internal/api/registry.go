@@ -57,6 +57,7 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/registry/sources/{id}", s.signedIn(s.registrySources))
 	mux.HandleFunc("DELETE /api/v1/registry/sources/{id}", s.signedIn(s.registrySources))
 	mux.HandleFunc("GET /api/v1/registry/sources/{id}/projects", s.signedIn(s.registrySources))
+	mux.HandleFunc("POST /api/v1/registry/sources/{id}/migrate", s.signedIn(s.registrySources))
 	mux.HandleFunc("GET /api/v1/registry/rules", s.signedIn(s.registryRules))
 	mux.HandleFunc("POST /api/v1/registry/rules", s.signedIn(s.registryRules))
 	mux.HandleFunc("PUT /api/v1/registry/rules/{id}", s.signedIn(s.registryRules))
@@ -639,6 +640,8 @@ func (s *Server) registrySources(w http.ResponseWriter, r *http.Request) {
 		path += "/test"
 	case strings.HasSuffix(r.URL.Path, "/projects"):
 		path += "/projects"
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrate"):
+		path += "/migrate"
 	}
 	s.relay(w, r, r.Method, path, nil, body)
 }
