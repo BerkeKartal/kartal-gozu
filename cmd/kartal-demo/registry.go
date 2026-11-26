@@ -71,7 +71,16 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
 	// A scanner that makes up what it finds, the same each time.
 	reg := registry.New(registry.Config{Store: store, DB: db, Auth: server, Running: server, SourcesKey: registry.SourcesKey(secret),
-		PublicURL: "http://" + public, Log: log, Scanner: newDemoScanner(), ScanDir: filepath.Join(dir, "scans")})
+		PublicURL: "http://" + public, Log: log, Scanner: newDemoScanner(), ScanDir: filepath.Join(dir, "scans"),
+		StagingDir: filepath.Join(dir, "staging")})
+	// A second blob store, a directory of its own, with a project kept there.
+	if _, ok := db.BlobStoreNamed("archive"); !ok {
+		if _, err := reg.PutStore(registry.StoreInput{Name: "archive", Kind: "file", Path: filepath.Join(dir, "archive"), Quota: 64 << 20}, "", "ayse"); err != nil {
+			log.Warn("demo registry: the archive store", "err", err)
+		} else if err := db.CreateProject(meta.Project{Name: "releases", Description: "Released builds, kept apart", Store: "archive"}, "ayse"); err != nil {
+			log.Warn("demo registry: the releases project", "err", err)
+		}
+	}
 	// What happens in it goes to the server's audit log.
 	events := registry.NewForwarder(serverURL, secret, log)
 	db.SetOnEvent(events.Hand)

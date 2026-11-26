@@ -3,7 +3,7 @@
 // helpers (ui) and the data it loaded with loadRegistry; nothing here keeps
 // state of its own.
 
-export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'robots'];
+export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'regstores', 'robots'];
 
 const enc = encodeURIComponent;
 
@@ -59,6 +59,8 @@ export async function loadRegistry(view, rest, api, signal) {
       return { info, robots: await api('registry/robots', { signal }) };
     case 'regrunning':
       return { info, running: await api('registry/running-vulnerabilities', { signal }) };
+    case 'regstores':
+      return { info, stores: await api('registry/stores', { signal }) };
   }
   return { info };
 }
@@ -128,6 +130,7 @@ export function renderRegistry(view, data, ui) {
     case 'regreplication': return replicationPage(data, ui);
     case 'robots': return robotsPage(data, ui);
     case 'regrunning': return runningPage(data, ui);
+    case 'regstores': return storesPage(data, ui);
   }
   return null;
 }
@@ -220,6 +223,16 @@ function projectDialog(ui, project, info) {
   const block = h('select', null, ['', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(k => h('option', { value: k, selected: editing && (project.blockSeverity || '') === k },
     k ? t('reg.sevAtLeast', t('reg.sev.' + k.toLowerCase())) : t('reg.blockNone'))));
   const allowlist = h('textarea', { class: 'mono', rows: '3', placeholder: 'CVE-2026-1234, GHSA-xxxx-xxxx-xxxx' });
+  // Where its blobs go is the registry's admins' to say; the stores are
+  // asked for when the dialog opens.
+  const store = h('select', { disabled: true }, h('option', { value: editing ? project.store || 'default' : 'default' }, editing ? project.store || 'default' : 'default'));
+  if (admin) {
+    api('registry/stores').then(list => {
+      store.replaceChildren(...list.map(x => h('option', { value: x.name, selected: x.name === ((editing && project.store) || 'default') },
+        x.name + ' (' + t('reg.store.kind.' + x.kind) + ')')));
+      store.disabled = false;
+    }).catch(() => {});
+  }
   allowlist.value = editing ? (project.allowlist || []).join('\n') : '';
   const note = formNote();
   const form = h('form', {
@@ -228,6 +241,7 @@ function projectDialog(ui, project, info) {
       e.preventDefault();
       const body = { public: pub.checked, description: desc.value, immutable: rules.value.split(/[\s,]+/).filter(Boolean) };
       if (admin) body.quota = quota.value ? Math.round(Number(quota.value) * GIB) : 0;
+      if (admin && !store.disabled && (!editing || store.value !== (project.store || 'default'))) body.store = store.value;
       if (scans) body.scanOnPush = scanOnPush.checked;
       if (scans && editing) {
         body.blockSeverity = block.value;
@@ -256,6 +270,7 @@ function projectDialog(ui, project, info) {
   h('label', { class: 'check-item' }, pub, ' ', t('reg.publicHelp')),
   dialogField(t('reg.immutable'), rules, t('reg.immutableHelp')),
   dialogField(t('reg.quota'), quota, t('reg.quotaHelp')),
+  admin ? dialogField(t('reg.store.ofProject'), store, t(editing ? 'reg.store.moveHelp' : 'reg.store.projectHelp')) : null,
   scans ? h('label', { class: 'check-item' }, scanOnPush, ' ', t('reg.scanOnPushHelp')) : null,
   scans && editing ? dialogField(t('reg.blockSeverity'), block, t('reg.blockHelp')) : null,
   scans && editing ? dialogField(t('reg.allowlist'), allowlist, t('reg.allowlistHelp')) : null,
@@ -303,6 +318,7 @@ function projectPage(data, ui) {
         p.immutable && p.immutable.length ? h('div', { class: 'detail' }, h('span', { class: 'muted' }, t('reg.immutable') + ': '),
           p.immutable.map(x => h('span', { class: 'label-chip reg-tag' }, '🔒 ', x))) : null,
         p.scanOnPush && data.info && data.info.scanner ? h('div', { class: 'detail muted' }, t('reg.scansOnPush')) : null,
+        p.store && p.store !== 'default' ? h('div', { class: 'detail muted' }, t('reg.store.kept', p.store)) : null,
         p.blockSeverity ? h('div', { class: 'detail status-warn' }, t('reg.blocksPulls', t('reg.sev.' + p.blockSeverity.toLowerCase())),
           p.allowlist && p.allowlist.length ? ' ' + t('reg.allowedCount', p.allowlist.length) : '') : null),
       h('div', { class: 'actions' }, actions)),
@@ -1385,4 +1401,126 @@ function trivyDialog(ui, data) {
   note,
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary', disabled: !projects.length }, t('save'))));
   const close = modal(form);
+}
+
+// ---------------------------------------------------------------- blob stores
+
+// storesPage lists the blob stores, for the registry's admins: the
+// default one on the registry's volume, and the others, each with what
+// its projects hold against its soft quota, and whether it answers.
+function storesPage(data, ui) {
+  const { h, t, button, bytes, ask, api, mono, emptyState } = ui;
+  const all = data.stores || [];
+  const words = ui.words();
+  const rows = all.filter(x => ui.matches(words, [x.name, x.kind, x.path, x.endpoint, x.bucket, x.prefix].concat(x.projects || [])));
+  const where = x => x.kind === 's3' ? [mono(x.endpoint + '/' + x.bucket + '/' + (x.prefix || '')),
+    x.insecure ? h('div', { class: 'status-warn small-text' }, t('reg.sourceInsecure')) : null] : mono(x.path || '—');
+  const used = x => {
+    if (!x.quota) return [bytes(x.size), h('div', { class: 'muted small-text' }, t('reg.store.blobs', x.blobs))];
+    const pct = Math.min(100, x.size / x.quota * 100);
+    return h('div', { class: 'reg-quota' }, t('reg.quotaUse', bytes(x.size), bytes(x.quota), Math.round(pct)),
+      h('div', { class: pct >= 100 ? 'bar full' : pct >= 90 ? 'bar hot' : 'bar' }, h('span', { style: { width: pct + '%' } })));
+  };
+  const state = x => x.problem ? h('span', { class: 'status-bad', title: x.problem }, '✕ ' + x.problem)
+    : x.checked ? h('span', { class: 'status-ok' }, '✓ ' + t('reg.store.ok', ui.ago(x.checked))) : h('span', { class: 'muted' }, '—');
+  const head = ui.panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' }, h('div', { class: 'detail' }, t('reg.store.hint'))),
+    h('div', { class: 'actions' }, button('+ ' + t('reg.store.new'), () => storeDialog(ui)))));
+  if (!rows.length) return [problem(ui, data.info), head, emptyState(t('noMatch'))];
+  return [problem(ui, data.info), head,
+    h('table', null,
+      h('thead', null, h('tr', null, ['name', 'kind', 'where', 'projects', 'used', 'state'].map(k => h('th', null, t('reg.store.col.' + k))), h('th'))),
+      h('tbody', null, rows.map(x => h('tr', { class: x.problem ? 'problem' : null },
+        h('td', null, h('strong', null, x.name), x.default ? h('div', { class: 'muted small-text' }, t('reg.store.default')) : null),
+        h('td', null, t('reg.store.kind.' + x.kind)),
+        h('td', null, where(x)),
+        h('td', null, (x.projects || []).length ? x.projects.join(', ') : h('span', { class: 'muted' }, '—')),
+        h('td', null, used(x)),
+        h('td', null, state(x)),
+        h('td', { class: 'actions-cell' }, x.default ? null : h('div', { class: 'actions' },
+          button(t('edit'), () => storeDialog(ui, x)),
+          (x.projects || []).length ? null : button(t('reg.store.delete'), async () => {
+            if (!(await ask({ title: t('reg.store.delete'), message: t('reg.store.deleteConfirm', x.name), confirm: t('reg.store.delete'), danger: true }))) return;
+            act(ui, () => api('registry/stores/' + enc(x.name), { method: 'DELETE' }), t('reg.store.deleted'));
+          }, 'danger'))))))),
+    h('div', { class: 'more-note' }, t('reg.store.note'))];
+}
+
+function storeDialog(ui, cur) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const editing = !!cur;
+  const c = cur || { kind: 's3', pathStyle: true };
+  const name = h('input', { type: 'text', required: true, disabled: editing, value: c.name || '', placeholder: 'minio' });
+  const kind = h('select', { disabled: editing }, ['s3', 'file'].map(k => h('option', { value: k, selected: c.kind === k }, t('reg.store.kind.' + k))));
+  const path = h('input', { type: 'text', class: 'mono', value: c.path || '', placeholder: '/var/lib/kartal-registry-archive' });
+  const endpoint = h('input', { type: 'url', class: 'mono', value: c.endpoint || '', placeholder: 'https://minio.example.org:9000' });
+  const region = h('input', { type: 'text', class: 'mono', value: c.region || '', placeholder: 'us-east-1' });
+  const bucket = h('input', { type: 'text', class: 'mono', value: c.bucket || '', placeholder: 'kartal-registry' });
+  const prefix = h('input', { type: 'text', class: 'mono', value: c.prefix || '', placeholder: 'registry/' });
+  const access = h('input', { type: 'text', class: 'mono', autocomplete: 'off', value: c.accessKey || '' });
+  const secret = h('input', { type: 'password', autocomplete: 'new-password', placeholder: editing && c.hasSecret ? t('reg.sourcePassKeep') : '' });
+  const pathStyle = h('input', { type: 'checkbox', checked: !!c.pathStyle });
+  const ca = h('textarea', { rows: '3', class: 'mono', placeholder: '-----BEGIN CERTIFICATE-----' });
+  ca.value = c.ca || '';
+  const insecure = h('input', { type: 'checkbox', checked: !!c.insecure });
+  const quota = h('input', { type: 'number', min: '0', step: 'any', placeholder: '∞', value: c.quota ? String(Math.round(c.quota / GIB * 100) / 100) : '' });
+  const fileFields = h('div', null, dialogField(t('reg.store.path'), path, t('reg.store.pathHelp')));
+  const s3Fields = h('div', null,
+    dialogField(t('reg.store.endpoint'), endpoint, t('reg.store.endpointHelp')),
+    h('div', { class: 'reg-two' }, dialogField(t('reg.store.bucket'), bucket), dialogField(t('reg.store.region'), region)),
+    dialogField(t('reg.store.prefix'), prefix, t('reg.store.prefixHelp')),
+    h('div', { class: 'reg-two' }, dialogField(t('reg.store.access'), access), dialogField(t('reg.store.secret'), secret)),
+    h('label', { class: 'check-item' }, pathStyle, ' ', t('reg.store.pathStyle')),
+    dialogField(t('reg.sourceCA'), ca, t('reg.sourceCAHelp')),
+    h('label', { class: 'check-item' }, insecure, ' ', t('reg.sourceInsecure')));
+  const sync = () => { fileFields.hidden = kind.value !== 'file'; s3Fields.hidden = kind.value !== 's3'; };
+  kind.addEventListener('change', sync);
+  sync();
+  const note = formNote();
+  // A secret left empty when editing stays as it was.
+  const body = () => {
+    const b = { name: name.value.trim(), kind: kind.value, quota: quota.value ? Math.round(Number(quota.value) * GIB) : 0 };
+    if (kind.value === 'file') b.path = path.value.trim();
+    else {
+      Object.assign(b, { endpoint: endpoint.value.trim(), region: region.value.trim(), bucket: bucket.value.trim(), prefix: prefix.value.trim(),
+        accessKey: access.value.trim(), pathStyle: pathStyle.checked, ca: ca.value.trim(), insecure: insecure.checked });
+      if (!editing || secret.value) b.secretKey = secret.value;
+    }
+    return b;
+  };
+  const test = async () => {
+    note.say(t('reg.testing'));
+    try {
+      const r = await api('registry/stores/test', { method: 'POST', body: body() });
+      if (r.ok) note.say('✓ ' + t('reg.store.testOK'), 'ok');
+      else note.say(r.error, 'bad');
+    } catch (e) {
+      note.say(e.message, 'bad');
+    }
+  };
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      note.say(t('reg.testing'));
+      try {
+        await api('registry/stores' + (editing ? '/' + enc(cur.name) : ''), { method: editing ? 'PUT' : 'POST', body: body() });
+        close();
+        ui.toast(t('reg.store.saved'));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, editing ? cur.name : t('reg.store.new')),
+  h('p', { class: 'muted' }, t('reg.store.dialogHint')),
+  dialogField(t('reg.col.name'), name, t('reg.store.nameHelp')),
+  dialogField(t('reg.store.col.kind'), kind),
+  fileFields, s3Fields,
+  dialogField(t('reg.store.quota'), quota, t('reg.store.quotaHelp')),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('reg.testSource'), test), button(t('cancel'), () => close()),
+    h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  (editing ? quota : name).focus();
 }

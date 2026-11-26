@@ -48,7 +48,7 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
 	}
 	// Examples of the image registry's sources' addresses, likewise.
-	for _, example := range []string{"https://harbor.example.org", "https://nexus.example.org"} {
+	for _, example := range []string{"https://harbor.example.org", "https://nexus.example.org", "https://minio.example.org:9000"} {
 		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
 		files["registry.js"] = strings.ReplaceAll(files["registry.js"], example, "")
 	}

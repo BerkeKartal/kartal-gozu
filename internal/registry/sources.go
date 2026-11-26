@@ -69,11 +69,11 @@ func (s *Server) unseal(sealed string) (string, error) {
 	}
 	b, err := base64.StdEncoding.DecodeString(sealed)
 	if err != nil || len(b) < g.NonceSize() {
-		return "", errors.New("the source's password cannot be read")
+		return "", errors.New("a sealed password cannot be read")
 	}
 	plain, err := g.Open(nil, b[:g.NonceSize()], b[g.NonceSize():], nil)
 	if err != nil {
-		return "", errors.New("the source's password cannot be read: the registry's key changed; type it again")
+		return "", errors.New("a sealed password cannot be read: the registry's key changed; type it again")
 	}
 	return string(plain), nil
 }

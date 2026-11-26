@@ -78,7 +78,7 @@ const NAV = [
   { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
-  { items: ['registry', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'robots'] },
+  { items: ['registry', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'regstores', 'robots'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -644,6 +644,24 @@ const STRINGS = {
     'reg.trivySourceHelp': 'A source of the Distribution API for the host ghcr.io, without a password: Trivy publishes them there.',
     'reg.trivyProjectHelp': 'A public project, such as trivy, so that the scanner reads them without signing in.',
     'reg.trivyMade': 'The rules are made; they copy into {0} every night at 04:00, or now with Run.',
+    regstores: 'Blob stores', 'reg.store.new': 'New blob store', 'reg.store.kind.file': 'directory', 'reg.store.kind.s3': 'S3',
+    'reg.store.col.name': 'Name', 'reg.store.col.kind': 'Kind', 'reg.store.col.where': 'Where', 'reg.store.col.projects': 'Projects',
+    'reg.store.col.used': 'Holds', 'reg.store.col.state': 'State', 'reg.store.default': 'the registry’s own, on its volume',
+    'reg.store.blobs': '{0} blobs', 'reg.store.ok': 'answered {0} ago', 'reg.store.delete': 'Delete the store',
+    'reg.store.deleteConfirm': 'Delete the blob store {0}? What is in it stays where it is; the registry forgets it.', 'reg.store.deleted': 'The blob store is deleted.',
+    'reg.store.hint': 'Where projects keep their blobs: the registry’s own volume, another directory, or a bucket of S3, MinIO or Ceph. Collecting garbage and checking the blobs go store by store.',
+    'reg.store.note': 'A store’s quota is soft: past 90% there is an alert, nothing is refused (a project’s quota refuses). What a store holds is counted from the metadata, each blob once.',
+    'reg.store.dialogHint': 'It is tried out before it is kept: an S3 store has a small object written, read and deleted below its prefix.',
+    'reg.store.nameHelp': 'Lowercase letters, digits and dashes; a project names its store by it.',
+    'reg.store.path': 'Directory', 'reg.store.pathHelp': 'An absolute path the registry may write, best a volume of its own.',
+    'reg.store.endpoint': 'Endpoint', 'reg.store.endpointHelp': 'The service’s address, with its scheme, http or https.',
+    'reg.store.bucket': 'Bucket', 'reg.store.region': 'Region', 'reg.store.prefix': 'Prefix',
+    'reg.store.prefixHelp': 'Where in the bucket the blobs go; empty for its root.', 'reg.store.access': 'Access key', 'reg.store.secret': 'Secret key',
+    'reg.store.pathStyle': 'The bucket in the path (MinIO, Ceph), not in the host', 'reg.store.quota': 'Soft quota (GiB)',
+    'reg.store.quotaHelp': 'Past 90% of it there is an alert; empty for none.', 'reg.store.testOK': 'It works: written, read and deleted.',
+    'reg.store.saved': 'The blob store is kept.', 'reg.store.ofProject': 'Blob store',
+    'reg.store.projectHelp': 'Where the project’s blobs go. The registry’s admins choose it.',
+    'reg.store.moveHelp': 'A project with repositories stays where it is; an empty one moves.', 'reg.store.kept': 'Its blobs are kept in the blob store {0}.',
     regrunning: 'Vulnerable images that run', 'reg.col.cluster': 'Cluster', 'reg.col.namespace': 'Namespace', 'reg.col.workload': 'Workload',
     'reg.col.pods': 'Pods', 'reg.col.image': 'Image', 'reg.col.unallowed': 'Critical, not allowed',
     'reg.unallowedHelp': 'Its critical vulnerabilities that its project does not allow: each such image that runs is an alert.',
@@ -1296,6 +1314,24 @@ const STRINGS = {
     'reg.trivySourceHelp': 'ghcr.io sunucusu için şifresiz bir Distribution API kaynağı; Trivy onları orada yayımlar.',
     'reg.trivyProjectHelp': 'Herkese açık bir proje, örneğin trivy; tarayıcı onları giriş yapmadan okusun.',
     'reg.trivyMade': 'Kurallar oluşturuldu; her gece 04:00’te {0} projesine kopyalarlar, ya da şimdi Çalıştır ile.',
+    regstores: 'Blob store’ları', 'reg.store.new': 'Yeni blob store', 'reg.store.kind.file': 'dizin', 'reg.store.kind.s3': 'S3',
+    'reg.store.col.name': 'Ad', 'reg.store.col.kind': 'Tür', 'reg.store.col.where': 'Nerede', 'reg.store.col.projects': 'Projeler',
+    'reg.store.col.used': 'Tuttuğu', 'reg.store.col.state': 'Durum', 'reg.store.default': 'deponun kendi store’u, kendi diskinde',
+    'reg.store.blobs': '{0} blob', 'reg.store.ok': '{0} önce yanıt verdi', 'reg.store.delete': 'Store’u sil',
+    'reg.store.deleteConfirm': '{0} blob store’u silinsin mi? İçindekiler olduğu yerde kalır; depo onu unutur.', 'reg.store.deleted': 'Blob store silindi.',
+    'reg.store.hint': 'Projelerin blob’larını tuttuğu yerler: deponun kendi diski, başka bir dizin ya da S3, MinIO veya Ceph kovası. Çöp toplama ve blob denetimi store store yürür.',
+    'reg.store.note': 'Store kotası yumuşaktır: %90’ı geçince uyarı verir, hiçbir şeyi reddetmez (reddeden proje kotasıdır). Store’un tuttuğu, meta veriden, her blob bir kez sayılarak hesaplanır.',
+    'reg.store.dialogHint': 'Kaydedilmeden önce denenir: S3 store’unun önekinin altına küçük bir nesne yazılır, okunur ve silinir.',
+    'reg.store.nameHelp': 'Küçük harf, rakam ve tire; projeler store’u bu adla anar.',
+    'reg.store.path': 'Dizin', 'reg.store.pathHelp': 'Deponun yazabileceği mutlak bir yol, en iyisi kendine ait bir disk.',
+    'reg.store.endpoint': 'Adres', 'reg.store.endpointHelp': 'Servisin adresi, şemasıyla (http ya da https).',
+    'reg.store.bucket': 'Kova (bucket)', 'reg.store.region': 'Bölge', 'reg.store.prefix': 'Önek',
+    'reg.store.prefixHelp': 'Blob’ların kovada gideceği yer; kökü için boş.', 'reg.store.access': 'Erişim anahtarı', 'reg.store.secret': 'Gizli anahtar',
+    'reg.store.pathStyle': 'Kova adı yolda (MinIO, Ceph), sunucu adında değil', 'reg.store.quota': 'Yumuşak kota (GiB)',
+    'reg.store.quotaHelp': '%90’ını geçince uyarı verir; boşsa yok.', 'reg.store.testOK': 'Çalışıyor: yazıldı, okundu ve silindi.',
+    'reg.store.saved': 'Blob store kaydedildi.', 'reg.store.ofProject': 'Blob store',
+    'reg.store.projectHelp': 'Projenin blob’larının gideceği yer. Deponun yöneticileri seçer.',
+    'reg.store.moveHelp': 'Deposu olan bir proje olduğu yerde kalır; boş bir proje taşınır.', 'reg.store.kept': 'Blob’ları {0} blob store’unda tutuluyor.',
     regrunning: 'Çalışan zafiyetli imajlar', 'reg.col.cluster': 'Cluster', 'reg.col.namespace': 'Namespace', 'reg.col.workload': 'Workload',
     'reg.col.pods': 'Pod', 'reg.col.image': 'İmaj', 'reg.col.unallowed': 'Kritik, izinsiz',
     'reg.unallowedHelp': 'Projesinin izin vermediği kritik zafiyetleri: böyle her çalışan imaj bir uyarıdır.',
@@ -2610,7 +2646,7 @@ function viewAllowed(id) {
   const me = state.me;
   if (spaceOf(id) === 'registry') {
     // The registry's projects, and its robot accounts for its admins.
-    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['robots', 'regjobs', 'regreplication', 'regsources'].includes(id) || !!me.registryAdmin);
+    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['robots', 'regjobs', 'regreplication', 'regsources', 'regstores'].includes(id) || !!me.registryAdmin);
   }
   if (me && me.role === 'none') return false;
   return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
@@ -2870,6 +2906,7 @@ const NAV_ICONS = {
   regsources: ['M4 12h11', 'M11 8l4 4-4 4', [3, 4, 18, 16, 2]],
   regreplication: ['M4 8h12l-3-3', 'M20 16H8l3 3', [18, 8, 2], [6, 16, 2]],
   regrunning: ['M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z', 'M12 8v5', [12, 16, 1]],
+  regstores: [[4, 4, 16, 6, 2], [4, 14, 16, 6, 2], [8, 7, 1], [8, 17, 1]],
 };
 
 function navIcon(id) {
@@ -3024,7 +3061,7 @@ function renderContent() {
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
-    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regrunning': case 'regjobs': case 'regreplication': case 'regsources': case 'robots':
+    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regrunning': case 'regstores': case 'regjobs': case 'regreplication': case 'regsources': case 'robots':
       body = renderRegistry(state.view, state.data, regUI);
       break;
     case 'certificates':

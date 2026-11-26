@@ -291,7 +291,11 @@ func (cp *copier) blob(ctx context.Context, from, to string, d manifest.Descript
 	// A blob some repository has is linked. One the store has and no
 	// repository does is garbage, which a collection may be deleting right
 	// now: it is pulled again, which makes it new in the store.
-	if size, err := s.cfg.Store.Stat(d.Digest); err == nil && s.cfg.DB.InUse(d.Digest) {
+	st, storeName, err := s.storeOf(to)
+	if err != nil {
+		return err
+	}
+	if size, err := st.Stat(d.Digest); err == nil && s.cfg.DB.InUseIn(d.Digest, storeName) {
 		return link(size)
 	}
 	var lastErr error
@@ -304,24 +308,24 @@ func (cp *copier) blob(ctx context.Context, from, to string, d manifest.Descript
 			}
 			continue
 		}
-		id, err := s.cfg.Store.StartUpload()
+		id, err := st.StartUpload()
 		if err != nil {
 			rc.Close()
 			return err
 		}
-		_, err = s.cfg.Store.Append(id, 0, &counted{ctx: ctx, r: rc, limit: cp.limit, n: &cp.bytes})
+		_, err = st.Append(id, 0, &counted{ctx: ctx, r: rc, limit: cp.limit, n: &cp.bytes})
 		rc.Close()
 		if err != nil {
-			s.cfg.Store.Cancel(id)
+			st.Cancel(id)
 			lastErr = fmt.Errorf("pulling %s: %w", d.Digest, err)
 			if ctx.Err() != nil {
 				break
 			}
 			continue
 		}
-		size, err := s.cfg.Store.Finish(id, d.Digest)
+		size, err := st.Finish(id, d.Digest)
 		if err != nil {
-			s.cfg.Store.Cancel(id)
+			st.Cancel(id)
 			if errors.Is(err, blobstore.ErrDigestMismatch) {
 				return fmt.Errorf("the source's %s is not that digest", d.Digest)
 			}

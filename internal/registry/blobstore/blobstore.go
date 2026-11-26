@@ -518,3 +518,17 @@ func (f *File) WalkUploads(fn func(id string, size int64, modified time.Time) er
 	}
 	return nil
 }
+
+// Ping tells whether the store's directory can be written: it writes a
+// file among the uploads and removes it.
+func (f *File) Ping() error {
+	tmp, err := os.CreateTemp(filepath.Join(f.root, "uploads"), "ping-*")
+	if err != nil {
+		return err
+	}
+	tmp.Close()
+	return os.Remove(tmp.Name())
+}
+
+// Root is the directory the store keeps its blobs below.
+func (f *File) Root() string { return f.root }

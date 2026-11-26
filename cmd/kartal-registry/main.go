@@ -96,6 +96,8 @@ func run(log *slog.Logger) error {
 	cfg := registry.Config{
 		Store: store, DB: db, Log: log, Zone: zone, Auth: server, Running: server, SourcesKey: registry.SourcesKey(sourcesKey),
 		PublicURL: config.String("KARTAL_REGISTRY_PUBLIC_URL", ""),
+		// S3 stores keep the uploads under way on the data volume.
+		StagingDir: filepath.Join(dir, "staging"),
 	}
 	// The scanner, when there is one.
 	if scannerURL := config.String("KARTAL_REGISTRY_SCANNER_URL", ""); scannerURL != "" {

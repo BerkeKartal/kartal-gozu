@@ -608,3 +608,22 @@ func (s *S3) Check() error {
 	defer s.placing.Unlock()
 	return s.deleteObject(key)
 }
+
+// Ping tells whether the bucket answers, and the keys may see it; it
+// writes nothing, unlike Check.
+func (s *S3) Ping() error {
+	resp, err := s.do(http.MethodHead, "", nil, nil, 0, emptySHA256, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return errors.New("404 NoSuchBucket: the bucket does not exist")
+	case http.StatusForbidden:
+		return errors.New("403 AccessDenied: the keys may not see the bucket")
+	}
+	return fmt.Errorf("S3 HEAD of the bucket: %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+}

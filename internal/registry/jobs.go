@@ -87,6 +87,7 @@ func (s *Server) Start(ctx context.Context) {
 		}
 	}
 	s.startScans(ctx)
+	go s.watchStores(ctx)
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()

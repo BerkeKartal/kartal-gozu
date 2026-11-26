@@ -54,7 +54,12 @@ func (s *Server) blob(w http.ResponseWriter, r *http.Request, g *grant, t target
 				s.cfg.Log.Warn("registry: renewing a link", "repo", t.name, "digest", t.ref, "err", err)
 			}
 		}
-		f, size, err := s.cfg.Store.Open(t.ref)
+		st, _, err := s.storeOf(t.name)
+		if err != nil {
+			s.noStore(w, err)
+			return
+		}
+		f, size, err := st.Open(t.ref)
 		if errors.Is(err, blobstore.ErrNotFound) {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UNKNOWN", "%s is gone from the store", t.ref))
 			return
@@ -107,12 +112,21 @@ func (s *Server) internal(w http.ResponseWriter, what string, err error) {
 
 func (s *Server) uploadURL(name, id string) string { return "/v2/" + name + "/blobs/uploads/" + id }
 
-// uploadIn tells whether an upload was started in the repository; a
+// uploadRef is where an upload was started: a repository, and the blob
+// store it goes to, which a project moved meanwhile does not change.
+type uploadRef struct{ repo, store string }
+
+// uploadIn is the blob store of an upload started in the repository; a
 // restart forgets it, and the client starts over.
-func (s *Server) uploadIn(id, name string) bool {
+func (s *Server) uploadIn(id, name string) (blobstore.Store, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return id != "" && s.uploads[id] == name
+	ref, ok := s.uploads[id]
+	s.mu.Unlock()
+	if id == "" || !ok || ref.repo != name {
+		return nil, false
+	}
+	st, err := s.storeNamed(ref.store)
+	return st, err == nil
 }
 
 func (s *Server) forget(id string) {
@@ -139,12 +153,12 @@ func (s *Server) created(w http.ResponseWriter, name, digest string) {
 }
 
 // finish makes an upload a blob of the repository.
-func (s *Server) finish(w http.ResponseWriter, name, id, digest string) {
+func (s *Server) finish(w http.ResponseWriter, st blobstore.Store, name, id, digest string) {
 	if !blobstore.ValidDigest(digest) {
 		writeError(w, errorf(http.StatusBadRequest, "DIGEST_INVALID", "%q is not a sha256 digest", digest))
 		return
 	}
-	size, err := s.cfg.Store.Finish(id, digest)
+	size, err := st.Finish(id, digest)
 	switch {
 	case errors.Is(err, blobstore.ErrDigestMismatch):
 		writeError(w, errorf(http.StatusBadRequest, "DIGEST_INVALID", "the content uploaded is not %s", digest))
@@ -186,20 +200,21 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 		s.startUpload(w, r, g, t)
 		return
 	}
-	if !s.uploadIn(t.ref, t.name) {
+	st, ok := s.uploadIn(t.ref, t.name)
+	if !ok {
 		writeError(w, errorf(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "no such upload in %s", t.name))
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		size, err := s.cfg.Store.UploadSize(t.ref)
+		size, err := st.UploadSize(t.ref)
 		if err != nil {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "no such upload"))
 			return
 		}
 		s.progress(w, t.name, t.ref, size, http.StatusNoContent)
 	case http.MethodPatch:
-		size, err := s.cfg.Store.UploadSize(t.ref)
+		size, err := st.UploadSize(t.ref)
 		if err != nil {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "no such upload"))
 			return
@@ -216,7 +231,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 			}
 			offset = n
 		}
-		size, err = s.cfg.Store.Append(t.ref, offset, r.Body)
+		size, err = st.Append(t.ref, offset, r.Body)
 		if errors.Is(err, blobstore.ErrOffset) {
 			w.Header().Set("Range", "0-"+strconv.FormatInt(max(size-1, 0), 10))
 			writeError(w, errorf(http.StatusRequestedRangeNotSatisfiable, "BLOB_UPLOAD_INVALID", "the chunk must start at %d", size))
@@ -228,20 +243,20 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 		}
 		s.progress(w, t.name, t.ref, size, http.StatusAccepted)
 	case http.MethodPut:
-		size, err := s.cfg.Store.UploadSize(t.ref)
+		size, err := st.UploadSize(t.ref)
 		if err != nil {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "no such upload"))
 			return
 		}
 		// The last chunk may come with the PUT.
-		if _, err := s.cfg.Store.Append(t.ref, size, r.Body); err != nil {
+		if _, err := st.Append(t.ref, size, r.Body); err != nil {
 			s.internal(w, "writing the last chunk", err)
 			return
 		}
-		s.finish(w, t.name, t.ref, r.URL.Query().Get("digest"))
+		s.finish(w, st, t.name, t.ref, r.URL.Query().Get("digest"))
 	case http.MethodDelete:
 		s.forget(t.ref)
-		if err := s.cfg.Store.Cancel(t.ref); err != nil && !errors.Is(err, blobstore.ErrNotFound) {
+		if err := st.Cancel(t.ref); err != nil && !errors.Is(err, blobstore.ErrNotFound) {
 			s.internal(w, "cancelling an upload", err)
 			return
 		}
@@ -257,12 +272,17 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 // repository is not made yet.
 func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t target) {
 	q := r.URL.Query()
+	st, storeName, err := s.storeOf(t.name)
+	if err != nil {
+		s.noStore(w, err)
+		return
+	}
 	// A blob another repository has is linked here without a copy, when the
-	// client may read it there.
+	// client may read it there, and it is in this project's blob store.
 	if mount := q.Get("mount"); mount != "" && blobstore.ValidDigest(mount) {
 		if from := q.Get("from"); ValidName(from) && g != nil && g.access["repository:"+from]["pull"] {
 			if size, ok := s.cfg.DB.Blob(from, mount); ok {
-				if _, err := s.cfg.Store.Stat(mount); err == nil {
+				if _, err := st.Stat(mount); err == nil {
 					if err := s.cfg.DB.LinkBlob(t.name, mount, size); errors.Is(err, meta.ErrNoProject) {
 						writeError(w, noProject(t.name))
 						return
@@ -278,30 +298,30 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 			}
 		}
 	}
-	id, err := s.cfg.Store.StartUpload()
+	id, err := st.StartUpload()
 	if err != nil {
 		s.internal(w, "starting an upload", err)
 		return
 	}
 	s.mu.Lock()
-	s.uploads[id] = t.name
+	s.uploads[id] = uploadRef{repo: t.name, store: storeName}
 	s.mu.Unlock()
 	// The whole blob in the POST.
 	if digest := q.Get("digest"); digest != "" {
-		if _, err := s.cfg.Store.Append(id, 0, r.Body); err != nil {
-			s.cfg.Store.Cancel(id)
+		if _, err := st.Append(id, 0, r.Body); err != nil {
+			st.Cancel(id)
 			s.forget(id)
 			s.internal(w, "writing a blob", err)
 			return
 		}
 		if !blobstore.ValidDigest(digest) {
-			s.cfg.Store.Cancel(id)
+			st.Cancel(id)
 			s.forget(id)
 			writeError(w, errorf(http.StatusBadRequest, "DIGEST_INVALID", "%q is not a sha256 digest", digest))
 			return
 		}
-		if _, err := s.cfg.Store.Finish(id, digest); err != nil {
-			s.cfg.Store.Cancel(id)
+		if _, err := st.Finish(id, digest); err != nil {
+			st.Cancel(id)
 			s.forget(id)
 			if errors.Is(err, blobstore.ErrDigestMismatch) {
 				writeError(w, errorf(http.StatusBadRequest, "DIGEST_INVALID", "the content uploaded is not %s", digest))
@@ -311,7 +331,7 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 			return
 		}
 		s.forget(id)
-		size, _ := s.cfg.Store.Stat(digest)
+		size, _ := st.Stat(digest)
 		if err := s.cfg.DB.LinkBlob(t.name, digest, size); errors.Is(err, meta.ErrNoProject) {
 			writeError(w, noProject(t.name))
 			return
@@ -341,6 +361,11 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 			return
 		}
 		a, _ := s.cfg.DB.Artifact(t.name, digest)
+		st, _, err := s.storeOf(t.name)
+		if err != nil {
+			s.noStore(w, err)
+			return
+		}
 		// The project's policy may refuse an image with vulnerabilities;
 		// the scanner pulls them all.
 		if r.Method == http.MethodGet && (g == nil || !g.scanner) {
@@ -349,7 +374,7 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 				return
 			}
 		}
-		f, size, err := s.cfg.Store.Open(digest)
+		f, size, err := st.Open(digest)
 		if err != nil {
 			writeError(w, errorf(http.StatusNotFound, "MANIFEST_UNKNOWN", "the manifest %s is gone from the store", digest))
 			return
@@ -479,8 +504,13 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 	if m.Subject != nil {
 		a.Subject = m.Subject.Digest
 	}
+	st, _, err := s.storeOf(repo)
+	if err != nil {
+		s.cfg.Log.Error("registry: a blob store", "err", err)
+		return "", nil, errorf(http.StatusServiceUnavailable, "UNAVAILABLE", "the project's blob store is not available now")
+	}
 	if m.Config != nil && manifest.IsImageConfig(m.Config.MediaType) && m.Config.Size <= manifest.MaxConfigSize {
-		if c := s.readConfig(m.Config.Digest); c != nil {
+		if c := s.readConfig(repo, m.Config.Digest); c != nil {
 			p := c.Platform
 			if p.OS != "" || p.Architecture != "" {
 				a.Platform = &p
@@ -488,7 +518,7 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 			a.Created, a.Labels = c.Created, c.Labels
 		}
 	}
-	if err := s.cfg.Store.Put(digest, body); err != nil {
+	if err := st.Put(digest, body); err != nil {
 		s.cfg.Log.Error("registry: storing a manifest", "err", err)
 		return "", nil, errorf(http.StatusInternalServerError, "UNKNOWN", "storing a manifest failed")
 	}
@@ -515,9 +545,13 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 	return digest, m, nil
 }
 
-// readConfig reads an image's config from the store, or nil.
-func (s *Server) readConfig(digest string) *manifest.Config {
-	f, size, err := s.cfg.Store.Open(digest)
+// readConfig reads an image's config from its repository's store, or nil.
+func (s *Server) readConfig(repo, digest string) *manifest.Config {
+	st, _, err := s.storeOf(repo)
+	if err != nil {
+		return nil
+	}
+	f, size, err := st.Open(digest)
 	if err != nil || size > manifest.MaxConfigSize {
 		if f != nil {
 			f.Close()

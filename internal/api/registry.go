@@ -68,6 +68,11 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/registry/robots/{name}", s.signedIn(s.robotUpdate))
 	mux.HandleFunc("POST /api/v1/registry/robots/{name}/rotate", s.signedIn(s.robotRotate))
 	mux.HandleFunc("DELETE /api/v1/registry/robots/{name}", s.signedIn(s.robotRemove))
+	mux.HandleFunc("GET /api/v1/registry/stores", s.signedIn(s.registryStores))
+	mux.HandleFunc("POST /api/v1/registry/stores", s.signedIn(s.registryStores))
+	mux.HandleFunc("POST /api/v1/registry/stores/test", s.signedIn(s.registryStores))
+	mux.HandleFunc("PUT /api/v1/registry/stores/{name}", s.signedIn(s.registryStores))
+	mux.HandleFunc("DELETE /api/v1/registry/stores/{name}", s.signedIn(s.registryStores))
 	s.routeRegistryScans(mux)
 }
 
@@ -407,8 +412,9 @@ func (s *Server) registryCreateProject(w http.ResponseWriter, r *http.Request) {
 		Immutable   []string `json:"immutable"`
 		Quota       int64    `json:"quota"`
 		ScanOnPush  bool     `json:"scanOnPush"`
+		Store       string   `json:"store,omitempty"`
 	}
-	if !readJSON(w, r, &body, `{"name", "public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush"}`) {
+	if !readJSON(w, r, &body, `{"name", "public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush", "store"}`) {
 		return
 	}
 	s.relay(w, r, http.MethodPost, "/admin/v1/projects", nil, body)
@@ -445,12 +451,12 @@ func (s *Server) registryUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// A field left out stays as it is.
 	var body meta.ProjectChange
-	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush", "blockSeverity": "HIGH", "allowlist": ["CVE-..."]}`) {
+	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush", "blockSeverity": "HIGH", "allowlist": ["CVE-..."], "store"}`) {
 		return
 	}
-	// A project's admins set its rules; its room is the registry's admins'
-	// to give.
-	if body.Quota != nil && !s.registryAdminOnly(w, r) {
+	// A project's admins set its rules; its room, and where it is kept, are
+	// the registry's admins' to give.
+	if (body.Quota != nil || body.Store != nil) && !s.registryAdminOnly(w, r) {
 		return
 	}
 	s.relay(w, r, http.MethodPut, "/admin/v1/projects/"+url.PathEscape(name), nil, body)
@@ -653,6 +659,32 @@ func (s *Server) registrySources(w http.ResponseWriter, r *http.Request) {
 		path += "/projects"
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrate"):
 		path += "/migrate"
+	}
+	s.relay(w, r, r.Method, path, nil, body)
+}
+
+// registryStores hands the registry's admins' calls about its blob stores
+// to the registry, as they came: their secret keys go to it alone, which
+// seals them.
+func (s *Server) registryStores(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	var body any
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		var raw json.RawMessage
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&raw); err != nil {
+			writeError(w, http.StatusBadRequest, "the body must be a blob store, as JSON")
+			return
+		}
+		body = raw
+	}
+	path := "/admin/v1/stores"
+	switch {
+	case r.PathValue("name") != "":
+		path += "/" + url.PathEscape(r.PathValue("name"))
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/stores/test"):
+		path += "/test"
 	}
 	s.relay(w, r, r.Method, path, nil, body)
 }

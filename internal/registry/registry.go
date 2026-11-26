@@ -83,6 +83,10 @@ type Config struct {
 	SourcesKey []byte
 	// RemoteHTTP replaces the sources' clients, for tests.
 	RemoteHTTP *http.Client
+	// StagingDir is where S3 stores keep the uploads under way, a
+	// directory each; StoreHTTP replaces their clients, for tests.
+	StagingDir string
+	StoreHTTP  *http.Client
 	// Scanner scans images for known vulnerabilities; without it nothing
 	// is scanned. Its reports are kept in ScanDir. It pulls from
 	// ScanAddress (such as http://kartal-registry:5000), or PublicURL;
@@ -101,8 +105,14 @@ type Server struct {
 
 	mu     sync.Mutex
 	tokens map[string]*grant
-	// uploads tie an upload to the repository it was started in.
-	uploads map[string]string
+	// uploads tie an upload to the repository it was started in, and the
+	// blob store it is in.
+	uploads map[string]uploadRef
+	// opened are the blob stores besides the default one, by name, once
+	// used; health what the last look at each found.
+	storesMu sync.Mutex
+	opened   map[string]blobstore.Store
+	health   map[string]storeHealth
 	// tickets are the scans' passwords: what each lets the scanner pull.
 	tickets map[string]ticket
 
@@ -158,7 +168,8 @@ func New(cfg Config) *Server {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{},
+	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]uploadRef{}, running: map[string]string{},
+		opened: map[string]blobstore.Store{}, health: map[string]storeHealth{},
 		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, replicating: make(chan struct{}, maxReplications), jobProgress: map[string]meta.JobProgress{},
 		tickets: map[string]ticket{}, scanPending: map[string]bool{}, scanWake: make(chan struct{}, 1), vulnCache: map[string][]vulnRef{}}
 }

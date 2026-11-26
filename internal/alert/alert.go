@@ -544,6 +544,10 @@ const (
 	// workload runs, with critical vulnerabilities its project does not
 	// allow; its Object is repository@digest.
 	RegistryVulnerableRunning = "RegistryVulnerableRunning"
+	// RegistryStoreFull is a blob store past 90% of its soft quota;
+	// RegistryStoreProblem one that does not answer as it should.
+	RegistryStoreFull    = "RegistryStoreFull"
+	RegistryStoreProblem = "RegistryStoreProblem"
 )
 
 // IsRegistry tells whether an alert is the image registry's.

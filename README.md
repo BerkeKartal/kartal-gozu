@@ -1126,6 +1126,20 @@ users, passwords, directory and roles the rest has.
   index (its images are not). It is off by default: turned on, it stops
   the clusters pulling such images too. A vulnerability is allowed, or no
   longer, from an image's page.
+- **Blob stores.** As Nexus has them: where projects keep their blobs. The
+  registry's own (*default*, on its volume) is always there; its admins add
+  others, a directory (a volume of its own) or a bucket of S3, MinIO or
+  Ceph, each tried out (an object written, read and deleted) before it is
+  kept, its secret key sealed as the sources' passwords are. A project is
+  made on a store, and an empty one may move to another. Blobs go to the
+  bucket laid out as on a disk (`<prefix>blobs/sha256/ab/<hex>`), so one
+  can be copied into the other; uploads under way stay on the registry's
+  volume until they are whole, then go in one request, or in parts when
+  large, each part signed with its SHA-256, which S3 checks. Collecting
+  garbage and checking the blobs go store by store: a blob is used in a
+  store only by the projects there. A store's quota is soft: past 90% of
+  it there is an alert, nothing is refused; a store that does not answer
+  is an alert too.
 - **What runs, and its vulnerabilities.** Kartal Gözü knows which of the
   registry's images the clusters run, by the digest each container was
   pulled by. *Vulnerable images that run* lists them by workload, with
@@ -1172,6 +1186,13 @@ limiting a request's size or cutting a long upload. The images go on a
 | `KARTAL_REGISTRY_SCAN_ADDRESS` | *(`KARTAL_REGISTRY_PUBLIC_URL`)* | Where the scanner pulls images from, such as `http://kartal-registry:5000` inside the cluster |
 | `KARTAL_REGISTRY_SCAN_WORKERS` | `2` | How many images are scanned at once |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+
+S3 stores need no setting of their own: they are added on the *Blob
+stores* page, and keep their uploads under way below
+`KARTAL_REGISTRY_DATA_DIR/staging`. The registry reaches the bucket, and
+pulls stream through it, so nodes need not reach the bucket themselves. A
+directory store is a volume the registry's Deployment mounts, at the path
+given.
 
 ### The vulnerability scanner
 

@@ -64,6 +64,11 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("GET /admin/v1/scanner", s.scannerStatus)
 	mux.HandleFunc("POST /admin/v1/scanner/db", s.updateScannerDB)
 	mux.HandleFunc("POST /admin/v1/scans/lookup", s.lookupScans)
+	mux.HandleFunc("GET /admin/v1/stores", s.listStores)
+	mux.HandleFunc("POST /admin/v1/stores", s.createStore)
+	mux.HandleFunc("POST /admin/v1/stores/test", s.testStore)
+	mux.HandleFunc("PUT /admin/v1/stores/{name}", s.updateStore)
+	mux.HandleFunc("DELETE /admin/v1/stores/{name}", s.deleteStore)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		tok := ""
@@ -100,14 +105,8 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
-	var blobs, size int64
-	if err := s.cfg.Store.Walk(func(_ string, n int64, _ time.Time) error {
-		blobs++
-		size += n
-		return nil
-	}); err != nil {
-		s.cfg.Log.Warn("registry: walking the blobs", "err", err)
-	}
+	// By the metadata: walking a bucket at each look would cost too much.
+	size, blobs := s.cfg.DB.StoreUsage("")
 	projects := s.cfg.DB.Projects()
 	var repos, artifacts int
 	for _, p := range projects {
@@ -119,6 +118,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	if err := s.cfg.DB.Healthy(); err != nil {
 		out["problem"] = "the metadata snapshot fails: " + err.Error()
 	}
+	out["stores"] = len(s.cfg.DB.BlobStores()) + 1
 	adminJSON(w, http.StatusOK, out)
 }
 
@@ -133,6 +133,7 @@ type projectInput struct {
 	Immutable   []string `json:"immutable"`
 	Quota       int64    `json:"quota"`
 	ScanOnPush  bool     `json:"scanOnPush"`
+	Store       string   `json:"store"`
 }
 
 // projectRules checks a project's immutable tags and quota, answering the
@@ -194,9 +195,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		in.Immutable = nil
 	}
 	err := s.cfg.DB.CreateProject(meta.Project{Name: in.Name, Public: in.Public, Description: in.Description, Immutable: in.Immutable,
-		Quota: in.Quota, ScanOnPush: in.ScanOnPush}, actor(r))
+		Quota: in.Quota, ScanOnPush: in.ScanOnPush, Store: in.Store}, actor(r))
 	if errors.Is(err, meta.ErrExists) {
 		adminError(w, http.StatusConflict, "a project of that name exists")
+		return
+	}
+	if errors.Is(err, meta.ErrNotFound) {
+		adminError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
@@ -261,6 +266,14 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	p, err := s.cfg.DB.UpdateProject(r.PathValue("name"), in, actor(r))
 	if errors.Is(err, meta.ErrNoProject) {
 		adminError(w, http.StatusNotFound, "no such project")
+		return
+	}
+	if errors.Is(err, meta.ErrNotFound) {
+		adminError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, meta.ErrNotEmpty) {
+		adminError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
@@ -412,15 +425,17 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	project, _ := s.cfg.DB.Project(meta.ProjectOf(repo))
 	d := ArtifactDetail{ArtifactSummary: ArtifactSummary{ArtifactInfo: info, Total: total(info.Artifact, byDigest), Referrers: len(referrers),
 		Scan: s.withPolicy(s.scanView(info.Artifact, byDigest), project, info.Artifact, byDigest)}, ReferrerList: referrers}
-	if f, _, err := s.cfg.Store.Open(digest); err == nil {
-		b, err := io.ReadAll(io.LimitReader(f, manifest.MaxSize))
-		f.Close()
-		if err == nil && json.Valid(b) {
-			d.Manifest = b
+	if st, _, err := s.storeOf(repo); err == nil {
+		if f, _, err := st.Open(digest); err == nil {
+			b, err := io.ReadAll(io.LimitReader(f, manifest.MaxSize))
+			f.Close()
+			if err == nil && json.Valid(b) {
+				d.Manifest = b
+			}
 		}
 	}
 	if info.Config != nil && manifest.IsImageConfig(info.Config.MediaType) {
-		d.Config = s.readConfig(info.Config.Digest)
+		d.Config = s.readConfig(repo, info.Config.Digest)
 	}
 	for _, m := range info.Manifests {
 		if child, ok := byDigest[m.Digest]; ok {

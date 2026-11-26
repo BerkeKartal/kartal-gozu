@@ -109,6 +109,24 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 			Detail: fmt.Sprintf("%s of %s (%d%%)", meta.HumanBytes(p.Size), meta.HumanBytes(p.Quota), p.Size*100/p.Quota)})
 	}
 	out = append(out, s.regAlerts.of("quota", quota, err)...)
+	// The blob stores: full, or in trouble.
+	var stores []registry.StoreView
+	err = s.registryGet(ctx, "/admin/v1/stores", &stores)
+	var storeAlerts []alert.Alert
+	for _, st := range stores {
+		if st.Problem != "" {
+			storeAlerts = append(storeAlerts, alert.Alert{Kind: alert.RegistryStoreProblem, Severity: "critical", Object: st.Name, Detail: st.Problem})
+		}
+		if st.Quota > 0 && st.Size*100 >= st.Quota*90 {
+			sev := "warning"
+			if st.Size >= st.Quota {
+				sev = "critical"
+			}
+			storeAlerts = append(storeAlerts, alert.Alert{Kind: alert.RegistryStoreFull, Severity: sev, Object: st.Name,
+				Detail: fmt.Sprintf("%s of %s (%d%%)", meta.HumanBytes(st.Size), meta.HumanBytes(st.Quota), st.Size*100/st.Quota)})
+		}
+	}
+	out = append(out, s.regAlerts.of("stores", storeAlerts, err)...)
 	var jobs struct {
 		Jobs []meta.Job `json:"jobs"`
 	}

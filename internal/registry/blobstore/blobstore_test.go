@@ -28,7 +28,7 @@ func kinds(t *testing.T) []kind {
 			}
 			return f
 		}},
-		{"s3", func(t *testing.T, root string) Store { return fake.store(t, root) }},
+		{"s3", func(t *testing.T, root string) Store { return fakeStore(t, fake, root) }},
 	}
 }
 

@@ -76,6 +76,45 @@ type Project struct {
 	// is let through.
 	BlockSeverity string   `json:"blockSeverity,omitempty"`
 	Allowlist     []string `json:"allowlist,omitempty"`
+	// Store is the blob store its blobs go to; empty is DefaultStore.
+	Store string `json:"store,omitempty"`
+}
+
+// DefaultStore is the registry's own blob store, on its data volume.
+const DefaultStore = "default"
+
+// StoreName is the blob store a project's blobs go to.
+func (p Project) StoreName() string {
+	if p.Store == "" {
+		return DefaultStore
+	}
+	return p.Store
+}
+
+// BlobStore is a store of blobs besides the registry's own: a directory
+// (a volume of its own), or a bucket of S3 or of what speaks its API.
+type BlobStore struct {
+	Name string `json:"name"`
+	// Kind is file or s3.
+	Kind string `json:"kind"`
+	// Path is a file store's directory.
+	Path string `json:"path,omitempty"`
+	// Of an S3 store: where, which bucket, below which prefix, and who.
+	Endpoint  string `json:"endpoint,omitempty"`
+	Region    string `json:"region,omitempty"`
+	Bucket    string `json:"bucket,omitempty"`
+	Prefix    string `json:"prefix,omitempty"`
+	AccessKey string `json:"accessKey,omitempty"`
+	// Secret is the secret key, sealed: the registry alone opens it.
+	Secret    string `json:"secret,omitempty"`
+	PathStyle bool   `json:"pathStyle,omitempty"`
+	CA        string `json:"ca,omitempty"`
+	Insecure  bool   `json:"insecure,omitempty"`
+	// Quota is a soft quota in bytes: past 90% of it there is an alert;
+	// nothing is refused (a project's quota refuses).
+	Quota   int64     `json:"quota,omitempty"`
+	Created time.Time `json:"created"`
+	By      string    `json:"by,omitempty"`
 }
 
 // Allows tells whether a project's allowlist names a vulnerability.
@@ -454,6 +493,7 @@ type entry struct {
 	Source   *Source          `json:"source,omitempty"`
 	Rule     *ReplicationRule `json:"rule,omitempty"`
 	Scan     *Scan            `json:"scan,omitempty"`
+	Store    *BlobStore       `json:"store,omitempty"`
 }
 
 type state struct {
@@ -466,6 +506,7 @@ type state struct {
 	Sources   []Source                 `json:"sources,omitempty"`
 	Rules     []ReplicationRule        `json:"rules,omitempty"`
 	Scans     []Scan                   `json:"scans,omitempty"`
+	Stores    []BlobStore              `json:"stores,omitempty"`
 }
 
 // DB is the registry's metadata.
@@ -492,6 +533,8 @@ type DB struct {
 	rules   map[string]ReplicationRule
 	// scans are by digest.
 	scans map[string]Scan
+	// stores are the blob stores besides the default one, by name.
+	stores map[string]BlobStore
 	// pulled are the artifacts pulled since their counts were last written.
 	pulled map[[2]string]bool
 	// onEvent hears of each event as it is written.
@@ -514,7 +557,7 @@ func Open(dir string) (*DB, error) {
 	}
 	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{},
 		schedules: map[string]Schedule{}, running: map[string]RunningImages{}, sources: map[string]Source{},
-		rules: map[string]ReplicationRule{}, scans: map[string]Scan{}}
+		rules: map[string]ReplicationRule{}, scans: map[string]Scan{}, stores: map[string]BlobStore{}}
 	if b, err := os.ReadFile(d.path("snapshot.json")); err == nil {
 		var s state
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -543,6 +586,9 @@ func Open(dir string) (*DB, error) {
 		}
 		for _, sc := range s.Scans {
 			d.scans[sc.Digest] = sc
+		}
+		for _, bs := range s.Stores {
+			d.stores[bs.Name] = bs
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -727,6 +773,10 @@ func (d *DB) apply(e entry) {
 		d.scans[e.Scan.Digest] = *e.Scan
 	case "scan-del":
 		delete(d.scans, e.Name)
+	case "store":
+		d.stores[e.Store.Name] = *e.Store
+	case "store-del":
+		delete(d.stores, e.Name)
 	}
 }
 
@@ -799,6 +849,10 @@ func (d *DB) snapshot() error {
 		s.Scans = append(s.Scans, sc)
 	}
 	sort.Slice(s.Scans, func(i, j int) bool { return s.Scans[i].Digest < s.Scans[j].Digest })
+	for _, bs := range d.stores {
+		s.Stores = append(s.Stores, bs)
+	}
+	sort.Slice(s.Stores, func(i, j int) bool { return s.Stores[i].Name < s.Stores[j].Name })
 	for _, p := range d.projects {
 		s.Projects = append(s.Projects, p)
 	}
@@ -935,6 +989,12 @@ func (d *DB) CreateProject(p Project, user string) error {
 	if _, ok := d.projects[p.Name]; ok {
 		return ErrExists
 	}
+	if p.Store == DefaultStore {
+		p.Store = ""
+	}
+	if _, ok := d.stores[p.Store]; p.Store != "" && !ok {
+		return fmt.Errorf("%w: no blob store %s", ErrNotFound, p.Store)
+	}
 	p.Created, p.CreatedBy = d.now().UTC(), user
 	return d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-create", p.Name, "", "", "", visibility(p.Public)))
 }
@@ -959,6 +1019,8 @@ type ProjectChange struct {
 	// through.
 	BlockSeverity *string   `json:"blockSeverity"`
 	Allowlist     *[]string `json:"allowlist"`
+	// Store moves a project with no repositories to another blob store.
+	Store *string `json:"store"`
 }
 
 // UpdateProject changes a project: whether it is public, its description,
@@ -1004,6 +1066,24 @@ func (d *DB) UpdateProject(name string, ch ProjectChange, user string) (Project,
 			said = append(said, "no quota")
 		} else {
 			said = append(said, "quota "+HumanBytes(p.Quota))
+		}
+	}
+	if ch.Store != nil {
+		to := *ch.Store
+		if to == DefaultStore {
+			to = ""
+		}
+		if to != p.Store {
+			if _, ok := d.stores[to]; to != "" && !ok {
+				return Project{}, fmt.Errorf("%w: no blob store %s", ErrNotFound, to)
+			}
+			for rn := range d.repos {
+				if ProjectOf(rn) == name {
+					return Project{}, fmt.Errorf("%w: a project with repositories moves to another blob store with a job", ErrNotEmpty)
+				}
+			}
+			p.Store = to
+			said = append(said, "blob store "+p.StoreName())
 		}
 	}
 	if ch.ScanOnPush != nil && *ch.ScanOnPush != p.ScanOnPush {
@@ -1798,6 +1878,158 @@ func (d *DB) Referrers(repo, digest, artifactType string) []Artifact {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Digest < out[j].Digest })
 	return out
+}
+
+// ---------------------------------------------------------------- blob stores
+
+// BlobStores are the blob stores besides the default one, by name.
+func (d *DB) BlobStores() []BlobStore {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]BlobStore, 0, len(d.stores))
+	for _, bs := range d.stores {
+		out = append(out, bs)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// BlobStoreNamed is one blob store.
+func (d *DB) BlobStoreNamed(name string) (BlobStore, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	bs, ok := d.stores[name]
+	return bs, ok
+}
+
+// PutBlobStore adds a blob store or changes one.
+func (d *DB) PutBlobStore(bs BlobStore, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if bs.Name == DefaultStore {
+		return fmt.Errorf("%w: the default blob store is the registry's own", ErrExists)
+	}
+	action := "store-add"
+	if _, ok := d.stores[bs.Name]; ok {
+		action = "store-change"
+	}
+	where := bs.Path
+	if bs.Kind == "s3" {
+		where = bs.Endpoint + "/" + bs.Bucket + "/" + bs.Prefix
+	}
+	return d.commit(entry{Op: "store", Store: &bs}, d.event(user, action, "", "", "", "", bs.Name+" ("+bs.Kind+" "+where+")"))
+}
+
+// DeleteBlobStore removes a blob store that no project uses.
+func (d *DB) DeleteBlobStore(name, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.stores[name]; !ok {
+		return ErrNotFound
+	}
+	for _, p := range d.projects {
+		if p.Store == name {
+			return fmt.Errorf("%w: the project %s keeps its blobs there", ErrInUse, p.Name)
+		}
+	}
+	return d.commit(entry{Op: "store-del", Name: name}, d.event(user, "store-delete", "", "", "", "", name))
+}
+
+// StoreProjects are the projects whose blobs go to a blob store, by name.
+func (d *DB) StoreProjects(store string) []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var out []string
+	for _, p := range d.projects {
+		if p.StoreName() == store {
+			out = append(out, p.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// inStore tells whether a repository's blobs are in a blob store; the
+// lock is held.
+func (d *DB) inStore(repo, store string) bool {
+	p := d.projects[ProjectOf(repo)]
+	if p == nil {
+		// A project gone leaves no repositories, but its own store's
+		// collection is where they would be.
+		return store == DefaultStore
+	}
+	return p.StoreName() == store
+}
+
+// InUseIn is InUse of the repositories whose blobs are in a blob store.
+func (d *DB) InUseIn(digest, store string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for name, r := range d.repos {
+		if !d.inStore(name, store) {
+			continue
+		}
+		if _, ok := r.Blobs[digest]; ok {
+			return true
+		}
+		if r.Artifacts[digest] != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// BlobsInUseIn is BlobsInUse of the repositories whose blobs are in a
+// blob store.
+func (d *DB) BlobsInUseIn(except map[string][]string, store string) map[string]bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string]bool{}
+	for name, r := range d.repos {
+		if !d.inStore(name, store) {
+			continue
+		}
+		skip := map[string]bool{}
+		for _, dg := range except[name] {
+			skip[dg] = true
+		}
+		for dg := range r.Blobs {
+			if !skip[dg] {
+				out[dg] = true
+			}
+		}
+		for dg := range usedBy(r) {
+			out[dg] = true
+		}
+	}
+	return out
+}
+
+// StoreUsage is what a blob store holds by the metadata, as a project's
+// usage counts it, each blob once, and how many blobs: "" for every store.
+func (d *DB) StoreUsage(store string) (int64, int) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	blobs := map[string]int64{}
+	for name, r := range d.repos {
+		if store != "" && !d.inStore(name, store) {
+			continue
+		}
+		used := usedBy(r)
+		for dg, n := range r.Blobs {
+			if d.counts(r, used, dg) {
+				blobs[dg] = n
+			}
+		}
+		for dg, a := range r.Artifacts {
+			blobs[dg] = a.Size
+		}
+	}
+	var n int64
+	for _, size := range blobs {
+		n += size
+	}
+	return n, len(blobs)
 }
 
 // ---------------------------------------------------------------- scans

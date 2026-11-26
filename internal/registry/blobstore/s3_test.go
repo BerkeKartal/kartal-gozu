@@ -9,11 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BerkeKartal/kartal-gozu/internal/registry/blobstore/s3test"
 )
 
 func TestS3Layout(t *testing.T) {
 	fake := newFakeS3(t)
-	s := fake.store(t, t.TempDir())
+	s := fakeStore(t, fake, t.TempDir())
 	body := []byte("a manifest")
 	d := Digest(body)
 	if err := s.Put(d, body); err != nil {
@@ -21,12 +23,12 @@ func TestS3Layout(t *testing.T) {
 	}
 	hexPart := strings.TrimPrefix(d, "sha256:")
 	key := "registry/blobs/sha256/" + hexPart[:2] + "/" + hexPart
-	if o, ok := fake.objects[key]; !ok || !bytes.Equal(o.data, body) {
-		t.Fatalf("objects: %v", fake.objects)
+	if o, ok := fake.Objects[key]; !ok || !bytes.Equal(o.Data, body) {
+		t.Fatalf("objects: %v", fake.Objects)
 	}
 	// One PUT, signed with the blob's own digest, which S3 checks.
 	var puts []string
-	for _, r := range fake.requests() {
+	for _, r := range fake.Requests() {
 		if strings.HasPrefix(r, "PUT ") {
 			puts = append(puts, r)
 		}
@@ -39,7 +41,7 @@ func TestS3Layout(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := 0
-	for _, r := range fake.requests() {
+	for _, r := range fake.Requests() {
 		if strings.HasPrefix(r, "PUT ") {
 			n++
 		}
@@ -51,8 +53,8 @@ func TestS3Layout(t *testing.T) {
 
 func TestS3MultipartAndWalk(t *testing.T) {
 	fake := newFakeS3(t)
-	fake.page = 2
-	s := fake.store(t, t.TempDir())
+	fake.Page = 2
+	s := fakeStore(t, fake, t.TempDir())
 	want := map[string]int64{}
 	for i := 0; i < 5; i++ {
 		content := []byte(strings.Repeat(fmt.Sprintf("layer %d ", i), 300+i*50))
@@ -67,17 +69,17 @@ func TestS3MultipartAndWalk(t *testing.T) {
 		want[d] = int64(len(content))
 	}
 	parts := 0
-	for _, r := range fake.requests() {
+	for _, r := range fake.Requests() {
 		if strings.HasPrefix(r, "PUT ") && strings.Contains(r, "partNumber=") {
 			parts++
 		}
 	}
-	if parts < 10 || len(fake.uploads) != 0 {
-		t.Errorf("%d parts, %d multipart uploads left", parts, len(fake.uploads))
+	if parts < 10 || len(fake.Uploads) != 0 {
+		t.Errorf("%d parts, %d multipart uploads left", parts, len(fake.Uploads))
 	}
 	// Something else in the bucket is no blob.
-	fake.objects["registry/blobs/sha256/zz/not-a-blob"] = fakeObject{data: []byte("x"), mod: time.Now()}
-	fake.objects["elsewhere/blobs/sha256/ab/"+strings.Repeat("a", 64)] = fakeObject{data: []byte("x"), mod: time.Now()}
+	fake.Objects["registry/blobs/sha256/zz/not-a-blob"] = s3test.Object{Data: []byte("x"), Mod: time.Now()}
+	fake.Objects["elsewhere/blobs/sha256/ab/"+strings.Repeat("a", 64)] = s3test.Object{Data: []byte("x"), Mod: time.Now()}
 	got := map[string]int64{}
 	if err := s.Walk(func(digest string, size int64, mod time.Time) error {
 		got[digest] = size
@@ -92,7 +94,7 @@ func TestS3MultipartAndWalk(t *testing.T) {
 		t.Errorf("walked %v, want %v", got, want)
 	}
 	lists := 0
-	for _, r := range fake.requests() {
+	for _, r := range fake.Requests() {
 		if strings.Contains(r, "list-type=2") {
 			lists++
 		}
@@ -105,13 +107,13 @@ func TestS3MultipartAndWalk(t *testing.T) {
 
 func TestS3TriesAgain(t *testing.T) {
 	fake := newFakeS3(t)
-	s := fake.store(t, t.TempDir())
+	s := fakeStore(t, fake, t.TempDir())
 	body := []byte("worth another try")
-	fake.fail = 2
+	fake.Fail = 2
 	if err := s.Put(Digest(body), body); err != nil {
 		t.Fatalf("after two failures: %v", err)
 	}
-	fake.fail = 100
+	fake.Fail = 100
 	other := []byte("never")
 	err := s.Put(Digest(other), other)
 	if err == nil || !strings.Contains(err.Error(), "500") {
@@ -121,7 +123,7 @@ func TestS3TriesAgain(t *testing.T) {
 
 func TestS3Reads(t *testing.T) {
 	fake := newFakeS3(t)
-	s := fake.store(t, t.TempDir())
+	s := fakeStore(t, fake, t.TempDir())
 	content := []byte(strings.Repeat("0123456789", 300))
 	d := Digest(content)
 	if err := s.Put(d, content); err != nil {
@@ -132,9 +134,9 @@ func TestS3Reads(t *testing.T) {
 		t.Fatalf("open: %d %v", size, err)
 	}
 	defer r.Close()
-	asked := len(fake.requests())
-	if end, err := r.Seek(0, io.SeekEnd); err != nil || end != size || len(fake.requests()) != asked {
-		t.Errorf("seeking to the end: %d %v, %d requests", end, err, len(fake.requests())-asked)
+	asked := len(fake.Requests())
+	if end, err := r.Seek(0, io.SeekEnd); err != nil || end != size || len(fake.Requests()) != asked {
+		t.Errorf("seeking to the end: %d %v, %d requests", end, err, len(fake.Requests())-asked)
 	}
 	r.Seek(1005, io.SeekStart)
 	buf := make([]byte, 10)
@@ -159,9 +161,9 @@ func TestS3Reads(t *testing.T) {
 
 func TestS3DeleteIf(t *testing.T) {
 	fake := newFakeS3(t)
-	s := fake.store(t, t.TempDir())
+	s := fakeStore(t, fake, t.TempDir())
 	past := time.Now().Add(-time.Hour)
-	fake.clock = func() time.Time { return past }
+	fake.Clock = func() time.Time { return past }
 	s.now = func() time.Time { return past }
 	old, again, kept := []byte("old"), []byte("again"), []byte("kept")
 	for _, b := range [][]byte{old, again, kept} {
@@ -169,7 +171,7 @@ func TestS3DeleteIf(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fake.clock, s.now = time.Now, time.Now
+	fake.Clock, s.now = time.Now, time.Now
 	before := time.Now().Add(-time.Minute)
 	// Stored again (it is there: only noted).
 	if err := s.Put(Digest(again), again); err != nil {
@@ -189,7 +191,7 @@ func TestS3DeleteIf(t *testing.T) {
 	}
 	// A store started again does not remember what it stored lately; the
 	// object's own time says, as a file's does.
-	s2 := fake.store(t, t.TempDir())
+	s2 := fakeStore(t, fake, t.TempDir())
 	if _, deleted, err := s2.DeleteIf(Digest(again), before, func() bool { return false }); err != nil || !deleted {
 		t.Errorf("after a restart: %v %v", deleted, err)
 	}
@@ -197,20 +199,20 @@ func TestS3DeleteIf(t *testing.T) {
 
 func TestS3Trouble(t *testing.T) {
 	fake := newFakeS3(t)
-	if err := fake.store(t, t.TempDir()).Check(); err != nil {
+	if err := fakeStore(t, fake, t.TempDir()).Check(); err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if len(fake.objects) != 0 {
-		t.Errorf("the check left %v", fake.objects)
+	if len(fake.Objects) != 0 {
+		t.Errorf("the check left %v", fake.Objects)
 	}
-	wrong, err := NewS3(S3Config{Endpoint: fake.URL, Bucket: "kartal", AccessKey: fake.access, SecretKey: "wrong", PathStyle: true, Staging: t.TempDir()})
+	wrong, err := NewS3(S3Config{Endpoint: fake.URL, Bucket: "kartal", AccessKey: fake.Access, SecretKey: "wrong", PathStyle: true, Staging: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := wrong.Check(); err == nil || !strings.Contains(err.Error(), "SignatureDoesNotMatch") {
 		t.Errorf("a wrong secret: %v", err)
 	}
-	missing, _ := NewS3(S3Config{Endpoint: fake.URL, Bucket: "nope", AccessKey: fake.access, SecretKey: fake.secret, PathStyle: true, Staging: t.TempDir()})
+	missing, _ := NewS3(S3Config{Endpoint: fake.URL, Bucket: "nope", AccessKey: fake.Access, SecretKey: fake.Secret, PathStyle: true, Staging: t.TempDir()})
 	if err := missing.Check(); err == nil || !strings.Contains(err.Error(), "NoSuchBucket") {
 		t.Errorf("no such bucket: %v", err)
 	}
@@ -244,5 +246,20 @@ func TestS3Addresses(t *testing.T) {
 	}
 	if k, _ := path.key("sha256:" + strings.Repeat("ab", 32)); k != "team/blobs/sha256/ab/"+strings.Repeat("ab", 32) {
 		t.Errorf("key %s", k)
+	}
+}
+
+func TestPing(t *testing.T) {
+	fake := newFakeS3(t)
+	if err := fakeStore(t, fake, t.TempDir()).Ping(); err != nil {
+		t.Errorf("s3: %v", err)
+	}
+	missing, _ := NewS3(S3Config{Endpoint: fake.URL, Bucket: "nope", AccessKey: fake.Access, SecretKey: fake.Secret, PathStyle: true, Staging: t.TempDir()})
+	if err := missing.Ping(); err == nil || !strings.Contains(err.Error(), "NoSuchBucket") {
+		t.Errorf("no bucket: %v", err)
+	}
+	f, _ := NewFile(t.TempDir())
+	if err := f.Ping(); err != nil {
+		t.Errorf("file: %v", err)
 	}
 }
