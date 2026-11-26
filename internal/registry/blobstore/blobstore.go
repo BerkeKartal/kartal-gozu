@@ -1,7 +1,8 @@
 // Package blobstore keeps the registry's content: blobs addressed by their
 // digest, and the uploads that become blobs. Store is what the registry
-// uses; File keeps everything on a disk, and another store (S3) can take
-// its place later.
+// uses; File keeps everything on a disk, S3 the blobs in a bucket of S3 or
+// of anything that speaks its API (MinIO, Ceph), and the uploads on a disk
+// until they are whole.
 package blobstore
 
 import (
@@ -421,6 +422,22 @@ func (f *File) Append(id string, offset int64, r io.Reader) (int64, error) {
 }
 
 func (f *File) Finish(id, digest string) (int64, error) {
+	return f.finishWith(id, digest, func(p string, _ int64) error {
+		target, err := f.blobPath(digest)
+		if err != nil {
+			return err
+		}
+		fh, err := os.OpenFile(p, os.O_RDWR, 0)
+		if err != nil {
+			return err
+		}
+		return f.place(fh, target)
+	})
+}
+
+// finishWith checks that an upload is the blob digest, and hands its file
+// to place, which makes it the blob (and moves or removes the file).
+func (f *File) finishWith(id, digest string, place func(path string, size int64) error) (int64, error) {
 	if !ValidDigest(digest) {
 		return 0, ErrDigestMismatch
 	}
@@ -455,15 +472,7 @@ func (f *File) Finish(id, digest string) (int64, error) {
 	if "sha256:"+hex.EncodeToString(h.Sum(nil)) != digest {
 		return 0, ErrDigestMismatch
 	}
-	target, err := f.blobPath(digest)
-	if err != nil {
-		return 0, err
-	}
-	fh, err := os.OpenFile(p, os.O_RDWR, 0)
-	if err != nil {
-		return 0, err
-	}
-	if err := f.place(fh, target); err != nil {
+	if err := place(p, fi.Size()); err != nil {
 		return 0, err
 	}
 	f.mu.Lock()
