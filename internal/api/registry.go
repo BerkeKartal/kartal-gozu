@@ -321,11 +321,13 @@ func (s *Server) registryCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name        string `json:"name"`
-		Public      bool   `json:"public"`
-		Description string `json:"description"`
+		Name        string   `json:"name"`
+		Public      bool     `json:"public"`
+		Description string   `json:"description"`
+		Immutable   []string `json:"immutable"`
+		Quota       int64    `json:"quota"`
 	}
-	if !readJSON(w, r, &body, `{"name", "public", "description"}`) {
+	if !readJSON(w, r, &body, `{"name", "public", "description", "immutable": ["v*"], "quota": bytes}`) {
 		return
 	}
 	s.relay(w, r, http.MethodPost, "/admin/v1/projects", nil, body)
@@ -360,11 +362,14 @@ func (s *Server) registryUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if !s.mayIn(w, r, name, auth.Admin) {
 		return
 	}
-	var body struct {
-		Public      bool   `json:"public"`
-		Description string `json:"description"`
+	// A field left out stays as it is.
+	var body meta.ProjectChange
+	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes}`) {
+		return
 	}
-	if !readJSON(w, r, &body, `{"public", "description"}`) {
+	// A project's admins set its rules; its room is the registry's admins'
+	// to give.
+	if body.Quota != nil && !s.registryAdminOnly(w, r) {
 		return
 	}
 	s.relay(w, r, http.MethodPut, "/admin/v1/projects/"+url.PathEscape(name), nil, body)

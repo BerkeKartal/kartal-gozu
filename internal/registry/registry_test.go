@@ -523,3 +523,52 @@ func TestParse(t *testing.T) {
 		t.Error("an unknown route parsed")
 	}
 }
+
+func TestProjectRules(t *testing.T) {
+	e := newEnv(t)
+	ci := e.token("ci", "repository:shop/web:pull,push,delete")
+	e.pushImage("shop/web", "v1", ci, "amd64")
+	v := []string{"v*"}
+	if _, err := e.db.UpdateProject("shop", meta.ProjectChange{Immutable: &v}, "root"); err != nil {
+		t.Fatal(err)
+	}
+	// Another image under an immutable tag, and taking the tag off, are refused.
+	cfg := e.pushBlob("shop/web", ci, []byte(`{"architecture":"arm64","os":"linux"}`))
+	m := []byte(`{"schemaVersion":2,"mediaType":"` + manifest.OCIManifest + `","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` +
+		cfg + `","size":37},"layers":[]}`)
+	if a := e.do("PUT", "/v2/shop/web/manifests/v1", ci, m, "Content-Type", manifest.OCIManifest); a.code != 409 || a.errCode() != "DENIED" ||
+		!strings.Contains(string(a.body), "immutable") {
+		t.Errorf("a push over an immutable tag: %d %s", a.code, a.body)
+	}
+	if a := e.do("DELETE", "/v2/shop/web/manifests/v1", ci, nil); a.code != 409 {
+		t.Errorf("removing an immutable tag: %d %s", a.code, a.body)
+	}
+	if a := e.do("PUT", "/v2/shop/web/manifests/latest", ci, m, "Content-Type", manifest.OCIManifest); a.code != 201 {
+		t.Errorf("another tag: %d %s", a.code, a.body)
+	}
+	// A quota the project is already at refuses what is new.
+	used := int64(0)
+	for _, p := range e.db.Projects() {
+		if p.Name == "shop" {
+			used = p.Size
+		}
+	}
+	if _, err := e.db.UpdateProject("shop", meta.ProjectChange{Quota: &used}, "root"); err != nil {
+		t.Fatal(err)
+	}
+	if a := e.do("POST", "/v2/shop/web/blobs/uploads/?digest="+url.QueryEscape(blobstore.Digest([]byte("more"))), ci, []byte("more")); a.code != 403 ||
+		a.errCode() != "DENIED" || !strings.Contains(string(a.body), "quota") {
+		t.Errorf("a blob over the quota: %d %s", a.code, a.body)
+	}
+	// What the project holds already is no more.
+	if a := e.do("POST", "/v2/shop/web/blobs/uploads/?digest="+url.QueryEscape(cfg), ci, []byte(`{"architecture":"arm64","os":"linux"}`)); a.code != 201 {
+		t.Errorf("a blob the project has: %d %s", a.code, a.body)
+	}
+	// The admin API checks the rules it is given.
+	if a := e.do("PUT", "/admin/v1/projects/shop", "admin-secret", []byte(`{"immutable":["v[1"]}`)); a.code != 400 {
+		t.Errorf("a pattern that cannot match: %d %s", a.code, a.body)
+	}
+	if a := e.do("PUT", "/admin/v1/projects/shop", "admin-secret", []byte(`{"quota":-1}`)); a.code != 400 {
+		t.Errorf("a quota below zero: %d %s", a.code, a.body)
+	}
+}

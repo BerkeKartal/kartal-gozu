@@ -29,6 +29,7 @@ const (
 	clusterTok   = "cluster-admin-token-0123456789"
 	regTeamTok   = "team-a-token-0123456789"
 	regViewTok   = "team-a-viewer-token-0123456789"
+	regLeadTok   = "team-a-lead-token-0123456789"
 	registryUser = "operator@registry:team-a"
 )
 
@@ -52,12 +53,14 @@ func newRegEnv(t *testing.T) *regEnv {
 	keeper := settings.NewKeeper(ctx, settings.Memory{}, log)
 	team, _ := auth.ParseGrant(registryUser)
 	viewer, _ := auth.ParseGrant("viewer@registry:team-a")
+	lead, _ := auth.ParseGrant("admin@registry:team-a")
 	cluster, _ := auth.ParseGrant("admin@*/*")
 	users := map[string]auth.User{
 		bossTok:    {Name: "boss", Role: auth.Admin},
 		clusterTok: auth.NewUser("ops", []auth.Grant{cluster}),
 		regTeamTok: auth.NewUser("dev", []auth.Grant{team}),
 		regViewTok: auth.NewUser("reader", []auth.Grant{viewer}),
+		regLeadTok: auth.NewUser("lead", []auth.Grant{lead}),
 	}
 	accts := accounts.New(keeper, nil)
 	e := &regEnv{t: t}
@@ -238,5 +241,35 @@ func TestRegistryThroughTheServer(t *testing.T) {
 	// The registry asks with the shared secret only.
 	if code, _ := e.call("POST", "/api/v1/registry/authorize", "wrong", `{}`); code != 401 {
 		t.Errorf("authorize without the secret: %d", code)
+	}
+}
+
+// A project's admins set its immutable tags; its quota is the registry's
+// admins' to give.
+func TestRegistryProjectRules(t *testing.T) {
+	e := newRegEnv(t)
+	if code, b := e.call("POST", "/api/v1/registry/projects", bossTok, `{"name":"team-a"}`); code != 201 {
+		t.Fatalf("make a project: %d %s", code, b)
+	}
+	if code, b := e.call("PUT", "/api/v1/registry/projects/team-a", regLeadTok, `{"immutable":["v*"]}`); code != 200 {
+		t.Errorf("the project's admin sets its immutable tags: %d %s", code, b)
+	}
+	if code, _ := e.call("PUT", "/api/v1/registry/projects/team-a", regLeadTok, `{"quota":1073741824}`); code != 403 {
+		t.Errorf("the project's admin set its quota: %d", code)
+	}
+	if code, _ := e.call("PUT", "/api/v1/registry/projects/team-a", regTeamTok, `{"immutable":[]}`); code != 403 {
+		t.Errorf("an operator changed the rules: %d", code)
+	}
+	if code, b := e.call("PUT", "/api/v1/registry/projects/team-a", bossTok, `{"quota":1073741824}`); code != 200 {
+		t.Errorf("the registry's admin sets the quota: %d %s", code, b)
+	}
+	code, b := e.call("GET", "/api/v1/registry/projects/team-a", regTeamTok, "")
+	var p struct {
+		Immutable []string
+		Quota     int64
+		Public    bool
+	}
+	if json.Unmarshal(b, &p); code != 200 || len(p.Immutable) != 1 || p.Immutable[0] != "v*" || p.Quota != 1<<30 || p.Public {
+		t.Errorf("the project: %d %s", code, b)
 	}
 }

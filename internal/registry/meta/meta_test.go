@@ -362,3 +362,97 @@ func lineCount(path string) int {
 	}
 	return strings.Count(string(b), "\n")
 }
+
+func TestImmutableTags(t *testing.T) {
+	d := open(t, t.TempDir())
+	defer d.Close()
+	d.CreateProject(Project{Name: "shop", Immutable: []string{"v*"}}, "admin")
+	push(t, d, "shop/web", dM, "v1")
+	push(t, d, "shop/web", dC, "latest")
+	// The same artifact pushed again under its tag is fine; another one is not.
+	if err := d.PutArtifact("shop/web", image(dM), "v1", "ci"); err != nil {
+		t.Errorf("the same push again: %v", err)
+	}
+	if err := d.PutArtifact("shop/web", image(dC), "v1", "ci"); !errors.Is(err, ErrImmutable) || !strings.Contains(err.Error(), "the tag v1 of shop/web") {
+		t.Errorf("moving an immutable tag by a push: %v", err)
+	}
+	if err := d.Tag("shop/web", "v1", dC, "dev"); !errors.Is(err, ErrImmutable) {
+		t.Errorf("moving an immutable tag: %v", err)
+	}
+	if err := d.Untag("shop/web", "v1", "dev"); !errors.Is(err, ErrImmutable) {
+		t.Errorf("removing an immutable tag: %v", err)
+	}
+	if err := d.DeleteArtifact("shop/web", dM, "dev"); !errors.Is(err, ErrImmutable) {
+		t.Errorf("deleting an artifact with an immutable tag: %v", err)
+	}
+	if err := d.DeleteRepository("shop/web", "dev"); !errors.Is(err, ErrImmutable) {
+		t.Errorf("deleting a repository with an immutable tag: %v", err)
+	}
+	// Other tags move as ever, and a new immutable tag may be put on.
+	if err := d.Tag("shop/web", "latest", dM, "dev"); err != nil {
+		t.Errorf("moving a tag that is not immutable: %v", err)
+	}
+	if err := d.Tag("shop/web", "v2", dC, "dev"); err != nil {
+		t.Errorf("a new immutable tag: %v", err)
+	}
+	// Without the rule, everything goes.
+	none := []string{}
+	if _, err := d.UpdateProject("shop", ProjectChange{Immutable: &none}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteRepository("shop/web", "admin"); err != nil {
+		t.Errorf("deleting the repository without the rule: %v", err)
+	}
+	if e := d.Events(nil, 0); e[1].Action != "project-update" || e[1].Detail != "no immutable tags" {
+		t.Errorf("events: %+v", e[:2])
+	}
+}
+
+func TestQuota(t *testing.T) {
+	d := open(t, t.TempDir())
+	defer d.Close()
+	d.CreateProject(Project{Name: "shop", Quota: 2500}, "admin")
+	if err := d.LinkBlob("shop/web", dA, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.LinkBlob("shop/web", dB, 2000); err != nil {
+		t.Fatal(err)
+	}
+	// A blob the project holds takes no more room in another repository.
+	if err := d.LinkBlob("shop/api", dB, 2000); err != nil {
+		t.Errorf("a blob the project has: %v", err)
+	}
+	err := d.LinkBlob("shop/web", dC, 500)
+	if !errors.Is(err, ErrQuota) || !strings.Contains(err.Error(), "shop holds 2.1 KiB of 2.4 KiB") {
+		t.Errorf("over the quota: %v", err)
+	}
+	if p := d.Projects(); p[0].Size != 2100 {
+		t.Errorf("the project's size: %+v", p)
+	}
+	zero := int64(0)
+	if _, err := d.UpdateProject("shop", ProjectChange{Quota: &zero}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.LinkBlob("shop/web", dC, 500); err != nil {
+		t.Errorf("without a quota: %v", err)
+	}
+	if e := d.Events(nil, 1); e[0].Detail != "no quota" {
+		t.Errorf("events: %+v", e)
+	}
+}
+
+func TestProjectChangeLeavesTheRest(t *testing.T) {
+	d := open(t, t.TempDir())
+	defer d.Close()
+	d.CreateProject(Project{Name: "shop", Public: true, Description: "the shop", Immutable: []string{"v*"}, Quota: 10 << 30}, "admin")
+	desc := "the shop's images"
+	p, err := d.UpdateProject("shop", ProjectChange{Description: &desc}, "admin")
+	if err != nil || !p.Public || p.Description != desc || len(p.Immutable) != 1 || p.Quota != 10<<30 {
+		t.Errorf("after changing the description: %+v %v", p, err)
+	}
+	d.Close()
+	d = open(t, d.dir)
+	if p, _ := d.Project("shop"); p.Quota != 10<<30 || p.Immutable[0] != "v*" || p.Description != desc {
+		t.Errorf("after reopening: %+v", p)
+	}
+}

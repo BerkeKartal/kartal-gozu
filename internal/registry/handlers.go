@@ -15,6 +15,20 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/meta"
 )
 
+// denied answers a change that its project's rules refuse: an immutable
+// tag, or the quota. It tells whether it did.
+func denied(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, meta.ErrImmutable):
+		writeError(w, errorf(http.StatusConflict, "DENIED", "%s", err))
+	case errors.Is(err, meta.ErrQuota):
+		writeError(w, errorf(http.StatusForbidden, "DENIED", "%s", err))
+	default:
+		return false
+	}
+	return true
+}
+
 func noProject(name string) *apiError {
 	return errorf(http.StatusNotFound, "NAME_UNKNOWN", "project %s does not exist; an admin makes it first, in Kartal Gözü", meta.ProjectOf(name))
 }
@@ -138,6 +152,8 @@ func (s *Server) finish(w http.ResponseWriter, name, id, digest string) {
 	if err := s.cfg.DB.LinkBlob(name, digest, size); errors.Is(err, meta.ErrNoProject) {
 		writeError(w, noProject(name))
 		return
+	} else if denied(w, err) {
+		return
 	} else if err != nil {
 		s.internal(w, "recording a blob", err)
 		return
@@ -242,6 +258,8 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 					if err := s.cfg.DB.LinkBlob(t.name, mount, size); errors.Is(err, meta.ErrNoProject) {
 						writeError(w, noProject(t.name))
 						return
+					} else if denied(w, err) {
+						return
 					} else if err != nil {
 						s.internal(w, "mounting a blob", err)
 						return
@@ -288,6 +306,8 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 		size, _ := s.cfg.Store.Stat(digest)
 		if err := s.cfg.DB.LinkBlob(t.name, digest, size); errors.Is(err, meta.ErrNoProject) {
 			writeError(w, noProject(t.name))
+			return
+		} else if denied(w, err) {
 			return
 		} else if err != nil {
 			s.internal(w, "recording a blob", err)
@@ -351,6 +371,9 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 		}
 		if errors.Is(err, meta.ErrInUse) {
 			writeError(w, errorf(http.StatusConflict, "DENIED", "%s; delete the index first", err))
+			return
+		}
+		if denied(w, err) {
 			return
 		}
 		if err != nil {
@@ -434,6 +457,8 @@ func (s *Server) putManifest(w http.ResponseWriter, r *http.Request, g *grant, t
 	}
 	if err := s.cfg.DB.PutArtifact(t.name, a, tag, subject(g)); errors.Is(err, meta.ErrNoProject) {
 		writeError(w, noProject(t.name))
+		return
+	} else if denied(w, err) {
 		return
 	} else if err != nil {
 		s.internal(w, "recording a manifest", err)

@@ -52,6 +52,40 @@ export function shortDigest(d) {
   return String(d || '').replace(/^sha256:/, '').slice(0, 12);
 }
 
+// globMatch matches a tag against a pattern as the registry does (Go's
+// path.Match): * is any run of characters, ? one, [...] one of a set.
+export function globMatch(pattern, s) {
+  const esc = c => c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  let re = '^';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') re += '[^/]*';
+    else if (c === '?') re += '[^/]';
+    else if (c === '\\' && i + 1 < pattern.length) re += esc(pattern[++i]);
+    else if (c === '[') {
+      const j = pattern.indexOf(']', i + 2);
+      if (j < 0) return false;
+      let set = pattern.slice(i + 1, j);
+      const not = set.startsWith('^');
+      if (not) set = set.slice(1);
+      re += '[' + (not ? '^' : '') + set.replace(/[\\\]^]/g, '\\$&') + ']';
+      i = j;
+    } else re += esc(c);
+  }
+  try {
+    return new RegExp(re + '$').test(s);
+  } catch {
+    return false;
+  }
+}
+
+// immutable tells whether a tag stays where it is in its project.
+function immutable(project, tag) {
+  return ((project && project.immutable) || []).some(p => globMatch(p, tag));
+}
+
+const GIB = 1024 * 1024 * 1024;
+
 // host is where people push and pull.
 function host(info) {
   return (info && info.public) || '<registry>';
@@ -132,7 +166,7 @@ function projectsPage(data, ui) {
       h('div', { class: 'detail' }, t('reg.hint', host(data.info))),
       admin && data.info.status ? h('div', { class: 'detail' }, t('reg.status', data.info.status.projects, data.info.status.repositories,
         data.info.status.artifacts, bytes(data.info.status.size))) : null),
-    admin ? h('div', { class: 'actions' }, button('+ ' + t('reg.newProject'), () => projectDialog(ui))) : null));
+    admin ? h('div', { class: 'actions' }, button('+ ' + t('reg.newProject'), () => projectDialog(ui, null, data.info))) : null));
   if (!rows.length) return [problem(ui, data.info), head, emptyState(t(data.projects && data.projects.length ? 'noMatch' : 'reg.noProjects'))];
   return [problem(ui, data.info), head,
     h('table', null,
@@ -148,25 +182,33 @@ function projectsPage(data, ui) {
         h('td', null, age(p.created))))))];
 }
 
-function projectDialog(ui, project) {
+function projectDialog(ui, project, info) {
   const { h, t, button, modal, dialogField, formNote, api, go } = ui;
   const editing = !!project;
+  // The room a project has is the registry's admins' to give.
+  const admin = !!(info && info.admin);
   const name = h('input', { type: 'text', required: !editing, disabled: editing, value: editing ? project.name : '', placeholder: 'team-a' });
   const desc = h('input', { type: 'text', value: editing ? project.description || '' : '' });
   const pub = h('input', { type: 'checkbox', checked: editing && project.public });
+  const rules = h('input', { type: 'text', class: 'mono', value: editing ? (project.immutable || []).join(', ') : '', placeholder: 'v*, release-*' });
+  const quota = h('input', { type: 'number', min: '0', step: 'any', disabled: !admin, placeholder: '∞',
+    value: editing && project.quota ? String(Math.round(project.quota / GIB * 100) / 100) : '' });
   const note = formNote();
   const form = h('form', {
     class: 'dialog',
     onsubmit: async e => {
       e.preventDefault();
+      const body = { public: pub.checked, description: desc.value, immutable: rules.value.split(/[\s,]+/).filter(Boolean) };
+      if (admin) body.quota = quota.value ? Math.round(Number(quota.value) * GIB) : 0;
       try {
         if (editing) {
-          await api('registry/projects/' + enc(project.name), { method: 'PUT', body: { public: pub.checked, description: desc.value } });
+          await api('registry/projects/' + enc(project.name), { method: 'PUT', body });
           close();
           ui.toast(t('reg.projectSaved'));
           ui.refresh();
         } else {
-          const p = await api('registry/projects', { method: 'POST', body: { name: name.value.trim(), public: pub.checked, description: desc.value } });
+          body.name = name.value.trim();
+          const p = await api('registry/projects', { method: 'POST', body });
           close();
           ui.toast(t('reg.projectMade', p.name));
           go({ view: 'regproject', rest: [p.name], ns: '' });
@@ -179,6 +221,8 @@ function projectDialog(ui, project) {
   dialogField(t('reg.col.project'), name, t('reg.projectNameHelp')),
   dialogField(t('reg.description'), desc),
   h('label', { class: 'check-item' }, pub, ' ', t('reg.publicHelp')),
+  dialogField(t('reg.immutable'), rules, t('reg.immutableHelp')),
+  dialogField(t('reg.quota'), quota, t('reg.quotaHelp')),
   note,
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
   const close = modal(form);
@@ -196,7 +240,7 @@ function projectPage(data, ui) {
   const repos = (data.repos || []).filter(r => ui.matches(words, [r.name]));
   const reg = host(data.info);
   const actions = [
-    mine >= RANK.admin ? button(t('reg.projectSettings'), () => projectDialog(ui, p)) : null,
+    mine >= RANK.admin ? button(t('reg.projectSettings'), () => projectDialog(ui, p, data.info)) : null,
     admin ? button(t('reg.deleteProject'), async () => {
       const ok = await ask({ title: t('reg.deleteProject'), message: t('reg.deleteProjectConfirm', p.name), confirm: t('reg.deleteProject'), danger: true });
       if (!ok) return;
@@ -215,7 +259,13 @@ function projectPage(data, ui) {
         crumbs(ui, [{ label: t('registry'), href: routeHash({ view: 'registry', rest: [], ns: '' }) }, { label: p.name }]),
         h('div', { class: 'detail' }, accessPill(ui, p), ' ', p.description || '',
           ' · ', t('reg.counts', p.repositories, p.artifacts, bytes(p.size)),
-          p.role && p.role !== 'none' ? ' · ' + t('reg.yourRole', t('role.' + p.role)) : '')),
+          p.role && p.role !== 'none' ? ' · ' + t('reg.yourRole', t('role.' + p.role)) : ''),
+        p.quota ? h('div', { class: 'reg-quota' }, h('span', { class: 'muted' }, t('reg.quotaShort') + ' '),
+          t('reg.quotaUse', bytes(p.size), bytes(p.quota), Math.min(100, Math.round(p.size / p.quota * 100))),
+          h('div', { class: p.size / p.quota > 0.9 ? 'bar full' : p.size / p.quota > 0.75 ? 'bar hot' : 'bar' },
+            h('span', { style: { width: Math.min(100, p.size / p.quota * 100) + '%' } }))) : null,
+        p.immutable && p.immutable.length ? h('div', { class: 'detail' }, h('span', { class: 'muted' }, t('reg.immutable') + ': '),
+          p.immutable.map(x => h('span', { class: 'label-chip reg-tag' }, '🔒 ', x))) : null),
       h('div', { class: 'actions' }, actions)),
     h('div', { class: 'reg-commands' },
       command(ui, 'docker login ' + reg),
@@ -261,7 +311,9 @@ function repositoryPage(data, ui) {
   const words = ui.words();
   const all = (data.detail && data.detail.artifacts) || [];
   const arts = all.filter(a => ui.matches(words, [a.digest, a.kind, platformText(a)].concat(a.tags)));
-  const tagChip = (a, tag) => h('span', { class: 'label-chip reg-tag' }, tag,
+  const fixed = a => a.tags.some(tag => immutable(data.project, tag));
+  const tagChip = (a, tag) => immutable(data.project, tag) ? h('span', { class: 'label-chip reg-tag', title: t('reg.immutableTag') }, '🔒 ', tag)
+    : h('span', { class: 'label-chip reg-tag' }, tag,
     mine >= RANK.operator ? h('button', {
       type: 'button', class: 'chip-x', title: t('reg.removeTag', tag),
       onclick: async () => {
@@ -311,7 +363,7 @@ function repositoryPage(data, ui) {
         h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
           button(t('reg.copyPull'), () => copyText('docker pull ' + reg + '/' + repo + (a.tags.length ? ':' + a.tags[0] : '@' + a.digest))),
           mine >= RANK.operator ? button('+ ' + t('reg.tag'), () => addTag(a)) : null,
-          mine >= RANK.operator ? button(t('reg.deleteArtifact'), () => del(a), 'danger') : null)))))),
+          mine >= RANK.operator && !fixed(a) ? button(t('reg.deleteArtifact'), () => del(a), 'danger') : null)))))),
     h('div', { class: 'more-note' }, t('reg.deleteNote'))];
 }
 

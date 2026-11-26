@@ -923,3 +923,4 @@ table.sizing td > div + div { margin-top: 2px; }
 .reg-manifest summary { cursor: pointer; font-weight: 600; }
 .reg-manifest pre { margin: 10px 0 0; max-height: 60vh; overflow: auto; font-size: 12px; }
 .reg-events { margin-top: 16px; }
+.reg-quota { max-width: 420px; margin-top: 6px; font-size: 13px; }

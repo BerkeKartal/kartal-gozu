@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,6 +41,10 @@ var (
 	// ErrInUse is an image that an index of its repository lists: deleting
 	// it would take a platform out of the index, which goes first.
 	ErrInUse = errors.New("an index of the repository lists it")
+	// ErrImmutable is a change that an immutable tag does not allow.
+	ErrImmutable = errors.New("immutable")
+	// ErrQuota is a blob that does not fit in its project's quota.
+	ErrQuota = errors.New("over the project's quota")
 )
 
 // Project groups repositories: the first part of a repository's name.
@@ -49,6 +54,108 @@ type Project struct {
 	Description string    `json:"description,omitempty"`
 	Created     time.Time `json:"created"`
 	CreatedBy   string    `json:"createdBy,omitempty"`
+	// Immutable are patterns of tags (as path.Match takes them: v*,
+	// release-*) that stay where they are once on an artifact: such a tag
+	// is not moved or removed, and its artifact is not deleted.
+	Immutable []string `json:"immutable,omitempty"`
+	// Quota is how many bytes the project may hold, each blob counted
+	// once; 0 is no limit.
+	Quota int64 `json:"quota,omitempty"`
+}
+
+// ValidTagPattern tells whether a pattern of immutable tags can be
+// matched.
+func ValidTagPattern(p string) bool {
+	if p == "" || len(p) > 128 || strings.ContainsAny(p, "/ ") {
+		return false
+	}
+	_, err := path.Match(p, "")
+	return err == nil
+}
+
+// immutable tells whether a tag of a repository is immutable.
+func (d *DB) immutable(repo, tag string) bool {
+	p := d.projects[ProjectOf(repo)]
+	if p == nil {
+		return false
+	}
+	for _, pat := range p.Immutable {
+		if ok, _ := path.Match(pat, tag); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// immutableTag is an immutable tag on an artifact, or "".
+func (d *DB) immutableTag(r *Repository, digest string) string {
+	tags := []string{}
+	for t, dg := range r.Tags {
+		if dg == digest && d.immutable(r.Name, t) {
+			tags = append(tags, t)
+		}
+	}
+	sort.Strings(tags)
+	if len(tags) == 0 {
+		return ""
+	}
+	return tags[0]
+}
+
+// immutableError is ErrImmutable, saying which tag.
+type immutableError struct{ repo, tag string }
+
+func (e immutableError) Error() string {
+	return "the tag " + e.tag + " of " + e.repo + " is immutable in its project"
+}
+
+func (e immutableError) Is(target error) bool { return target == ErrImmutable }
+
+// usage is what a project holds: its blobs and manifests, each once.
+func (d *DB) usage(project string) int64 {
+	blobs := map[string]int64{}
+	for _, r := range d.repos {
+		if ProjectOf(r.Name) != project {
+			continue
+		}
+		for dg, n := range r.Blobs {
+			blobs[dg] = n
+		}
+		for dg, a := range r.Artifacts {
+			blobs[dg] = a.Size
+		}
+	}
+	var n int64
+	for _, s := range blobs {
+		n += s
+	}
+	return n
+}
+
+// holds tells whether a project has a blob already, in any repository.
+func (d *DB) holds(project, digest string) bool {
+	for _, r := range d.repos {
+		if ProjectOf(r.Name) == project {
+			if _, ok := r.Blobs[digest]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HumanBytes writes a size as people read it: 1.5 GiB.
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // Artifact is a manifest in a repository.
@@ -471,23 +578,12 @@ func (d *DB) Projects() []ProjectInfo {
 	defer d.mu.RUnlock()
 	out := make([]ProjectInfo, 0, len(d.projects))
 	for _, p := range d.projects {
-		info := ProjectInfo{Project: *p}
-		blobs := map[string]int64{}
+		info := ProjectInfo{Project: *p, Size: d.usage(p.Name)}
 		for _, r := range d.repos {
-			if ProjectOf(r.Name) != p.Name {
-				continue
+			if ProjectOf(r.Name) == p.Name {
+				info.Repositories++
+				info.Artifacts += len(r.Artifacts)
 			}
-			info.Repositories++
-			info.Artifacts += len(r.Artifacts)
-			for dg, n := range r.Blobs {
-				blobs[dg] = n
-			}
-			for dg, a := range r.Artifacts {
-				blobs[dg] = a.Size
-			}
-		}
-		for _, n := range blobs {
-			info.Size += n
 		}
 		out = append(out, info)
 	}
@@ -524,8 +620,18 @@ func visibility(public bool) string {
 	return "private"
 }
 
-// UpdateProject changes whether a project is public and its description.
-func (d *DB) UpdateProject(name string, public bool, description, user string) (Project, error) {
+// ProjectChange is what changes in a project; a field left nil stays as
+// it is.
+type ProjectChange struct {
+	Public      *bool     `json:"public"`
+	Description *string   `json:"description"`
+	Immutable   *[]string `json:"immutable"`
+	Quota       *int64    `json:"quota"`
+}
+
+// UpdateProject changes a project: whether it is public, its description,
+// its immutable tags and its quota.
+func (d *DB) UpdateProject(name string, ch ProjectChange, user string) (Project, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	cur, ok := d.projects[name]
@@ -533,8 +639,32 @@ func (d *DB) UpdateProject(name string, public bool, description, user string) (
 		return Project{}, ErrNoProject
 	}
 	p := *cur
-	p.Public, p.Description = public, description
-	if err := d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-update", name, "", "", "", visibility(public))); err != nil {
+	var said []string
+	if ch.Public != nil && *ch.Public != p.Public {
+		p.Public = *ch.Public
+		said = append(said, visibility(p.Public))
+	}
+	if ch.Description != nil {
+		p.Description = *ch.Description
+	}
+	if ch.Immutable != nil && strings.Join(*ch.Immutable, ",") != strings.Join(p.Immutable, ",") {
+		p.Immutable = append([]string(nil), *ch.Immutable...)
+		if len(p.Immutable) == 0 {
+			p.Immutable = nil
+			said = append(said, "no immutable tags")
+		} else {
+			said = append(said, "immutable tags "+strings.Join(p.Immutable, ", "))
+		}
+	}
+	if ch.Quota != nil && *ch.Quota != p.Quota {
+		p.Quota = *ch.Quota
+		if p.Quota == 0 {
+			said = append(said, "no quota")
+		} else {
+			said = append(said, "quota "+HumanBytes(p.Quota))
+		}
+	}
+	if err := d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-update", name, "", "", "", strings.Join(said, "; "))); err != nil {
 		return Project{}, err
 	}
 	return p, nil
@@ -582,6 +712,12 @@ func (d *DB) LinkBlob(repo, digest string, size int64) error {
 	entries, err := d.ensure(repo)
 	if err != nil {
 		return err
+	}
+	// A blob the project has already takes no more room.
+	if p := d.projects[ProjectOf(repo)]; p.Quota > 0 && !d.holds(p.Name, digest) {
+		if used := d.usage(p.Name); used+size > p.Quota {
+			return fmt.Errorf("%w: %s holds %s of %s, and this is %s more", ErrQuota, p.Name, HumanBytes(used), HumanBytes(p.Quota), HumanBytes(size))
+		}
 	}
 	return d.commit(append(entries, entry{Op: "link", Repo: repo, Digest: digest, Size: size})...)
 }
@@ -673,8 +809,14 @@ func (d *DB) Catalog(keep func(project string) bool, last string, n int) []strin
 func (d *DB) DeleteRepository(repo, user string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.repos[repo] == nil {
+	r := d.repos[repo]
+	if r == nil {
 		return ErrNotFound
+	}
+	for t := range r.Tags {
+		if d.immutable(repo, t) {
+			return immutableError{repo, t}
+		}
 	}
 	return d.commit(entry{Op: "repo-del", Name: repo}, d.event(user, "repository-delete", ProjectOf(repo), repo, "", "", ""))
 }
@@ -688,6 +830,11 @@ func (d *DB) PutArtifact(repo string, a Artifact, tag, user string) error {
 	entries, err := d.ensure(repo)
 	if err != nil {
 		return err
+	}
+	if r := d.repos[repo]; r != nil && tag != "" {
+		if dg, ok := r.Tags[tag]; ok && dg != a.Digest && d.immutable(repo, tag) {
+			return immutableError{repo, tag}
+		}
 	}
 	if r := d.repos[repo]; r != nil {
 		if cur := r.Artifacts[a.Digest]; cur != nil {
@@ -793,13 +940,16 @@ func (d *DB) DeleteArtifact(repo, digest, user string) error {
 	if index, ok := listed[digest]; ok {
 		return fmt.Errorf("%w: %s", ErrInUse, index)
 	}
+	if t := d.immutableTag(r, digest); t != "" {
+		return immutableError{repo, t}
+	}
 	entries := []entry{{Op: "artifact-del", Repo: repo, Digest: digest}, d.event(user, "delete", ProjectOf(repo), repo, digest, "", "")}
 	gone := []string{digest}
 	seen := map[string]bool{digest: true}
 	for i := 0; i < len(gone); i++ {
 		about := []string{}
 		for _, a := range r.Artifacts {
-			if a.Subject == gone[i] && !seen[a.Digest] && listed[a.Digest] == "" {
+			if a.Subject == gone[i] && !seen[a.Digest] && listed[a.Digest] == "" && d.immutableTag(r, a.Digest) == "" {
 				about = append(about, a.Digest)
 			}
 		}
@@ -825,6 +975,9 @@ func (d *DB) Tag(repo, tag, digest, user string) error {
 	if r.Tags[tag] == digest {
 		return nil
 	}
+	if _, ok := r.Tags[tag]; ok && d.immutable(repo, tag) {
+		return immutableError{repo, tag}
+	}
 	return d.commit(entry{Op: "tag", Repo: repo, Tag: tag, Digest: digest}, d.event(user, "tag", ProjectOf(repo), repo, digest, tag, ""))
 }
 
@@ -839,6 +992,9 @@ func (d *DB) Untag(repo, tag, user string) error {
 	dg, ok := r.Tags[tag]
 	if !ok {
 		return ErrNotFound
+	}
+	if d.immutable(repo, tag) {
+		return immutableError{repo, tag}
 	}
 	return d.commit(entry{Op: "untag", Repo: repo, Tag: tag}, d.event(user, "untag", ProjectOf(repo), repo, dg, tag, ""))
 }

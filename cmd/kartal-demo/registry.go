@@ -326,7 +326,9 @@ func seedRegistry(store blobstore.Store, db *meta.DB, log *slog.Logger) error {
 	ago(120)
 	check(db.CreateProject(meta.Project{Name: "library", Public: true, Description: "Base images anyone may pull"}, "ayse"))
 	ago(90)
-	check(db.CreateProject(meta.Project{Name: "team-0", Description: "The web team's images and charts"}, "ayse"))
+	check(db.CreateProject(meta.Project{Name: "team-0", Description: "The web team's images and charts",
+		// Released versions stay as they were pushed.
+		Immutable: []string{"[0-9]*"}, Quota: 2 << 30}, "ayse"))
 
 	// A multi-arch base image.
 	base := func(arch string) []step {

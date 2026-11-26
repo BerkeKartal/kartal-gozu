@@ -1046,6 +1046,12 @@ users, passwords, directory and roles the rest has.
   Their secret is shown once, when made or rotated, with the `docker login`
   and the `imagePullSecret` to use it; only its digest is kept. They can
   expire and be disabled.
+- **A project's rules.** Its *immutable tags*, patterns such as `v*` or
+  `release-*`: such a tag, once pushed, is not moved to another artifact
+  or taken off, and its artifact is not deleted; the project's admins set
+  them. Its *quota*: how much it may hold, each blob counted once however
+  many of its repositories have it; the registry's admins set it, and a
+  push past it is refused.
 - **In the UI**, the Images space lists the projects one may see; a
   project's repositories and what happened in it; a repository's artifacts,
   with their tags, platforms, size, pushes and pulls; and an artifact's

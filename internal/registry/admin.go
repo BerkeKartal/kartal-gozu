@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -100,9 +101,45 @@ func (s *Server) listProjects(w http.ResponseWriter, _ *http.Request) {
 }
 
 type projectInput struct {
-	Name        string `json:"name"`
-	Public      bool   `json:"public"`
-	Description string `json:"description"`
+	Name        string   `json:"name"`
+	Public      bool     `json:"public"`
+	Description string   `json:"description"`
+	Immutable   []string `json:"immutable"`
+	Quota       int64    `json:"quota"`
+}
+
+// projectRules checks a project's immutable tags and quota, answering the
+// request when they are wrong.
+func projectRules(w http.ResponseWriter, immutable []string, quota int64) bool {
+	if len(immutable) > 20 {
+		adminError(w, http.StatusBadRequest, "at most 20 patterns of immutable tags")
+		return false
+	}
+	for _, p := range immutable {
+		if !meta.ValidTagPattern(p) {
+			adminError(w, http.StatusBadRequest, fmt.Sprintf("%q is not a pattern of tags, such as v* or release-?.*", p))
+			return false
+		}
+	}
+	if quota < 0 {
+		adminError(w, http.StatusBadRequest, "a quota is a number of bytes, 0 for no limit")
+		return false
+	}
+	return true
+}
+
+// adminDenied answers a change the project's rules refuse, and tells
+// whether it did.
+func adminDenied(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, meta.ErrImmutable), errors.Is(err, meta.ErrInUse):
+		adminError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, meta.ErrQuota):
+		adminError(w, http.StatusForbidden, err.Error())
+	default:
+		return false
+	}
+	return true
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +156,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusBadRequest, "the description is longer than 500 characters")
 		return
 	}
-	err := s.cfg.DB.CreateProject(meta.Project{Name: in.Name, Public: in.Public, Description: in.Description}, actor(r))
+	if !projectRules(w, in.Immutable, in.Quota) {
+		return
+	}
+	if len(in.Immutable) == 0 {
+		in.Immutable = nil
+	}
+	err := s.cfg.DB.CreateProject(meta.Project{Name: in.Name, Public: in.Public, Description: in.Description, Immutable: in.Immutable,
+		Quota: in.Quota}, actor(r))
 	if errors.Is(err, meta.ErrExists) {
 		adminError(w, http.StatusConflict, "a project of that name exists")
 		return
@@ -156,15 +200,26 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
-	var in projectInput
+	var in meta.ProjectChange
 	if !readBody(w, r, &in) {
 		return
 	}
-	if len(in.Description) > 500 {
+	if in.Description != nil && len(*in.Description) > 500 {
 		adminError(w, http.StatusBadRequest, "the description is longer than 500 characters")
 		return
 	}
-	p, err := s.cfg.DB.UpdateProject(r.PathValue("name"), in.Public, in.Description, actor(r))
+	var immutable []string
+	var quota int64
+	if in.Immutable != nil {
+		immutable = *in.Immutable
+	}
+	if in.Quota != nil {
+		quota = *in.Quota
+	}
+	if !projectRules(w, immutable, quota) {
+		return
+	}
+	p, err := s.cfg.DB.UpdateProject(r.PathValue("name"), in, actor(r))
 	if errors.Is(err, meta.ErrNoProject) {
 		adminError(w, http.StatusNotFound, "no such project")
 		return
@@ -262,6 +317,9 @@ func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteRepository(w http.ResponseWriter, r *http.Request) {
 	err := s.cfg.DB.DeleteRepository(r.URL.Query().Get("name"), actor(r))
+	if adminDenied(w, err) {
+		return
+	}
 	if errors.Is(err, meta.ErrNotFound) {
 		adminError(w, http.StatusNotFound, "no such repository")
 		return
@@ -343,6 +401,9 @@ func (s *Server) deleteArtifact(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusConflict, err.Error()+"; delete the index first")
 		return
 	}
+	if adminDenied(w, err) {
+		return
+	}
 	if err != nil {
 		s.adminInternal(w, "deleting an artifact", err)
 		return
@@ -363,6 +424,9 @@ func (s *Server) putTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.cfg.DB.Tag(q.Get("repo"), q.Get("tag"), in.Digest, actor(r))
+	if adminDenied(w, err) {
+		return
+	}
 	if errors.Is(err, meta.ErrNotFound) {
 		adminError(w, http.StatusNotFound, "no such artifact")
 		return
@@ -377,6 +441,9 @@ func (s *Server) putTag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteTag(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	err := s.cfg.DB.Untag(q.Get("repo"), q.Get("tag"), actor(r))
+	if adminDenied(w, err) {
+		return
+	}
 	if errors.Is(err, meta.ErrNotFound) {
 		adminError(w, http.StatusNotFound, "no such tag")
 		return
