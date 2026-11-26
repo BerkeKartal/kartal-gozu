@@ -520,3 +520,26 @@ func TestQuotaAfterADelete(t *testing.T) {
 		t.Errorf("a push under way: %+v %+v", p, r)
 	}
 }
+
+// Jobs are remembered so many of each kind: many hourly ones push out no
+// night's collection.
+func TestJobsOfEachKind(t *testing.T) {
+	d := open(t, t.TempDir())
+	defer d.Close()
+	d.PutJob(Job{ID: "gc", Kind: "gc", Status: JobFailed})
+	for i := 0; i < 30; i++ {
+		d.PutJob(Job{ID: fmt.Sprintf("r%02d", i), Kind: "replication", Rule: "hourly", Status: JobDone})
+	}
+	jobs := d.Jobs(0)
+	if len(jobs) != keepJobsEach+1 || jobs[0].ID != "r29" || jobs[len(jobs)-1].ID != "gc" {
+		t.Errorf("%d jobs: %+v", len(jobs), jobs[len(jobs)-1])
+	}
+	if _, ok := d.Job("r09"); ok {
+		t.Error("an old replication is still there")
+	}
+	d.Close()
+	d = open(t, d.dir)
+	if len(d.Jobs(0)) != keepJobsEach+1 {
+		t.Errorf("after reopening: %d", len(d.Jobs(0)))
+	}
+}

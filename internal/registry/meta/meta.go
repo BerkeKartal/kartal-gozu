@@ -346,6 +346,8 @@ type JobProgress struct {
 	Done  int   `json:"done"`
 	Total int   `json:"total"`
 	Bytes int64 `json:"bytes"`
+	// Waiting says it waits for others of its kind to end.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 // A job's states.
@@ -356,7 +358,14 @@ const (
 )
 
 // keepJobs is how many jobs are remembered.
-const keepJobs = 200
+const keepJobs = 1000
+
+// keepJobsEach is how many of each kind (and project, and rule) are
+// remembered: hourly replications push out no night's collection.
+const keepJobsEach = 20
+
+// jobKey is what jobs are remembered by, so many of each.
+func jobKey(j Job) string { return j.Kind + "\x00" + j.Project + "\x00" + j.Rule }
 
 // Schedule runs a kind of job by itself, as a cron expression says.
 type Schedule struct {
@@ -628,6 +637,20 @@ func (d *DB) apply(e entry) {
 			}
 		}
 		d.jobs = append(d.jobs, *e.Job)
+		key, n := jobKey(*e.Job), 0
+		for _, j := range d.jobs {
+			if jobKey(j) == key {
+				n++
+			}
+		}
+		if n > keepJobsEach {
+			for i, j := range d.jobs {
+				if jobKey(j) == key {
+					d.jobs = append(d.jobs[:i:i], d.jobs[i+1:]...)
+					break
+				}
+			}
+		}
 		if len(d.jobs) > keepJobs {
 			d.jobs = append([]Job(nil), d.jobs[len(d.jobs)-keepJobs:]...)
 		}

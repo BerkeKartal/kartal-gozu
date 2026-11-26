@@ -288,7 +288,10 @@ func (cp *copier) blob(ctx context.Context, from, to string, d manifest.Descript
 		}
 		return nil
 	}
-	if size, err := s.cfg.Store.Stat(d.Digest); err == nil {
+	// A blob some repository has is linked. One the store has and no
+	// repository does is garbage, which a collection may be deleting right
+	// now: it is pulled again, which makes it new in the store.
+	if size, err := s.cfg.Store.Stat(d.Digest); err == nil && s.cfg.DB.InUse(d.Digest) {
 		return link(size)
 	}
 	var lastErr error
@@ -332,26 +335,62 @@ func (cp *copier) blob(ctx context.Context, from, to string, d manifest.Descript
 	return lastErr
 }
 
+// narrow is a manifest as the rule keeps it here: an index of only the
+// platforms it keeps is a new one, of another digest. It answers the
+// manifest, its digest, and whether it is a new one.
+func (cp *copier) narrow(body []byte, mt, digest string) ([]byte, string, bool, error) {
+	m, err := manifest.Parse(mt, body)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if !m.Index() {
+		return body, digest, false, nil
+	}
+	var keep []manifest.Descriptor
+	for _, child := range m.Manifests {
+		if platformOK(cp.rule, child.Platform) {
+			keep = append(keep, child)
+		}
+	}
+	if len(keep) == 0 {
+		return nil, "", false, errors.New("it has no image of the platforms the rule keeps")
+	}
+	if len(keep) == len(m.Manifests) {
+		return body, digest, false, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, "", false, err
+	}
+	list, err := json.Marshal(keep)
+	if err != nil {
+		return nil, "", false, err
+	}
+	raw["manifests"] = list
+	if body, err = json.Marshal(raw); err != nil {
+		return nil, "", false, err
+	}
+	return body, blobstore.Digest(body), true, nil
+}
+
 // manifest copies a manifest and all it refers to; it answers the digest
 // it has here, which differs from the source's when some platforms of an
 // index were left out, and whether that is so.
 func (cp *copier) manifest(ctx context.Context, from, to string, body []byte, mt, digest string) (string, bool, error) {
 	s := cp.s
+	body, digest, rewritten, err := cp.narrow(body, mt, digest)
+	if err != nil {
+		return "", false, err
+	}
 	if _, ok := s.cfg.DB.Artifact(to, digest); ok {
-		return digest, false, nil
+		return digest, rewritten, nil
 	}
 	m, err := manifest.Parse(mt, body)
 	if err != nil {
 		return "", false, err
 	}
-	rewritten := false
 	if m.Index() {
-		var keep []manifest.Descriptor
 		for _, child := range m.Manifests {
-			if !platformOK(cp.rule, child.Platform) {
-				continue
-			}
-			keep = append(keep, child)
 			if _, ok := s.cfg.DB.Artifact(to, child.Digest); ok {
 				continue
 			}
@@ -365,24 +404,6 @@ func (cp *copier) manifest(ctx context.Context, from, to string, body []byte, mt
 			if _, _, err := cp.manifest(ctx, from, to, cb, cmt, cd); err != nil {
 				return "", false, err
 			}
-		}
-		if len(keep) == 0 {
-			return "", false, errors.New("it has no image of the platforms the rule keeps")
-		}
-		if len(keep) < len(m.Manifests) {
-			var raw map[string]json.RawMessage
-			if err := json.Unmarshal(body, &raw); err != nil {
-				return "", false, err
-			}
-			list, err := json.Marshal(keep)
-			if err != nil {
-				return "", false, err
-			}
-			raw["manifests"] = list
-			if body, err = json.Marshal(raw); err != nil {
-				return "", false, err
-			}
-			digest, rewritten = blobstore.Digest(body), true
 		}
 	} else {
 		for _, d := range m.References() {
@@ -441,8 +462,13 @@ func (cp *copier) one(ctx context.Context, img remote.Image, to string, dryRun b
 	if err != nil {
 		return fail(err)
 	}
-	item.Digest = digest
-	if tagged && here == digest {
+	// What it is here, its platforms narrowed as the rule says.
+	_, want, _, err := cp.narrow(body, mt, digest)
+	if err != nil {
+		return fail(err)
+	}
+	item.Digest = want
+	if tagged && here == want {
 		item.Result = itemPresent
 		return item
 	}
@@ -586,7 +612,9 @@ feed:
 	if err := ctx.Err(); err != nil {
 		return rep, err
 	}
-	if !dryRun {
+	// A run that changed nothing, as most hourly ones, is not worth a line
+	// of the log.
+	if !dryRun && rep.Copied+rep.Kept+rep.Failed > 0 {
 		if err := s.cfg.DB.Record(user, "replicate", r.Project, "", "", "", r.Name+": "+rep.String()); err != nil {
 			s.cfg.Log.Warn("registry: recording a replication", "err", err)
 		}

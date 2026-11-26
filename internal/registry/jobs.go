@@ -312,7 +312,23 @@ func (s *Server) runJob(ctx context.Context, j meta.Job) {
 		report, j.Summary = rep, rep.String()
 	case JobReplication:
 		var rep ReplicationReport
-		rep, err = s.Replicate(ctx, j.Rule, j.DryRun, j.By, func(p meta.JobProgress) { s.setProgress(j.ID, p) })
+		// So many replications run at once; the others wait their turn, and
+		// say so.
+		turn := true
+		select {
+		case s.replicating <- struct{}{}:
+		default:
+			s.setProgress(j.ID, meta.JobProgress{Waiting: true})
+			select {
+			case s.replicating <- struct{}{}:
+			case <-ctx.Done():
+				turn, err = false, ctx.Err()
+			}
+		}
+		if turn {
+			rep, err = s.Replicate(ctx, j.Rule, j.DryRun, j.By, func(p meta.JobProgress) { s.setProgress(j.ID, p) })
+			<-s.replicating
+		}
 		report, j.Summary = rep, rep.String()
 		if err == nil && rep.Failed > 0 {
 			j.Alarm = fmt.Sprintf("%d of %d images could not be copied", rep.Failed, rep.Picked)

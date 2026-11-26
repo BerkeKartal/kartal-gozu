@@ -618,6 +618,7 @@ function jobDialog(ui, id, title) {
 
 // progressText says how far a running job got.
 function progressText(ui, p) {
+  if (p && p.waiting) return ui.t('reg.queued');
   return p ? ui.t('reg.progress', p.done, p.total, ui.bytes(p.bytes)) : ui.t('reg.waitJob');
 }
 

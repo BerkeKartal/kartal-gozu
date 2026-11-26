@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +179,19 @@ func TestReplicatePlatformsAndReferrers(t *testing.T) {
 	}
 	if _, ok := e.db.Artifact("pub/proxy", up.arm); ok {
 		t.Error("the arm64 image came too")
+	}
+	// Run again, the narrowed index is here already: not another image,
+	// and nothing is written again, even with overwrite.
+	events := len(e.db.Events(nil, 0))
+	amd.Overwrite = true
+	e.db.PutRule(amd, "root")
+	events++
+	if rep, err := e.reg.Replicate(ctx, amd.ID, false, "root", nil); err != nil || rep.Present != 1 || rep.Copied != 0 || rep.Kept != 0 {
+		t.Errorf("amd64 only, again: %+v %v", rep, err)
+	}
+	// A run that changed nothing writes nothing to the log either.
+	if n := len(e.db.Events(nil, 0)); n != events {
+		t.Errorf("%d events written by a run that changed nothing", n-events)
 	}
 	// With the referrers, the SBOM comes along with arm64's 1.1.
 	refs := e.rule(t, src, meta.ReplicationRule{Name: "refs", Repositories: "infra/proxy", Tags: "1.1", Project: "shop", Referrers: true,
@@ -363,5 +377,77 @@ func TestMigrate(t *testing.T) {
 	}
 	if _, err := e.reg.Migrate(context.Background(), "nope", []string{"infra"}, false, "ayse"); !errors.Is(err, ErrSource) {
 		t.Errorf("an unknown source: %v", err)
+	}
+}
+
+// A blob the store has and no repository does is garbage a collection may
+// be deleting: replication pulls it again rather than link it.
+func TestReplicatePullsGarbageAgain(t *testing.T) {
+	up := newUpstream(t)
+	e := newEnv(t)
+	src := e.source(t, up.srv.URL)
+	ci := up.token("ci", "repository:infra/proxy:pull")
+	var m manifest.Manifest
+	json.Unmarshal(up.do("GET", "/v2/infra/proxy/manifests/1.0", ci, nil).body, &m)
+	layer := up.do("GET", "/v2/infra/proxy/blobs/"+m.Layers[0].Digest, ci, nil).body
+	if err := e.reg.cfg.Store.Put(m.Layers[0].Digest, layer); err != nil {
+		t.Fatal(err)
+	}
+	e.age(m.Layers[0].Digest, 3*time.Hour)
+	r := e.rule(t, src, meta.ReplicationRule{Name: "one", Repositories: "infra/proxy", Tags: "1.0", Project: "shop"})
+	rep, err := e.reg.Replicate(context.Background(), r.ID, false, "root", nil)
+	if err != nil || rep.Copied != 1 || rep.Bytes < int64(len(layer)) {
+		t.Errorf("a run: %+v %v", rep, err)
+	}
+	// Pulled again, it is new: a collection now spares it.
+	if gc, _ := e.reg.GC(context.Background(), DefaultGrace, false, "root"); gc.Blobs != 0 {
+		t.Errorf("collected: %+v", gc)
+	}
+}
+
+// So many replications run at once; the rest wait their turn.
+func TestReplicationsWaitTheirTurn(t *testing.T) {
+	up := newUpstream(t)
+	ci := up.token("ci", "repository:infra/big:pull,push")
+	big := make([]byte, 128<<10)
+	for i := range big {
+		big[i] = byte(i * 13)
+	}
+	layer := up.pushBlob("infra/big", ci, big)
+	cfg := up.pushBlob("infra/big", ci, []byte(`{"architecture":"amd64","os":"linux"}`))
+	m := []byte(`{"schemaVersion":2,"mediaType":"` + manifest.OCIManifest + `","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"` +
+		cfg + `","size":37},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"` + layer + `","size":131072}]}`)
+	if a := up.do("PUT", "/v2/infra/big/manifests/1", ci, m, "Content-Type", manifest.OCIManifest); a.code != 201 {
+		t.Fatalf("big: %d %s", a.code, a.body)
+	}
+	e := newEnv(t)
+	src := e.source(t, up.srv.URL)
+	var ids []string
+	for i := 0; i < maxReplications+1; i++ {
+		r := e.rule(t, src, meta.ReplicationRule{Name: fmt.Sprintf("slow-%d", i), Repositories: "infra/big", Project: "pub", KeepPath: i > 0, BandwidthKiB: 1})
+		j, err := e.reg.StartReplication(r.ID, false, "root")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, j.ID)
+	}
+	time.Sleep(500 * time.Millisecond)
+	waiting := 0
+	for _, id := range ids {
+		j, _ := e.db.Job(id)
+		if p := e.reg.withProgress(j).Progress; p != nil && p.Waiting {
+			waiting++
+		}
+	}
+	if waiting != 1 {
+		t.Errorf("%d replications wait", waiting)
+	}
+	for _, id := range ids {
+		e.reg.CancelJob(id, "root")
+	}
+	for _, id := range ids {
+		if j := e.wait(id); j.Status != meta.JobFailed {
+			t.Errorf("a stopped job: %+v", j)
+		}
 	}
 }

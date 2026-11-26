@@ -107,6 +107,8 @@ type Server struct {
 	// they got.
 	cancels     map[string]context.CancelFunc
 	cancelledBy map[string]string
+	// replicating holds a place for each replication running.
+	replicating chan struct{}
 	jobProgress map[string]meta.JobProgress
 }
 
@@ -133,8 +135,11 @@ func New(cfg Config) *Server {
 		cfg.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{},
-		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, jobProgress: map[string]meta.JobProgress{}}
+		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, replicating: make(chan struct{}, maxReplications), jobProgress: map[string]meta.JobProgress{}}
 }
+
+// maxReplications is how many replications run at once.
+const maxReplications = 4
 
 // ---------------------------------------------------------------- errors
 

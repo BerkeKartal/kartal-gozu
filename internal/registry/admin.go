@@ -497,7 +497,7 @@ func (s *Server) scheduleView(sc meta.Schedule) ScheduleView {
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
 			limit = n
 		}
 	}

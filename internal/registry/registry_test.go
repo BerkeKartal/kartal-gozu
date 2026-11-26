@@ -19,10 +19,9 @@ import (
 )
 
 // people is an Authorizer with three users, all with the password "pw".
-type people struct{ asked [][]string }
+type people struct{}
 
-func (p *people) Authorize(_ context.Context, user, secret string, projects []string) (Identity, error) {
-	p.asked = append(p.asked, projects)
+func (*people) Authorize(_ context.Context, user, secret string, _ []string) (Identity, error) {
 	if secret != "pw" {
 		return Identity{}, ErrBadCredentials
 	}
