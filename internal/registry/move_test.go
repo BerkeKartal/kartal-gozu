@@ -162,3 +162,62 @@ func TestAnUploadAcrossAMove(t *testing.T) {
 		t.Errorf("the blob after the move: %d", a.code)
 	}
 }
+
+// A move that takes longer than collecting garbage waits: what it copied
+// is the project's in the new store from the start, so the new store's
+// collection keeps it.
+func TestAMoveOutlastsACollection(t *testing.T) {
+	e, archive := withArchive(t)
+	ci := e.token("ci", "repository:shop/web:pull,push")
+	e.pushImage("shop/web", "1.0", ci, "amd64")
+	from, _ := e.reg.storeNamed("default")
+	ctx := context.Background()
+	collected := false
+	// The collection runs as the move copies its first blob.
+	_, _, err := e.reg.copyBlob(ctx, from, &collectOnce{Store: archive, before: func() {
+		if !collected {
+			collected = true
+			if _, err := e.reg.GC(ctx, 0, false, "root"); err != nil {
+				t.Error(err)
+			}
+		}
+	}}, firstBlob(e, "shop"), false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Above, no switch: the copy is garbage, and gone. The move itself
+	// switches first.
+	if len(walked(t, archive)) != 0 {
+		t.Fatal("a copy of a project still elsewhere survived the collection")
+	}
+	j, err := e.reg.StartMove("shop", "archive", false, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.wait(j.ID)
+	if _, err := e.reg.GC(ctx, 0, false, "root"); err != nil {
+		t.Fatal(err)
+	}
+	if got := walked(t, archive); len(got) != 3 {
+		t.Errorf("after the move and a collection: %d of 3", len(got))
+	}
+}
+
+func firstBlob(e *env, project string) string {
+	for d := range e.db.ProjectBlobs(project) {
+		return d
+	}
+	return ""
+}
+
+// collectOnce is a store that runs a function before it finishes an upload.
+type collectOnce struct {
+	blobstore.Store
+	before func()
+}
+
+func (c *collectOnce) Finish(id, digest string) (int64, error) {
+	n, err := c.Store.Finish(id, digest)
+	c.before()
+	return n, err
+}

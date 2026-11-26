@@ -20,7 +20,7 @@ func TestRegistryStores(t *testing.T) {
 	if code, b := e.call("POST", "/api/v1/registry/stores", bossTok, store); code != 201 {
 		t.Fatalf("add a store: %d %s", code, b)
 	}
-	if code, b := e.call("POST", "/api/v1/registry/stores/test", bossTok, `{"name":"scratch","kind":"file","path":"`+dir+`"}`); code != 200 || !strings.Contains(string(b), `"ok":true`) {
+	if code, b := e.call("POST", "/api/v1/registry/stores/test", bossTok, `{"name":"scratch","kind":"file","path":"`+t.TempDir()+`"}`); code != 200 || !strings.Contains(string(b), `"ok":true`) {
 		t.Errorf("test: %d %s", code, b)
 	}
 	if code, b := e.call("GET", "/api/v1/registry/stores", bossTok, ""); code != 200 || !strings.Contains(string(b), `"name":"archive"`) || !strings.Contains(string(b), `"default":true`) {

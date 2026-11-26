@@ -14,13 +14,13 @@ import (
 
 // A project with repositories moves to another blob store with a job:
 //
-//  1. While it is where it was, its blobs are copied to the new store,
-//     each digest checked as the store takes it; what is there already is
-//     left.
-//  2. The project is pointed at the new store; the one it came from is
+//  1. The project is pointed at the new store; the one it came from is
 //     MovedFrom: a blob the new store lacks is read there meanwhile, and
-//     that store's collection keeps the project's blobs.
-//  3. What was pushed during the copy is copied too; then the move ends.
+//     both stores' collections keep the project's blobs.
+//  2. Its blobs are copied to the new store, each digest checked as the
+//     store takes it; what is there already is left.
+//  3. What was pushed into the old store as the switch was made is copied
+//     too; then the move ends.
 //
 // An upload started in the old store and finished after the switch is
 // copied into the new one as it finishes. A move stopped or failed after
@@ -168,16 +168,20 @@ func (s *Server) Move(ctx context.Context, project, to string, dryRun bool, by s
 		rep.Seconds = time.Since(start).Seconds()
 		return rep, err
 	}
-	if err := pass(); err != nil {
-		return finish(err)
-	}
 	if dryRun {
-		return finish(nil)
+		return finish(pass())
 	}
+	// The project is pointed at the new store first: from then on both
+	// stores' collections keep its blobs (a copy made hours before the
+	// switch would be garbage of the new store meanwhile), reads fall back
+	// to the old store, and pushes go to the new one.
 	if _, err := s.cfg.DB.MoveProject(project, to, by); err != nil {
 		return finish(err)
 	}
-	// What was pushed meanwhile, into the old store.
+	if err := pass(); err != nil {
+		return finish(err)
+	}
+	// What was pushed into the old store as the switch was made.
 	if err := pass(); err != nil {
 		return finish(err)
 	}

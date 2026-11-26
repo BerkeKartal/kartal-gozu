@@ -254,3 +254,51 @@ func TestStoresAreKept(t *testing.T) {
 		t.Error("a store in use was deleted")
 	}
 }
+
+// Two stores in one place would each collect the other's blobs.
+func TestStoresDoNotShareTheirPlace(t *testing.T) {
+	e := newStoresEnv(t)
+	dir := t.TempDir()
+	if a := e.do("POST", "/admin/v1/stores", "admin-secret", []byte(`{"name":"archive","kind":"file","path":"`+dir+`"}`)); a.code != 201 {
+		t.Fatalf("add: %d %s", a.code, a.body)
+	}
+	for _, path := range []string{dir, dir + "/inner", e.dir, e.dir + "/blobs", e.reg.cfg.StagingDir} {
+		if a := e.do("POST", "/admin/v1/stores", "admin-secret", []byte(`{"name":"other","kind":"file","path":"`+path+`"}`)); a.code != 400 ||
+			!strings.Contains(string(a.body), "shares its place") {
+			t.Errorf("%s: %d %s", path, a.code, a.body)
+		}
+	}
+	fake := s3test.New(t)
+	s3 := func(name, prefix string) []byte {
+		return []byte(`{"name":"` + name + `","kind":"s3","endpoint":"` + fake.URL + `","bucket":"kartal","prefix":"` + prefix + `","accessKey":"` +
+			fake.Access + `","secretKey":"` + fake.Secret + `","pathStyle":true}`)
+	}
+	if a := e.do("POST", "/admin/v1/stores", "admin-secret", s3("minio", "team-a")); a.code != 201 {
+		t.Fatalf("an S3 store: %d %s", a.code, a.body)
+	}
+	for prefix, want := range map[string]int{"team-a": 400, "team-a/inner": 400, "": 400, "team-b": 201} {
+		if a := e.do("POST", "/admin/v1/stores", "admin-secret", s3("minio-"+strings.ReplaceAll(strings.Trim(prefix, "/"), "/", "-")+"x", prefix)); a.code != want {
+			t.Errorf("prefix %q: %d %s", prefix, a.code, a.body)
+		}
+	}
+	// A store keeps its own place when it changes.
+	if a := e.do("PUT", "/admin/v1/stores/archive", "admin-secret", []byte(`{"kind":"file","path":"`+dir+`","quota":100}`)); a.code != 200 {
+		t.Errorf("a change in place: %d %s", a.code, a.body)
+	}
+	// Its blobs are not read again by the check: S3 checked them.
+	if a := e.do("POST", "/admin/v1/projects", "admin-secret", []byte(`{"name":"cloud","store":"minio"}`)); a.code != 201 {
+		t.Fatal(a.code)
+	}
+	root := e.token("root", "repository:cloud/web:pull,push")
+	e.pushImage("cloud/web", "1", root, "amd64")
+	asked := len(fake.Requests())
+	rep, err := e.reg.Verify(context.Background(), "root")
+	if err != nil || !rep.OK() || strings.Join(rep.NotRead, ",") != "minio,minio-team-bx" {
+		t.Fatalf("verify: %+v %v", rep, err)
+	}
+	for _, r := range fake.Requests()[asked:] {
+		if strings.HasPrefix(r, "GET ") {
+			t.Errorf("the check read %s", r)
+		}
+	}
+}

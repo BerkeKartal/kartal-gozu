@@ -196,8 +196,12 @@ type VerifyReport struct {
 	// one are store/digest.
 	Missing []string `json:"missing"`
 	// Stores are the blob stores checked; Failed those that could not be.
-	Stores []string `json:"stores,omitempty"`
-	Failed []string `json:"failed,omitempty"`
+	// Of the S3 stores (NotRead), the blobs are not read again: S3 checked
+	// each one's SHA-256 as it took it, and reading a bucket through costs;
+	// that the artifacts' blobs are there is checked all the same.
+	Stores  []string `json:"stores,omitempty"`
+	Failed  []string `json:"failed,omitempty"`
+	NotRead []string `json:"notRead,omitempty"`
 }
 
 // OK tells whether the check found nothing wrong.
@@ -221,6 +225,11 @@ func (s *Server) Verify(ctx context.Context, user string) (VerifyReport, error) 
 	stores := map[string]namedStore{}
 	for _, ns := range s.allStores() {
 		stores[ns.name] = ns
+		if _, ok := ns.store.(*blobstore.S3); ok && ns.err == nil {
+			rep.Stores = append(rep.Stores, ns.name)
+			rep.NotRead = append(rep.NotRead, ns.name)
+			continue
+		}
 		err := ns.err
 		if err == nil {
 			err = ns.store.Walk(func(digest string, size int64, _ time.Time) error {

@@ -318,6 +318,9 @@ func (s *Server) PutStore(in StoreInput, name, by string) (meta.BlobStore, error
 	if err != nil {
 		return bs, err
 	}
+	if err := s.overlaps(bs); err != nil {
+		return bs, err
+	}
 	if bs.Kind == "s3" && secret == "" {
 		return bs, fmt.Errorf("%w: an S3 store needs its secret key", ErrStore)
 	}
@@ -397,6 +400,9 @@ func (s *Server) testStore(w http.ResponseWriter, r *http.Request) {
 		cur, _ = s.cfg.DB.BlobStoreNamed(name)
 	}
 	bs, secret, err := s.store(in, cur)
+	if err == nil {
+		err = s.overlaps(bs)
+	}
 	if err != nil {
 		storeError(w, s, "testing a blob store", err)
 		return
@@ -406,4 +412,51 @@ func (s *Server) testStore(w http.ResponseWriter, r *http.Request) {
 		out = map[string]any{"ok": false, "error": err.Error()}
 	}
 	adminJSON(w, http.StatusOK, out)
+}
+
+// overlaps refuses a store that would share its blobs with another: two
+// stores in one directory, or one bucket below prefixes one inside the
+// other, would each collect the other's blobs as garbage. A directory
+// store is also kept out of the registry's own places.
+func (s *Server) overlaps(bs meta.BlobStore) error {
+	inside := func(a, b string) bool {
+		a, b = filepath.Clean(a), filepath.Clean(b)
+		return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator))
+	}
+	switch bs.Kind {
+	case "file":
+		own := map[string]string{"the default store": "", "the S3 stores' uploads": s.cfg.StagingDir, "the scans' reports": s.cfg.ScanDir}
+		if f, ok := s.cfg.Store.(*blobstore.File); ok {
+			own["the default store"] = f.Root()
+		}
+		for what, p := range own {
+			if p != "" && inside(bs.Path, p) {
+				return fmt.Errorf("%w: %s shares its place with %s (%s)", ErrStore, bs.Path, what, p)
+			}
+		}
+		for _, other := range s.cfg.DB.BlobStores() {
+			if other.Name != bs.Name && other.Kind == "file" && inside(bs.Path, other.Path) {
+				return fmt.Errorf("%w: %s shares its place with the store %s (%s)", ErrStore, bs.Path, other.Name, other.Path)
+			}
+		}
+	case "s3":
+		norm := func(x meta.BlobStore) (string, string) {
+			p := strings.TrimPrefix(x.Prefix, "/")
+			if p != "" && !strings.HasSuffix(p, "/") {
+				p += "/"
+			}
+			return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(x.Endpoint), "/")) + " " + x.Bucket, p
+		}
+		where, prefix := norm(bs)
+		for _, other := range s.cfg.DB.BlobStores() {
+			if other.Name == bs.Name || other.Kind != "s3" {
+				continue
+			}
+			ow, op := norm(other)
+			if ow == where && (strings.HasPrefix(prefix, op) || strings.HasPrefix(op, prefix)) {
+				return fmt.Errorf("%w: the bucket %s below %q is the store %s's place too (below %q)", ErrStore, bs.Bucket, prefix, other.Name, op)
+			}
+		}
+	}
+	return nil
 }
