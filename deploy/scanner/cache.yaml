@@ -1,0 +1,14 @@
+# Trivy's vulnerability databases (about 1 GiB with the Java one) and what
+# it learned of the layers it scanned, so that a layer is read once.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kartal-scanner-cache
+  labels:
+    app.kubernetes.io/name: kartal-scanner
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: standard
+  resources:
+    requests:
+      storage: 5Gi

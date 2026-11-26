@@ -1,0 +1,28 @@
+# kartal-scanner: Trivy's own image with the small API the registry calls.
+#   docker build -f Dockerfile.scanner -t kartal-scanner:<version> .
+#
+# Pin Trivy to a version you checked, best by digest as well, e.g.
+#   --build-arg TRIVY_IMAGE=aquasec/trivy:0.69.3@sha256:<digest>
+# Never 0.69.4, 0.69.5 or 0.69.6: those were malicious builds published when
+# Trivy's release process was broken into in March 2026 (GHSA-69fq-xp46-6x23);
+# kartal-scanner refuses to run them.
+ARG GO_IMAGE=golang:1.27-alpine
+ARG TRIVY_IMAGE=aquasec/trivy:0.69.3
+
+FROM ${GO_IMAGE} AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+ARG VERSION=dev
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/kartal-scanner ./cmd/kartal-scanner
+
+FROM ${TRIVY_IMAGE}
+COPY --from=build /out/kartal-scanner /usr/local/bin/kartal-scanner
+# Trivy keeps its databases and what it learned of layers here (a volume),
+# and works in /tmp.
+ENV KARTAL_SCANNER_CACHE_DIR=/var/cache/trivy HOME=/tmp
+USER 65532:65532
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/kartal-scanner"]

@@ -1,0 +1,19 @@
+# Only the registry calls the scanner.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kartal-scanner
+  labels:
+    app.kubernetes.io/name: kartal-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kartal-scanner
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kartal-registry
+      ports:
+        - port: 8090

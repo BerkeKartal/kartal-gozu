@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kartal-scanner
+  labels:
+    app.kubernetes.io/name: kartal-scanner
+spec:
+  # Its cache is one volume, so run one replica; it scans two images at
+  # once (KARTAL_SCANNER_WORKERS).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kartal-scanner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kartal-scanner
+    spec:
+      # It needs nothing of the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scanner
+          image: kartal-scanner
+          env:
+            # The secret the registry calls it with (at least 16
+            # characters), the registry's KARTAL_REGISTRY_SCANNER_SECRET_FILE too.
+            - name: KARTAL_SCANNER_SECRET_FILE
+              value: /etc/kartal/scanner-secret
+            - name: KARTAL_SCANNER_CACHE_DIR
+              value: /var/cache/trivy
+            # Where the internet is out of reach, the databases come from a
+            # mirror the registry keeps (a public project "trivy" that a
+            # replication rule fills from ghcr.io elsewhere):
+            # - name: KARTAL_SCANNER_DB_REPOSITORY
+            #   value: registry.example.org/trivy/trivy-db:2
+            # - name: KARTAL_SCANNER_JAVA_DB_REPOSITORY
+            #   value: registry.example.org/trivy/trivy-java-db:1
+            # - name: KARTAL_SCANNER_OFFLINE
+            #   value: "true"
+          ports:
+            - name: api
+              containerPort: 8090
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              # Java images with many jars take the most.
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /etc/kartal
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/trivy
+            # Trivy unpacks layers here while it scans.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: kartal-server
+            items:
+              - key: scanner-secret
+                path: scanner-secret
+        - name: cache
+          persistentVolumeClaim:
+            claimName: kartal-scanner-cache
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Gi

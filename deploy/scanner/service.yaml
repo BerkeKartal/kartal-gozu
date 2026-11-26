@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kartal-scanner
+  labels:
+    app.kubernetes.io/name: kartal-scanner
+spec:
+  selector:
+    app.kubernetes.io/name: kartal-scanner
+  ports:
+    # The registry's KARTAL_REGISTRY_SCANNER_URL: http://kartal-scanner:8090.
+    # Never publish it.
+    - name: api
+      port: 8090
+      targetPort: api
