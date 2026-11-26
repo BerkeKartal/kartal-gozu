@@ -432,6 +432,14 @@ func (d *DB) Close() error {
 	return err
 }
 
+// SetClock sets what the database takes for now: for tests, and for the
+// demo, which makes up a past.
+func (d *DB) SetClock(now func() time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.now = now
+}
+
 func (d *DB) event(user, action, project, repo, digest, tag, detail string) entry {
 	return entry{Op: "event", Event: &Event{Time: d.now().UTC(), User: user, Action: action, Project: project, Repo: repo,
 		Digest: digest, Tag: tag, Detail: detail}}

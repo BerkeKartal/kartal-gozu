@@ -8,6 +8,7 @@ import { toYAML, diffLines } from './yaml.js';
 import { lineChart } from './chart.js';
 import { plot, sparkline } from './plot.js';
 import { lookSelf, lookVulns, LookupError } from './versions.js';
+import { REGISTRY_VIEWS, loadRegistry, renderRegistry } from './registry.js';
 
 const REFRESH_MS = 10000;
 const FOLLOW_MS = 3000;
@@ -18,10 +19,10 @@ const TOKEN_KEY = 'kartal.token';
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
   'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources',
-  'placement', 'netcheck', 'sizing', 'probes', 'rollouts', 'updates'];
+  'placement', 'netcheck', 'sizing', 'probes', 'rollouts', 'updates', ...REGISTRY_VIEWS];
 // Views that are not about one namespace.
 const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users',
-  'placement', 'netcheck', 'updates']);
+  'placement', 'netcheck', 'updates', ...REGISTRY_VIEWS]);
 // Views that show every cluster at once.
 const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards', 'updates']);
 // Views of the server itself: the addresses it checks, its users.
@@ -49,10 +50,17 @@ const VIEW_KIND = { deployments: 'Deployment', statefulsets: 'StatefulSet', daem
 // The UI has two halves, each with a menu of its own: the clusters'
 // objects, and what is watched over time (dashboards, Explore, the metrics
 // apps expose, alerts, URL checks). The top bar switches between them, and
-// #/ asks which one to open.
+// #/ asks which one to open. A server with an image registry has a third
+// space for it (registry.js).
 const OBSERVE_VIEWS = new Set(['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime']);
-const spaceOf = view => (OBSERVE_VIEWS.has(view) ? 'observe' : 'cluster');
-const SPACE_HOME = { cluster: 'overview', observe: 'dashboards' };
+const REGISTRY_SET = new Set(REGISTRY_VIEWS);
+// The registry's pages under its projects, which the menu does not list.
+const REGISTRY_PAGES = new Set(['regproject', 'regrepo', 'regartifact']);
+const spaceOf = view => (REGISTRY_SET.has(view) ? 'registry' : OBSERVE_VIEWS.has(view) ? 'observe' : 'cluster');
+const SPACE_HOME = { cluster: 'overview', observe: 'dashboards', registry: 'registry' };
+const SPACE_NAME = { cluster: 'spaceCluster', observe: 'spaceObserve', registry: 'spaceRegistry' };
+const SPACE_TITLE = { cluster: 'spaceClusterTitle', observe: 'spaceObserveTitle', registry: 'spaceRegistryTitle' };
+const SPACE_HELP = { cluster: 'spaceClusterHelp', observe: 'spaceObserveHelp', registry: 'spaceRegistryHelp' };
 const LAST_VIEW_KEY = 'kartal.lastView.';
 
 // NAV is the sidebar: groups of views, each with its count from the
@@ -70,6 +78,7 @@ const NAV = [
   { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
+  { items: ['registry', 'robots'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -515,6 +524,62 @@ const STRINGS = {
     spaceClusterHelp: 'Workloads, nodes, logs, YAML, versions and changes, in every cluster.',
     spaceObserveHelp: 'Dashboards, Explore, the metrics your apps expose, alerts and URL checks.',
     chooseSpace: 'What would you like to open?',
+    spaceRegistry: 'Images', spaceRegistryTitle: 'Image registry',
+    spaceRegistryHelp: 'Projects, repositories and the images in them: push and pull, tags, layers, signatures, robot accounts.',
+    registry: 'Projects', regproject: 'Project', regrepo: 'Repository', regartifact: 'Artifact', robots: 'Robot accounts',
+    'role.none': 'no role', viaRegistry: 'Happened in the image registry',
+    'reg.off': 'This server has no image registry (KARTAL_REGISTRY_URL).',
+    'reg.unreachable': 'The image registry could not be reached; what it holds may be missing here.',
+    'reg.cardRepos': 'Repositories, tags and layers', 'reg.cardPull': 'docker push and pull, with your own sign-in',
+    'reg.hint': 'Push and pull at {0}, signed in with your user name and password, a token, or a robot account.',
+    'reg.status': '{0} projects, {1} repositories, {2} artifacts, {3} kept',
+    'reg.storeProblem': 'The registry’s metadata: {0}',
+    'reg.newProject': 'New project', 'reg.noProjects': 'No project you can see yet.',
+    'reg.col.project': 'Project', 'reg.col.access': 'Access', 'reg.col.yourRole': 'Your role', 'reg.col.repositories': 'Repositories',
+    'reg.col.artifacts': 'Artifacts', 'reg.col.size': 'Size', 'reg.col.created': 'Created', 'reg.col.repository': 'Repository',
+    'reg.col.tags': 'Tags', 'reg.col.updated': 'Updated', 'reg.col.pulls': 'Pulls', 'reg.col.artifact': 'Artifact', 'reg.col.kind': 'Kind',
+    'reg.col.platform': 'Platform', 'reg.col.pushed': 'Pushed', 'reg.col.lastPull': 'Last pull', 'reg.col.time': 'Time',
+    'reg.col.user': 'User', 'reg.col.action': 'Action', 'reg.col.what': 'What', 'reg.col.step': 'Built by', 'reg.col.robot': 'Robot',
+    'reg.col.grants': 'Grants', 'reg.col.expires': 'Expires',
+    'reg.public': 'public', 'reg.private': 'private', 'reg.description': 'Description',
+    'reg.projectNameHelp': 'Lower-case letters, digits and . _ -: the first part of its repositories’ names, as in team-a/web.',
+    'reg.publicHelp': 'Public: anyone may pull, without signing in',
+    'reg.projectSettings': 'Project settings', 'reg.projectSaved': 'Project saved.', 'reg.projectMade': 'Project {0} made.',
+    'reg.deleteProject': 'Delete project', 'reg.deleteProjectConfirm': 'Delete the project {0}? Only an empty project can be deleted.',
+    'reg.projectDeleted': 'Project {0} deleted.', 'reg.counts': '{0} repositories, {1} artifacts, {2}', 'reg.yourRole': 'you: {0}',
+    'reg.noRepositories': 'No repositories yet: push the first image.', 'reg.events': 'What happened',
+    'reg.action.push': 'pushed', 'reg.action.delete': 'deleted', 'reg.action.tag': 'tagged', 'reg.action.untag': 'untagged',
+    'reg.action.repository-delete': 'repository deleted', 'reg.action.project-create': 'project made',
+    'reg.action.project-update': 'project changed', 'reg.action.project-delete': 'project deleted',
+    'reg.repoCounts': '{0} artifacts, {1} tags, {2}, pulled {3} times',
+    'reg.deleteRepository': 'Delete repository', 'reg.deleteRepositoryConfirm': 'Delete {0}, with every artifact and tag in it?',
+    'reg.repositoryDeleted': '{0} deleted.', 'reg.noArtifacts': 'Nothing in this repository.',
+    'reg.untagged': 'untagged', 'reg.never': 'never',
+    'reg.referrerCount': '{0} about it', 'reg.referrersHelp': 'Signatures, SBOMs and other artifacts about this one',
+    'reg.copyPull': 'Copy pull', 'reg.tag': 'Tag', 'reg.addTag': 'Add a tag',
+    'reg.tagHelp': 'Letters, digits and . _ -, up to 128; a tag already in use moves here.',
+    'reg.tagged': 'Tagged {0}.', 'reg.removeTag': 'Remove the tag {0}', 'reg.removeTagShort': 'Remove tag',
+    'reg.removeTagConfirm': 'Remove the tag {0}? The artifact stays.', 'reg.tagRemoved': 'Tag {0} removed.',
+    'reg.deleteArtifact': 'Delete', 'reg.deleteArtifactConfirm': 'Delete {0}? Its tags go with it.', 'reg.artifactDeleted': 'Artifact deleted.',
+    'reg.deleteNote': 'Deleting takes an artifact out of its repository; the space its layers alone take is given back by garbage collection.',
+    'reg.kind.image': 'image', 'reg.kind.index': 'multi-arch', 'reg.kind.helm': 'Helm chart', 'reg.kind.signature': 'signature',
+    'reg.kind.sbom': 'SBOM', 'reg.kind.artifact': 'artifact',
+    'reg.digest': 'Digest', 'reg.mediaType': 'Media type', 'reg.artifactType': 'Artifact type', 'reg.created': 'Built',
+    'reg.manifestSize': 'manifest {0}', 'reg.lastPullAgo': 'last {0} ago', 'reg.commit': 'Commit', 'reg.subject': 'About',
+    'reg.children': 'Platforms', 'reg.labels': 'Labels', 'reg.layers': 'Layers', 'reg.manifest': 'Manifest',
+    'reg.referrers': 'Signatures, SBOMs and other artifacts about it',
+    'reg.robotsHint': 'Robot accounts sign in to the image registry only, for CI and for the nodes that pull: robot$name, with a secret shown once.',
+    'reg.newRobot': 'New robot account', 'reg.noRobots': 'No robot accounts yet.', 'reg.disabled': 'disabled', 'reg.expired': 'expired',
+    'reg.rotate': 'New secret', 'reg.rotateConfirm': 'Give {0} a new secret? The old one stops working at once.',
+    'reg.deleteRobot': 'Delete', 'reg.deleteRobotConfirm': 'Delete {0}? Whatever signs in with it stops working.',
+    'reg.robotDeleted': '{0} deleted.', 'reg.robotSaved': '{0} saved.',
+    'reg.robotsNote': 'Only a digest of each secret is kept: a lost secret is replaced, never shown again.',
+    'reg.robotName': 'Name', 'reg.robotNameHelp': 'Lower-case letters, digits and . _ -; it signs in as robot$name.',
+    'reg.robotGrantsHelp': 'One per line: role@registry:project, such as operator@registry:team-a (push and pull) or viewer@registry:* (pull everything).',
+    'reg.expiresHelp': 'Empty for never; it stops working at the end of that day (UTC).',
+    'reg.secretTitle': 'The secret of {0}', 'reg.secretOnce': 'Copy it now: it is not shown again.',
+    'reg.secretDocker': 'To sign in with docker (or keep the two among your CI’s secrets):',
+    'reg.secretKube': 'For a cluster’s nodes to pull, as an imagePullSecret:', 'reg.secretSaved': 'I have kept it',
     dashboards: 'Dashboards', exAddToDash: 'Add to dashboard', exApplyPanel: 'Apply to the panel',
     exEditingPanel: 'Editing the queries of the panel “{0}” of the dashboard {1}. Variables have the values picked there.',
     dbHint: 'Saved pages of charts, numbers, tables and logs of the store and the data sources. Each panel shows what the person looking may see.',
@@ -987,6 +1052,62 @@ const STRINGS = {
     spaceClusterHelp: 'Her cluster’ın iş yükleri, node’ları, logları, YAML’ı, sürümleri ve değişiklikleri.',
     spaceObserveHelp: 'Panolar, Keşfet, uygulamaların yayınladığı metrikler, uyarılar ve URL kontrolleri.',
     chooseSpace: 'Neyi açmak istersiniz?',
+    spaceRegistry: 'İmajlar', spaceRegistryTitle: 'İmaj deposu',
+    spaceRegistryHelp: 'Projeler, repolar ve içlerindeki imajlar: push ve pull, tag’ler, katmanlar, imzalar, robot hesapları.',
+    registry: 'Projeler', regproject: 'Proje', regrepo: 'Repo', regartifact: 'Artifact', robots: 'Robot hesapları',
+    'role.none': 'rol yok', viaRegistry: 'İmaj deposunda oldu',
+    'reg.off': 'Bu sunucunun imaj deposu yok (KARTAL_REGISTRY_URL).',
+    'reg.unreachable': 'İmaj deposuna ulaşılamadı; tuttukları burada eksik görünebilir.',
+    'reg.cardRepos': 'Repolar, tag’ler ve katmanlar', 'reg.cardPull': 'Kendi girişinizle docker push ve pull',
+    'reg.hint': '{0} adresine push ve pull yapın: kullanıcı adınız ve şifrenizle, bir token’la ya da bir robot hesabıyla.',
+    'reg.status': '{0} proje, {1} repo, {2} artifact, {3} yer kaplıyor',
+    'reg.storeProblem': 'Deponun metadata’sı: {0}',
+    'reg.newProject': 'Yeni proje', 'reg.noProjects': 'Görebildiğiniz bir proje henüz yok.',
+    'reg.col.project': 'Proje', 'reg.col.access': 'Erişim', 'reg.col.yourRole': 'Rolünüz', 'reg.col.repositories': 'Repolar',
+    'reg.col.artifacts': 'Artifact’ler', 'reg.col.size': 'Boyut', 'reg.col.created': 'Oluşturuldu', 'reg.col.repository': 'Repo',
+    'reg.col.tags': 'Tag’ler', 'reg.col.updated': 'Güncellendi', 'reg.col.pulls': 'Pull', 'reg.col.artifact': 'Artifact', 'reg.col.kind': 'Tür',
+    'reg.col.platform': 'Platform', 'reg.col.pushed': 'Push', 'reg.col.lastPull': 'Son pull', 'reg.col.time': 'Zaman',
+    'reg.col.user': 'Kullanıcı', 'reg.col.action': 'İşlem', 'reg.col.what': 'Ne', 'reg.col.step': 'Oluşturan adım', 'reg.col.robot': 'Robot',
+    'reg.col.grants': 'Yetkiler', 'reg.col.expires': 'Bitiş',
+    'reg.public': 'herkese açık', 'reg.private': 'özel', 'reg.description': 'Açıklama',
+    'reg.projectNameHelp': 'Küçük harf, rakam ve . _ -: repolarının adlarının ilk parçası, team-a/web’deki gibi.',
+    'reg.publicHelp': 'Herkese açık: giriş yapmadan herkes pull yapabilir',
+    'reg.projectSettings': 'Proje ayarları', 'reg.projectSaved': 'Proje kaydedildi.', 'reg.projectMade': '{0} projesi oluşturuldu.',
+    'reg.deleteProject': 'Projeyi sil', 'reg.deleteProjectConfirm': '{0} projesi silinsin mi? Yalnızca boş bir proje silinebilir.',
+    'reg.projectDeleted': '{0} projesi silindi.', 'reg.counts': '{0} repo, {1} artifact, {2}', 'reg.yourRole': 'siz: {0}',
+    'reg.noRepositories': 'Henüz repo yok: ilk imajı push edin.', 'reg.events': 'Olanlar',
+    'reg.action.push': 'push edildi', 'reg.action.delete': 'silindi', 'reg.action.tag': 'tag’lendi', 'reg.action.untag': 'tag’i kaldırıldı',
+    'reg.action.repository-delete': 'repo silindi', 'reg.action.project-create': 'proje oluşturuldu',
+    'reg.action.project-update': 'proje değişti', 'reg.action.project-delete': 'proje silindi',
+    'reg.repoCounts': '{0} artifact, {1} tag, {2}, {3} kez pull edildi',
+    'reg.deleteRepository': 'Repoyu sil', 'reg.deleteRepositoryConfirm': '{0}, içindeki her artifact ve tag’le birlikte silinsin mi?',
+    'reg.repositoryDeleted': '{0} silindi.', 'reg.noArtifacts': 'Bu repoda bir şey yok.',
+    'reg.untagged': 'tag’siz', 'reg.never': 'hiç',
+    'reg.referrerCount': 'hakkında {0}', 'reg.referrersHelp': 'Bu artifact hakkındaki imzalar, SBOM’lar ve diğer artifact’ler',
+    'reg.copyPull': 'Pull’u kopyala', 'reg.tag': 'Tag', 'reg.addTag': 'Tag ekle',
+    'reg.tagHelp': 'Harf, rakam ve . _ -, en çok 128; kullanımdaki bir tag buraya taşınır.',
+    'reg.tagged': '{0} tag’i eklendi.', 'reg.removeTag': '{0} tag’ini kaldır', 'reg.removeTagShort': 'Tag’i kaldır',
+    'reg.removeTagConfirm': '{0} tag’i kaldırılsın mı? Artifact kalır.', 'reg.tagRemoved': '{0} tag’i kaldırıldı.',
+    'reg.deleteArtifact': 'Sil', 'reg.deleteArtifactConfirm': '{0} silinsin mi? Tag’leri de gider.', 'reg.artifactDeleted': 'Artifact silindi.',
+    'reg.deleteNote': 'Silmek bir artifact’i reposundan çıkarır; yalnızca onun kullandığı katmanların yerini çöp toplama geri verir.',
+    'reg.kind.image': 'imaj', 'reg.kind.index': 'çok mimarili', 'reg.kind.helm': 'Helm chart', 'reg.kind.signature': 'imza',
+    'reg.kind.sbom': 'SBOM', 'reg.kind.artifact': 'artifact',
+    'reg.digest': 'Digest', 'reg.mediaType': 'Media type', 'reg.artifactType': 'Artifact türü', 'reg.created': 'Derlendi',
+    'reg.manifestSize': 'manifest {0}', 'reg.lastPullAgo': 'sonuncusu {0} önce', 'reg.commit': 'Commit', 'reg.subject': 'Hakkında',
+    'reg.children': 'Platformlar', 'reg.labels': 'Etiketler', 'reg.layers': 'Katmanlar', 'reg.manifest': 'Manifest',
+    'reg.referrers': 'Hakkındaki imzalar, SBOM’lar ve diğer artifact’ler',
+    'reg.robotsHint': 'Robot hesapları yalnızca imaj deposuna girer, CI ve pull yapan node’lar için: robot$ad, bir kez gösterilen bir secret’la.',
+    'reg.newRobot': 'Yeni robot hesabı', 'reg.noRobots': 'Henüz robot hesabı yok.', 'reg.disabled': 'devre dışı', 'reg.expired': 'süresi doldu',
+    'reg.rotate': 'Yeni secret', 'reg.rotateConfirm': '{0} için yeni bir secret üretilsin mi? Eskisi hemen çalışmaz olur.',
+    'reg.deleteRobot': 'Sil', 'reg.deleteRobotConfirm': '{0} silinsin mi? Onunla giriş yapan her şey çalışmaz olur.',
+    'reg.robotDeleted': '{0} silindi.', 'reg.robotSaved': '{0} kaydedildi.',
+    'reg.robotsNote': 'Her secret’ın yalnızca digest’i tutulur: kaybolan bir secret yenilenir, bir daha gösterilmez.',
+    'reg.robotName': 'Ad', 'reg.robotNameHelp': 'Küçük harf, rakam ve . _ -; robot$ad olarak giriş yapar.',
+    'reg.robotGrantsHelp': 'Her satıra bir tane: rol@registry:proje, örneğin operator@registry:team-a (push ve pull) ya da viewer@registry:* (her şeyi pull).',
+    'reg.expiresHelp': 'Boşsa hiç bitmez; o günün sonunda (UTC) çalışmaz olur.',
+    'reg.secretTitle': '{0} hesabının secret’ı', 'reg.secretOnce': 'Şimdi kopyalayın: bir daha gösterilmez.',
+    'reg.secretDocker': 'docker ile giriş için (ya da ikisini CI’nızın secret’larına koyun):',
+    'reg.secretKube': 'Bir cluster’ın node’ları pull yapsın diye, imagePullSecret olarak:', 'reg.secretSaved': 'Sakladım',
     dashboards: 'Panolar', exAddToDash: 'Panoya ekle', exApplyPanel: 'Panele uygula',
     exEditingPanel: '{1} panosundaki “{0}” panelinin sorgularını düzenliyorsunuz. Değişkenler orada seçilen değerleri alır.',
     dbHint: 'Deponun ve veri kaynaklarının grafik, sayı, tablo ve loglarından oluşan kayıtlı sayfalar. Her panel, bakan kişinin görebildiğini gösterir.',
@@ -1437,10 +1558,12 @@ function onRoute() {
   if (els.shell) {
     els.shell.classList.remove('side-open');
     els.shell.classList.toggle('space-observe', spaceOf(state.view) === 'observe');
+    els.shell.classList.toggle('space-registry', spaceOf(state.view) === 'registry');
   }
   // Each half opens again where it was left.
   writeStore('localStorage', LAST_VIEW_KEY + spaceOf(state.view), state.view);
-  document.title = (state.cluster ? t(state.view) + ' · ' + state.cluster + ' · ' : '') + 'Kartal Gözü';
+  const where = spaceOf(state.view) === 'registry' ? t('spaceRegistryTitle') : state.cluster;
+  document.title = (where ? t(state.view) + ' · ' + where + ' · ' : '') + 'Kartal Gözü';
   state.nsMenuOpen = false;
   renderTop();
   renderSide();
@@ -1539,16 +1662,32 @@ async function refresh({ auto = false } = {}) {
   inflight = ctl;
   const signal = ctl.signal;
   try {
-    const [clusters, me] = await Promise.all([api('clusters', { signal }), state.me ? state.me : api('me', { signal })]);
+    const me = state.me || await api('me', { signal });
     if (my !== seq) return;
-    state.clusters = clusters;
-    maybeVersions();
     if (!state.me) {
       // What the user may do decides which tabs and buttons appear.
       state.me = me;
       renderTop();
       renderDetail();
     }
+    if (spaceOf(state.view) === 'registry') {
+      await refreshRegistry(my, signal, auto);
+      return;
+    }
+    // A role in the image registry alone reaches no cluster.
+    if (me.role === 'none') {
+      if (me.registry) {
+        location.replace(routeHash({ cluster: '', view: 'registry', ns: '' }));
+        return;
+      }
+      state.error = new ApiError(-1, t('noClusters'));
+      renderContent();
+      return;
+    }
+    const clusters = await api('clusters', { signal });
+    if (my !== seq) return;
+    state.clusters = clusters;
+    maybeVersions();
     if (!clusters.some(c => c.name === state.cluster)) {
       const saved = readStore('localStorage', 'kartal.cluster');
       const pick = clusters.find(c => c.name === saved) || clusters.find(c => c.status === 'online') || clusters[0];
@@ -1614,6 +1753,28 @@ async function refresh({ auto = false } = {}) {
   } finally {
     if (my === seq) scheduleRefresh();
   }
+}
+
+// refreshRegistry loads a page of the image registry, which is not any
+// cluster's.
+async function refreshRegistry(my, signal, auto) {
+  if (!state.me.registry) {
+    state.data = null;
+    state.error = new ApiError(-1, t('reg.off'));
+    renderContent();
+    return;
+  }
+  const data = await loadRegistry(state.view, state.rest, api, signal);
+  if (my !== seq) return;
+  const changed = state.error != null || JSON.stringify(data) !== JSON.stringify(state.data) || Date.now() - drawnAt > 60000;
+  state.data = data;
+  state.error = null;
+  refreshSide(false);
+  if (changed) {
+    if (auto && selectionInside(els.content)) state.dirty = true;
+    else renderContent();
+  }
+  updateStamp();
 }
 
 // sameData tells whether a refresh brought nothing new. Unchanged lists are
@@ -1849,12 +2010,22 @@ function startApp() {
 // lastView is where a half was left, or its first page.
 function lastView(space) {
   const v = readStore('localStorage', LAST_VIEW_KEY + space);
-  return VIEWS.includes(v) && spaceOf(v) === space ? v : SPACE_HOME[space];
+  // A page under the registry's projects needs what it shows; its space
+  // opens on the projects again.
+  return VIEWS.includes(v) && spaceOf(v) === space && !REGISTRY_PAGES.has(v) ? v : SPACE_HOME[space];
 }
 
 // renderChooser asks which half of the UI to open: the clusters' objects,
 // or what is watched over time.
 function renderChooser() {
+  // Someone with a role in the image registry alone has only it to open.
+  // What is on the page stays until the route changes, as the change is
+  // only heard while the app or the chooser is up.
+  const me = state.me;
+  if (me && me.role === 'none' && me.registry) {
+    location.replace(routeHash({ cluster: '', view: 'registry', ns: '' }));
+    return;
+  }
   stopRefresh();
   resetDetail();
   els.shell = null;
@@ -1863,20 +2034,36 @@ function renderChooser() {
   state.nsMenuOpen = false;
   document.title = 'Kartal Gözü';
   const cluster = readStore('localStorage', 'kartal.cluster') || '';
+  // Whether there is a registry to offer is the server's to say; asking
+  // must not bring up the sign-in, which the chooser does not need.
+  if (!me) whoAmI().then(m => { if (m && els.chooser && !state.me) { state.me = m; if (m.registry) renderChooser(); } });
   const card = (space, icon, items) => h('a', {
     class: 'space-card ' + space, href: routeHash({ cluster, view: lastView(space), ns: '' }),
   },
   h('div', { class: 'space-icon', 'aria-hidden': 'true' }, icon),
-  h('h2', null, t(space === 'cluster' ? 'spaceClusterTitle' : 'spaceObserveTitle')),
-  h('p', { class: 'muted' }, t(space === 'cluster' ? 'spaceClusterHelp' : 'spaceObserveHelp')),
+  h('h2', null, t(SPACE_TITLE[space])),
+  h('p', { class: 'muted' }, t(SPACE_HELP[space])),
   h('ul', null, items.map(id => h('li', null, t(id)))));
   els.chooser = h('div', { class: 'chooser' },
     h('h1', null, h('img', { src: '_ui/eagle.svg', alt: '' }), 'Kartal Gözü'),
     h('p', { class: 'muted' }, t('chooseSpace')),
     h('div', { class: 'space-cards' },
       card('cluster', '⎈', ['overview', 'workloads', 'nodes', 'changes']),
-      card('observe', '∿', ['dashboards', 'explore', 'appmetrics', 'alerts'])));
+      card('observe', '∿', ['dashboards', 'explore', 'appmetrics', 'alerts']),
+      me && me.registry ? card('registry', '⬡', ['registry', 'reg.cardRepos', 'reg.cardPull', 'robots']) : null));
   fill(root, els.chooser, toasts);
+}
+
+// whoAmI asks who is signed in without bringing up the sign-in form when
+// no one is: null then, or when the server cannot say.
+async function whoAmI() {
+  const token = getToken();
+  try {
+    const res = await fetch('api/v1/me', { headers: token ? { Authorization: 'Bearer ' + token } : {}, cache: 'no-cache' });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 function currentCluster() {
@@ -1896,25 +2083,40 @@ function renderTop() {
   fill(els.top,
     h('button', { type: 'button', class: 'icon-btn menu-btn', title: t('menu'), onclick: () => els.shell.classList.toggle('side-open') }, '☰'),
     h('a', { class: 'brand', href: '#/' }, h('img', { src: '_ui/eagle.svg', alt: '' }), h('span', { class: 'brand-name' }, 'Kartal Gözü')),
-    h('nav', { class: 'space-switch', 'aria-label': t('chooseSpace') }, ['cluster', 'observe'].map(space => {
+    h('nav', { class: 'space-switch', 'aria-label': t('chooseSpace') }, spaces().map(space => {
       const on = spaceOf(state.view) === space;
       return h('a', {
         class: on ? 'active' : null, 'aria-current': on ? 'page' : null,
         href: on ? routeHash({ view: state.view, rest: state.rest }) : routeHash({ view: lastView(space) }),
-      }, t(space === 'cluster' ? 'spaceCluster' : 'spaceObserve'));
+      }, t(SPACE_NAME[space]));
     })),
-    h('div', { class: 'clusters' }, (state.clusters || []).map(clusterChip)),
+    // The registry is no cluster's.
+    h('div', { class: 'clusters' }, spaceOf(state.view) === 'registry' ? null : (state.clusters || []).map(clusterChip)),
     h('button', { type: 'button', class: 'btn search-btn', title: t('searchTitle'), onclick: openPalette },
       '⌕', h('span', { class: 'label' }, t('search')), h('kbd', null, isMac ? '⌘K' : 'Ctrl K')),
     // Someone whose password is kept here changes it from their name.
     state.me ? h(state.me.ownPassword ? 'button' : 'span', {
       type: state.me.ownPassword ? 'button' : null, class: state.me.ownPassword ? 'user-chip clickable' : 'user-chip',
-      title: state.me.ownPassword ? t('ownPassword') : t('role.' + state.me.role),
+      title: state.me.ownPassword ? t('ownPassword') : t('role.' + shownRole()),
       onclick: state.me.ownPassword ? ownPasswordDialog : null,
-    }, state.me.name, h('span', { class: 'muted' }, ' · ' + t('role.' + state.me.role))) : null,
+    }, state.me.name, h('span', { class: 'muted' }, ' · ' + t('role.' + shownRole()))) : null,
     h('button', { type: 'button', class: 'icon-btn', title: t('language'), onclick: toggleLang }, lang === 'tr' ? 'EN' : 'TR'),
     h('button', { type: 'button', class: 'icon-btn', title: t('theme'), onclick: toggleTheme }, theme() === 'dark' ? '☀' : '☾'),
     getToken() ? h('button', { type: 'button', class: 'icon-btn', title: t('logout'), onclick: logout }, '↪') : null);
+}
+
+// spaces are the spaces the user may open: the clusters' two, unless the
+// user has a role in the image registry alone, and the registry's, when
+// there is one.
+function spaces() {
+  const me = state.me;
+  const out = !me || me.role !== 'none' ? ['cluster', 'observe'] : [];
+  if (me && me.registry) out.push('registry');
+  return out;
+}
+// shownRole is the user's role where they are: the registry's in its space.
+function shownRole() {
+  return (spaceOf(state.view) === 'registry' ? state.me.registryRole : state.me.role) || 'none';
 }
 
 function clusterChip(c) {
@@ -2019,7 +2221,7 @@ function renderPinned() {
   const rows = [...favs.ns.map(ns => namespaceRow(nsSummary(ns), true)), ...favs.obj.map(objectRow)];
   // Nothing pinned yet: the section stays out of the way. Pinned
   // namespaces and objects belong to the clusters' half.
-  els.pinnedBox.hidden = !rows.length || spaceOf(state.view) === 'observe';
+  els.pinnedBox.hidden = !rows.length || spaceOf(state.view) !== 'cluster';
   fill(els.pinned, rows);
 }
 
@@ -2157,6 +2359,12 @@ function setNavEditing(on) {
 // operators; nodes are the whole cluster's; users are for admins of all of
 // it, on a server that keeps them.
 function viewAllowed(id) {
+  const me = state.me;
+  if (spaceOf(id) === 'registry') {
+    // The registry's projects, and its robot accounts for its admins.
+    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (id !== 'robots' || !!me.registryAdmin);
+  }
+  if (me && me.role === 'none') return false;
   return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
     (id !== 'users' || (!!state.me && state.me.users && state.me.everywhere === 'admin')) &&
     (id !== 'netcheck' || canIn('admin', ''));
@@ -2297,7 +2505,7 @@ function renderNav() {
   const sig = JSON.stringify([state.cluster, state.view, state.ns, lang, counts, state.me, q, navFavs]);
   if (sig === navSig) return;
   navSig = sig;
-  if (els.spaceLabel) els.spaceLabel.textContent = t(spaceOf(state.view) === 'observe' ? 'spaceObserveTitle' : 'spaceClusterTitle');
+  if (els.spaceLabel) els.spaceLabel.textContent = t(SPACE_TITLE[spaceOf(state.view)]);
   if (navEditing) {
     renderNavEditor();
     return;
@@ -2345,7 +2553,8 @@ function navItem(id, counts, other) {
   const totalKey = (NAV_COUNT[id] || [])[0];
   const total = totalKey ? counts[totalKey] : null;
   const problems = navProblems(id, counts);
-  const active = id === state.view;
+  // The registry's pages under its projects belong to its Projects.
+  const active = id === state.view || (id === 'registry' && REGISTRY_PAGES.has(state.view));
   const fav = navFavs.includes(id);
   return h('div', { class: 'nav-row' },
     h('a', {
@@ -2360,7 +2569,7 @@ function navItem(id, counts, other) {
     },
       navIcon(id),
       h('span', { class: 'nav-label' }, t(id)),
-      other ? h('span', { class: 'nav-other' }, t(spaceOf(id) === 'observe' ? 'spaceObserve' : 'spaceCluster')) : null,
+      other ? h('span', { class: 'nav-other' }, t(SPACE_NAME[spaceOf(id)])) : null,
       problems ? h('span', { class: 'nav-alert ' + (id === 'events' || id === 'updates' ? 'warn' : 'bad'), title: t('navNeedsAttention', problems) }, problems) : null,
       total != null ? h('span', { class: 'nav-count' }, total) : null),
     h('button', {
@@ -2407,6 +2616,8 @@ const NAV_ICONS = {
   appmetrics: ['M3 20h18', 'M5 16l4-5 4 3 6-8'],
   alerts: ['M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z', 'M10 20a2 2 0 0 0 4 0'],
   uptime: ['M3 12h4l2.5-6 4 12 2.5-6H21'],
+  registry: ['M12 3l8 4v10l-8 4-8-4V7z', 'M4 7l8 4 8-4', 'M12 11v10', 'M8 5l8 4'],
+  robots: [[5, 8, 14, 11, 3], 'M12 4v4', [12, 3.5, 1], [9.5, 13, 1], [14.5, 13, 1], 'M10 16.5h4'],
 };
 
 function navIcon(id) {
@@ -2471,7 +2682,7 @@ function renderHead() {
   if (!els.head) return;
   const v = state.view;
   const table = TABLES[v];
-  els.filter = v === 'overview' || (v === 'dashboards' && state.rest[0]) ? null : h('input', {
+  els.filter = v === 'overview' || v === 'regartifact' || (v === 'dashboards' && state.rest[0]) ? null : h('input', {
     type: 'text', class: 'filter', value: state.q, placeholder: t('filterRows'), 'aria-label': t('filterRows'),
     oninput: e => {
       state.q = e.target.value;
@@ -2482,7 +2693,7 @@ function renderHead() {
   });
   els.updated = h('span', { class: 'muted' });
   // The users are the server's, of no cluster or namespace.
-  const scope = v === 'users' ? null : CLUSTER_SCOPED.has(v)
+  const scope = v === 'users' || REGISTRY_SET.has(v) ? null : CLUSTER_SCOPED.has(v)
     ? h('span', { class: 'muted' }, t(SERVER_VIEWS.has(v) ? 'fromServer' : ALL_CLUSTERS.has(v) ? 'allClusters' : 'clusterWide'))
     : state.ns
       ? h('span', { class: 'chip active' }, t('namespace') + ': ' + state.ns,
@@ -2507,7 +2718,7 @@ function renderHead() {
 
 function updateStamp() {
   if (!els.updated) return;
-  const c = currentCluster();
+  const c = spaceOf(state.view) === 'registry' ? null : currentCluster();
   const at = c ? when(c.collectedAt) : NaN;
   els.updated.textContent = Number.isFinite(at) ? t('dataFrom', new Date(at).toLocaleTimeString()) : '';
   els.updated.title = c ? [c.kubeVersion && 'Kubernetes ' + c.kubeVersion, c.agentVersion && 'agent ' + c.agentVersion].filter(Boolean).join(' · ') : '';
@@ -2515,11 +2726,18 @@ function updateStamp() {
 
 function renderBanner() {
   if (!els.banner) return;
-  const c = currentCluster();
+  const c = spaceOf(state.view) === 'registry' ? null : currentCluster();
   fill(els.banner, c && c.status === 'offline' ? h('div', { class: 'banner' }, '⚠ ', t('offlineBanner', ago(c.lastSeen))) : null);
 }
 
 let drawnAt = 0;
+
+// regUI is what the image registry's pages (registry.js) draw with.
+const regUI = {
+  h, t, button, pill, panel, emptyState, mono, bytes, age, ago, copyText, modal, ask, toast, dialogField, formNote, api,
+  grantChips, matches, routeHash, go, refresh: () => refresh(),
+  words: () => state.q.toLowerCase().split(/\s+/).filter(Boolean),
+};
 
 function renderContent() {
   if (!els.content) return;
@@ -2548,6 +2766,9 @@ function renderContent() {
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
+    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'robots':
+      body = renderRegistry(state.view, state.data, regUI);
+      break;
     case 'certificates':
       body = [renderTable(state.view, state.data.items || []), h('div', { class: 'more-note' }, t('certificatesHint', levels().certificateWarningDays)),
         state.data.hosts ? hostsPanel(state.data.hosts) : null];
@@ -3727,7 +3948,9 @@ function renderUsers(data) {
   const tabs = h('nav', { class: 'detail-tabs admin-tabs', role: 'tablist' }, ADMIN_TABS.map(id => h('a', {
     role: 'tab', class: id === tab ? 'dtab active' : 'dtab', 'aria-selected': String(id === tab),
     href: routeHash({ view: 'users', rest: id === 'users' ? [] : [id] }),
-  }, t('admin.' + id), counts[id] != null ? h('span', { class: 'tab-count' }, String(counts[id])) : null)));
+  }, t('admin.' + id), counts[id] != null ? h('span', { class: 'tab-count' }, String(counts[id])) : null)),
+  // Robot accounts are the image registry's, kept with these users.
+  viewAllowed('robots') ? h('a', { role: 'tab', class: 'dtab', href: routeHash({ view: 'robots', rest: [] }) }, t('robots') + ' ↗') : null);
   const body = tab === 'groups' ? renderGroupsTab(data)
     : tab === 'access' ? renderAccessTab(data)
       : tab === 'sessions' ? renderSessionsTab(data)
@@ -4889,7 +5112,7 @@ function ownPasswordDialog() {
 
 function renderAudit(items) {
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
-  const rows = items.filter(e => matches(words, [e.user, e.action, e.cluster, e.namespace, e.object, e.detail, e.error]));
+  const rows = items.filter(e => matches(words, [e.user, e.action, e.cluster, e.namespace, e.project, e.object, e.detail, e.error]));
   if (!items.length) return [emptyState(t('auditEmpty')), h('div', { class: 'more-note' }, t('auditHint'))];
   return [
     h('table', null,
@@ -4897,9 +5120,10 @@ function renderAudit(items) {
       h('tbody', null, rows.slice(0, state.limit).map(e => h('tr', { class: e.ok ? null : 'problem' },
         h('td', null, age(e.time)),
         h('td', null, h('strong', null, e.user), e.role ? h('span', { class: 'muted' }, ' · ' + t('role.' + e.role)) : null,
-          e.via === 'mcp' ? h('span', { class: 'badge', title: t('viaMCP') }, 'MCP') : null),
+          e.via === 'mcp' ? h('span', { class: 'badge', title: t('viaMCP') }, 'MCP') : null,
+          e.via === 'registry' ? h('span', { class: 'badge', title: t('viaRegistry') }, '⬡') : null),
         h('td', null, e.action),
-        h('td', null, e.cluster || '—'),
+        h('td', null, e.cluster || (e.project ? t('admin.registryScope') + ': ' + e.project : '—')),
         h('td', null, e.object, e.namespace ? h('span', { class: 'muted' }, ' · ' + e.namespace) : null),
         h('td', null, mono(e.detail || '')),
         h('td', null, e.ok ? pill(t('ok'), 'ok') : h('span', { class: 'status-bad' }, e.error)))))),

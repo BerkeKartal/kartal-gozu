@@ -35,7 +35,7 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 			files[name] = string(a.body)
 		}
 	}
-	for _, name := range []string{"app.js", "app.css", "yaml.js", "chart.js", "plot.js", "versions.js"} {
+	for _, name := range []string{"app.js", "app.css", "yaml.js", "chart.js", "plot.js", "versions.js", "registry.js"} {
 		if _, ok := files[name]; !ok {
 			t.Fatalf("%s is not embedded", name)
 		}

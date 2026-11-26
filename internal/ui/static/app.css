@@ -82,6 +82,10 @@ a.chip, a.btn, a.shortcut, a.row, a.card, .row a.name, .brand, .ns-link { text-d
    over time, which has an accent of its own. */
 .shell.space-observe { --accent: #9d8cff; --accent-soft: rgba(157, 140, 255, .16); --accent-ink: #120d2b; }
 [data-theme="light"] .shell.space-observe { --accent: #5b48c8; --accent-soft: rgba(91, 72, 200, .10); --accent-ink: #ffffff; }
+/* The image registry, when there is one, is a third space. */
+.shell.space-registry, .space-card.registry { --accent: #3cc8b4; --accent-soft: rgba(60, 200, 180, .15); --accent-ink: #06201c; }
+[data-theme="light"] .shell.space-registry, [data-theme="light"] .space-card.registry { --accent: #0b7a6c; --accent-soft: rgba(11, 122, 108, .10); --accent-ink: #ffffff; }
+.shell.space-registry .ns-picker { display: none; }
 .space-switch { display: flex; flex: none; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .space-switch a { padding: 5px 12px; color: var(--muted); text-decoration: none; font-size: 13px; white-space: nowrap; }
 .space-switch a + a { border-left: 1px solid var(--line); }
@@ -522,7 +526,7 @@ input:disabled, textarea:disabled { opacity: .65; cursor: not-allowed; }
 .chooser { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px 16px; box-sizing: border-box; }
 .chooser h1 { margin: 0; font-size: 22px; display: flex; gap: 10px; align-items: center; }
 .chooser h1 img { width: 36px; height: 36px; }
-.space-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 340px)); gap: 16px; margin-top: 14px; width: 100%; justify-content: center; }
+.space-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 340px)); gap: 16px; margin-top: 14px; width: 100%; justify-content: center; }
 .space-card { display: grid; gap: 8px; align-content: start; padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; color: var(--text); text-decoration: none; transition: border-color .15s; }
 .space-card.observe { --accent: #9d8cff; --accent-soft: rgba(157, 140, 255, .16); }
 [data-theme="light"] .space-card.observe { --accent: #5b48c8; --accent-soft: rgba(91, 72, 200, .10); }
@@ -900,3 +904,22 @@ table.sizing td > div + div { margin-top: 2px; }
   .grant-row { grid-template-columns: 1fr 1fr; }
   .access-pick { grid-template-columns: 1fr; }
 }
+
+/* ---------------------------------------------------------------- image registry */
+.reg-crumbs { font-size: 15px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.reg-crumbs a { color: var(--accent); text-decoration: none; }
+.reg-crumbs a:hover { text-decoration: underline; }
+.reg-commands { display: grid; gap: 6px; margin-top: 10px; }
+.reg-command { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.reg-command code { flex: 1; min-width: 0; padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; white-space: nowrap; font-size: 12.5px; }
+.reg-body { display: grid; gap: 10px; padding: 12px 14px; }
+.reg-kind { font-size: 12px; }
+.reg-kind-index { border-color: var(--accent); color: var(--accent); }
+.reg-kind-signature, .reg-kind-sbom { border-style: dashed; }
+.reg-tag { display: inline-flex; align-items: center; gap: 4px; margin: 0 4px 4px 0; font-family: var(--mono, monospace); font-size: 12px; }
+.chip-x { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 11px; line-height: 1; }
+.chip-x:hover { color: var(--bad); }
+.reg-step { max-width: 560px; overflow-wrap: anywhere; font-size: 12px; }
+.reg-manifest summary { cursor: pointer; font-weight: 600; }
+.reg-manifest pre { margin: 10px 0 0; max-height: 60vh; overflow: auto; font-size: 12px; }
+.reg-events { margin-top: 16px; }

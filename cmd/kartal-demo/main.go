@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -67,10 +68,11 @@ func main() {
 	adminToken := flag.String("admin-token", "", "token to sign in with; empty leaves the demo open")
 	namespaces := flag.Int("namespaces", 14, "generated namespaces (3 pods each) in the \"production\" cluster; raise it to try a big cluster")
 	withLDAP := flag.Bool("ldap", false, "sign in with a built-in directory: ayse (admin), mehmet (operator in the team-0* namespaces), zeynep (viewer); the password is demo")
-	dataDir := flag.String("data", "", "directory of the metric store; empty uses a temporary one, removed on exit")
+	dataDir := flag.String("data", "", "directory of the metric store and the image registry; empty uses a temporary one, removed on exit")
+	withRegistry := flag.Bool("registry", true, "run an image registry with made-up images next to the demo; docker push and pull need -admin-token or -ldap")
 	flag.Parse()
 	log := logging.New("warn")
-	if err := run(*listen, *adminToken, max(*namespaces, 0), *withLDAP, *dataDir, log); err != nil {
+	if err := run(*listen, *adminToken, max(*namespaces, 0), *withLDAP, *withRegistry, *dataDir, log); err != nil {
 		log.Error("demo stopped", "err", err)
 		os.Exit(1)
 	}
@@ -81,7 +83,7 @@ type demoCluster struct {
 	kube *fakekube.Server
 }
 
-func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir string, log *slog.Logger) error {
+func run(listen, adminToken string, namespaces int, withLDAP, withRegistry bool, dataDir string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -101,6 +103,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	if err != nil {
 		return err
 	}
+	serverURL := "http://" + ln.Addr().String()
 	hist := history.New()
 	usage := sizing.New()
 	// Until e-mail is set up on the Alerts page (the demo keeps it in memory),
@@ -191,6 +194,17 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 			cfg.Users = map[string]auth.User{selfToken: {Name: "prometheus-source", Role: auth.Viewer}}
 		}
 	}
+	registryNote := ""
+	if withRegistry {
+		secret := randomToken()
+		adminURL, public, stopRegistry, err := demoRegistry(ctx, filepath.Join(dataDir, "registry"), serverURL, secret, log)
+		if err != nil {
+			return err
+		}
+		defer stopRegistry()
+		cfg.RegistryURL, cfg.RegistrySecret, cfg.RegistryPublic = adminURL, secret, public
+		registryNote = "Its image registry: docker login " + public + "\n"
+	}
 	server := api.New(cfg, st, log)
 	go backfill(ctx, st, hist, usage, "production")
 	srv := &http.Server{
@@ -204,7 +218,6 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 	watches.Start(ctx)
 	go db.Run(ctx, time.Minute)
 	collector.Start(ctx)
-	serverURL := "http://" + ln.Addr().String()
 	// An Elasticsearch with the web apps' logs, which only the production
 	// cluster's agent may reach.
 	esURL, err := serveFakeES(ctx)
@@ -257,7 +270,7 @@ func run(listen, adminToken string, namespaces int, withLDAP bool, dataDir strin
 		go a.Run(ctx)
 	}
 
-	fmt.Printf("Kartal Gözü demo is running: open %s/\n", serverURL)
+	fmt.Printf("Kartal Gözü demo is running: open %s/\n%s", serverURL, registryNote)
 	<-ctx.Done()
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
