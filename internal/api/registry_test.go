@@ -41,9 +41,13 @@ type regEnv struct {
 	st     *store.Store
 	api    *httptest.Server
 	public *httptest.Server
+	// reg is the registry the server manages.
+	reg *registry.Server
 }
 
-func newRegEnv(t *testing.T) *regEnv {
+// newRegEnv starts a server with a registry; opts change the registry's
+// Config.
+func newRegEnv(t *testing.T, opts ...func(*registry.Config)) *regEnv {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,7 +72,12 @@ func newRegEnv(t *testing.T) *regEnv {
 	}
 	accts := accounts.New(keeper, nil)
 	e := &regEnv{t: t, st: store.New("demo", "lab")}
-	reg := registry.New(registry.Config{Store: blobs, DB: db, Log: log, SourcesKey: registry.SourcesKey(regSecret)})
+	rcfg := registry.Config{Store: blobs, DB: db, Log: log, SourcesKey: registry.SourcesKey(regSecret)}
+	for _, o := range opts {
+		o(&rcfg)
+	}
+	reg := registry.New(rcfg)
+	e.reg = reg
 	adm := httptest.NewServer(reg.Admin(regSecret))
 	t.Cleanup(adm.Close)
 	srv := New(Config{

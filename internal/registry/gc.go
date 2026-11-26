@@ -43,6 +43,9 @@ type GCReport struct {
 	Spared int `json:"spared"`
 	// Uploads are the uploads left behind that were removed.
 	Uploads int `json:"uploads"`
+	// Scans are the scans of images no repository has any more, which were
+	// forgotten with their reports.
+	Scans int `json:"scans,omitempty"`
 }
 
 func (r GCReport) String() string {
@@ -122,6 +125,9 @@ func (s *Server) GC(ctx context.Context, grace time.Duration, dryRun bool, user 
 		}
 		return nil
 	})
+	if err == nil {
+		rep.Scans = s.dropOrphanScans(dryRun)
+	}
 	rep.Seconds = time.Since(start).Seconds()
 	if err != nil {
 		return rep, err

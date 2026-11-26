@@ -38,10 +38,16 @@ export async function loadRegistry(view, rest, api, signal) {
         api('registry/projects/' + enc(repo.split('/')[0]), { signal }),
         api('registry/artifact?repo=' + enc(repo) + '&ref=' + enc(ref), { signal }),
       ]);
-      return { info, project, repo, artifact };
+      // An image that was scanned, or may be, has its report.
+      const vulns = artifact.kind === 'image' && artifact.scan
+        ? await api('registry/vulnerabilities?repo=' + enc(repo) + '&digest=' + enc(artifact.digest), { signal }).catch(() => null) : null;
+      return { info, project, repo, artifact, vulns };
     }
-    case 'regjobs':
-      return { info, jobs: await api('registry/jobs?limit=100', { signal }) };
+    case 'regjobs': {
+      const [jobs, scanner] = await Promise.all([api('registry/jobs?limit=100', { signal }),
+        info.scanner && info.admin ? api('registry/scanner', { signal }).catch(e => ({ configured: true, problem: e.message })) : null]);
+      return { info, jobs, scanner };
+    }
     case 'regsources':
       return { info, sources: await api('registry/sources', { signal }) };
     case 'regreplication': {
@@ -205,6 +211,9 @@ function projectDialog(ui, project, info) {
   const rules = h('input', { type: 'text', class: 'mono', value: editing ? (project.immutable || []).join(', ') : '', placeholder: 'v*, release-*' });
   const quota = h('input', { type: 'number', min: '0', step: 'any', disabled: !admin, placeholder: '∞',
     value: editing && project.quota ? String(Math.round(project.quota / GIB * 100) / 100) : '' });
+  // Scanning on push is there when the registry has a scanner.
+  const scans = !!(info && info.scanner);
+  const scanOnPush = h('input', { type: 'checkbox', checked: editing && !!project.scanOnPush });
   const note = formNote();
   const form = h('form', {
     class: 'dialog',
@@ -212,6 +221,7 @@ function projectDialog(ui, project, info) {
       e.preventDefault();
       const body = { public: pub.checked, description: desc.value, immutable: rules.value.split(/[\s,]+/).filter(Boolean) };
       if (admin) body.quota = quota.value ? Math.round(Number(quota.value) * GIB) : 0;
+      if (scans) body.scanOnPush = scanOnPush.checked;
       try {
         if (editing) {
           await api('registry/projects/' + enc(project.name), { method: 'PUT', body });
@@ -235,6 +245,7 @@ function projectDialog(ui, project, info) {
   h('label', { class: 'check-item' }, pub, ' ', t('reg.publicHelp')),
   dialogField(t('reg.immutable'), rules, t('reg.immutableHelp')),
   dialogField(t('reg.quota'), quota, t('reg.quotaHelp')),
+  scans ? h('label', { class: 'check-item' }, scanOnPush, ' ', t('reg.scanOnPushHelp')) : null,
   note,
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
   const close = modal(form);
@@ -277,7 +288,8 @@ function projectPage(data, ui) {
           h('div', { class: p.size / p.quota > 0.9 ? 'bar full' : p.size / p.quota > 0.75 ? 'bar hot' : 'bar' },
             h('span', { style: { width: Math.min(100, p.size / p.quota * 100) + '%' } }))) : null,
         p.immutable && p.immutable.length ? h('div', { class: 'detail' }, h('span', { class: 'muted' }, t('reg.immutable') + ': '),
-          p.immutable.map(x => h('span', { class: 'label-chip reg-tag' }, '🔒 ', x))) : null),
+          p.immutable.map(x => h('span', { class: 'label-chip reg-tag' }, '🔒 ', x))) : null,
+        p.scanOnPush && data.info && data.info.scanner ? h('div', { class: 'detail muted' }, t('reg.scansOnPush')) : null),
       h('div', { class: 'actions' }, actions)),
     h('div', { class: 'reg-commands' },
       command(ui, 'docker login ' + reg),
@@ -323,6 +335,8 @@ function repositoryPage(data, ui) {
   const words = ui.words();
   const all = (data.detail && data.detail.artifacts) || [];
   const arts = all.filter(a => ui.matches(words, [a.digest, a.kind, platformText(a)].concat(a.tags)));
+  const scans = !!(data.info && data.info.scanner) || all.some(a => a.scan);
+  const canScan = !!(data.info && data.info.scanner) && mine >= RANK.operator;
   const fixed = a => a.tags.some(tag => immutable(data.project, tag));
   const tagChip = (a, tag) => immutable(data.project, tag) ? h('span', { class: 'label-chip reg-tag', title: t('reg.immutableTag') }, '🔒 ', tag)
     : h('span', { class: 'label-chip reg-tag' }, tag,
@@ -361,13 +375,15 @@ function repositoryPage(data, ui) {
   if (!arts.length) return [problem(ui, data.info), head, emptyState(t(all.length ? 'noMatch' : 'reg.noArtifacts'))];
   return [problem(ui, data.info), head,
     h('table', null,
-      h('thead', null, h('tr', null, ['artifact', 'tags', 'kind', 'platform', 'size', 'pushed', 'lastPull', 'pulls'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
+      h('thead', null, h('tr', null, ['artifact', 'tags', 'kind', 'platform'].concat(scans ? ['vulns'] : [], ['size', 'pushed', 'lastPull', 'pulls'])
+        .map(k => h('th', null, t('reg.col.' + k))), h('th'))),
       h('tbody', null, arts.map(a => h('tr', null,
         h('td', null, h('a', { class: 'mono', href: routeHash({ view: 'regartifact', rest: [repo, a.digest], ns: '' }), title: a.digest }, shortDigest(a.digest)),
           a.referrers ? h('span', { class: 'muted small-text', title: t('reg.referrersHelp') }, ' · ' + t('reg.referrerCount', a.referrers)) : null),
         h('td', null, a.tags.length ? a.tags.map(tag => tagChip(a, tag)) : h('span', { class: 'muted' }, t('reg.untagged'))),
         h('td', null, kindPill(ui, a.kind)),
         h('td', null, platformText(a) || '—'),
+        scans ? h('td', null, sevBar(ui, a.scan) || h('span', { class: 'muted' }, '—')) : null,
         h('td', null, bytes(a.total)),
         h('td', null, age(a.pushed), a.pushedBy ? h('div', { class: 'muted small-text' }, a.pushedBy) : null),
         h('td', null, a.lastPull ? age(a.lastPull) : h('span', { class: 'muted' }, t('reg.never'))),
@@ -375,6 +391,7 @@ function repositoryPage(data, ui) {
         h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
           button(t('reg.copyPull'), () => copyText('docker pull ' + reg + '/' + repo + (a.tags.length ? ':' + a.tags[0] : '@' + a.digest))),
           mine >= RANK.operator ? button('+ ' + t('reg.tag'), () => addTag(a)) : null,
+          canScan && a.scan ? scanButton(ui, repo, a) : null,
           mine >= RANK.operator && !fixed(a) ? button(t('reg.deleteArtifact'), () => del(a), 'danger') : null)))))),
     h('div', { class: 'more-note' }, t('reg.deleteNote'))];
 }
@@ -409,6 +426,7 @@ function artifactPage(data, ui) {
   const { h, t, bytes, age, routeHash, mono, copyText, button } = ui;
   const a = data.artifact;
   const repo = data.repo;
+  const canScan = !!(data.info && data.info.scanner) && role(data) >= RANK.operator && !!a.scan;
   const project = repo.split('/')[0];
   const reg = host(data.info);
   const kv = (k, v) => v == null || v === '' ? null : h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, t(k)), h('span', { class: 'kv-value' }, v));
@@ -430,16 +448,20 @@ function artifactPage(data, ui) {
       kv('reg.col.pushed', h('span', null, age(a.pushed), a.pushedBy ? ' · ' + a.pushedBy : '')),
       kv('reg.col.pulls', a.pulls + (a.lastPull ? ' · ' + t('reg.lastPullAgo', ui.ago(a.lastPull)) : '')),
       kv('reg.commit', commit ? h('a', { href: commit, target: '_blank', rel: 'noopener noreferrer', class: 'mono' }, labels['org.opencontainers.image.revision'].slice(0, 12)) : null),
-      kv('reg.subject', a.subject ? h('a', { class: 'mono', href: routeHash({ view: 'regartifact', rest: [repo, a.subject], ns: '' }) }, shortDigest(a.subject)) : null)),
+      kv('reg.subject', a.subject ? h('a', { class: 'mono', href: routeHash({ view: 'regartifact', rest: [repo, a.subject], ns: '' }) }, shortDigest(a.subject)) : null),
+      kv('reg.col.vulns', a.scan ? h('span', null, sevBar(ui, a.scan), canScan ? [' ', scanButton(ui, repo, a)] : null) : null)),
     h('div', { class: 'reg-commands' }, command(ui, 'docker pull ' + reg + '/' + repo + '@' + a.digest))));
   const parts = [problem(ui, data.info), summary];
   if (a.children && a.children.length) {
+    const scans = a.children.some(c => c.scan);
     parts.push(ui.panel(t('reg.children'), h('table', { class: 'flat' },
-      h('thead', null, h('tr', null, ['platform', 'artifact', 'size'].map(k => h('th', null, t('reg.col.' + k))))),
+      h('thead', null, h('tr', null, ['platform', 'artifact', 'size'].concat(scans ? ['vulns'] : []).map(k => h('th', null, t('reg.col.' + k))))),
       h('tbody', null, a.children.map(c => h('tr', null, h('td', null, platformText(c) || '—'),
         h('td', null, h('a', { class: 'mono', href: routeHash({ view: 'regartifact', rest: [repo, c.digest], ns: '' }) }, shortDigest(c.digest))),
-        h('td', null, bytes(c.total))))))));
+        h('td', null, bytes(c.total)),
+        scans ? h('td', null, sevBar(ui, c.scan) || '—') : null))))));
   }
+  if (data.vulns) parts.push(vulnPanel(ui, data));
   if (labels && Object.keys(labels).length) {
     parts.push(ui.panel(t('reg.labels'), h('div', { class: 'kv reg-body' }, Object.keys(labels).sort().map(k =>
       h('div', { class: 'kv-row' }, h('span', { class: 'kv-key mono' }, k), h('span', { class: 'kv-value mono' }, labels[k]))))));
@@ -595,6 +617,7 @@ function jobDialog(ui, id, title) {
     const r = j.report || {};
     const removed = r.removed || [];
     const items = r.items || [];
+    const failures = r.failures || [];
     // A DOM node takes null for text; what is not there is left out.
     body.replaceChildren(...[
       j.error ? h('p', { class: 'status-bad' }, j.error) : h('p', null, jobSummary(ui, j)),
@@ -608,7 +631,12 @@ function jobDialog(ui, id, title) {
         h('thead', null, h('tr', null, ['from', 'into', 'status', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
         h('tbody', null, items.map(x => h('tr', { class: x.result === 'failed' ? 'problem' : null }, h('td', null, ui.mono(x.from)), h('td', null, ui.mono(x.to)),
           h('td', null, t('reg.item.' + x.result)), h('td', null, x.error || (x.digest ? ui.mono(shortDigest(x.digest)) : ''))))))
-        : j.kind === 'replication' && j.status === 'done' ? h('p', { class: 'muted' }, t('reg.allPresent')) : null].filter(Boolean));
+        : j.kind === 'replication' && j.status === 'done' ? h('p', { class: 'muted' }, t('reg.allPresent')) : null,
+      r.dbError ? h('p', { class: 'status-bad small-text' }, t('reg.dbNotUpdatedWhy', r.dbError)) : null,
+      failures.length ? h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, ['repository', 'artifact', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
+        h('tbody', null, failures.map(x => h('tr', { class: 'problem' }, h('td', null, x.repo), h('td', null, ui.mono(shortDigest(x.digest))),
+          h('td', null, x.error))))) : null].filter(Boolean));
     ui.refresh();
   };
   poll();
@@ -771,6 +799,9 @@ function jobSummary(ui, j) {
   if (j.kind === 'replication' && r.started) {
     return t(r.dryRun ? 'reg.replDrySummary' : 'reg.replSummary', r.picked, r.copied, bytes(r.bytes), r.present, r.kept, r.failed);
   }
+  if (j.kind === 'scan' && r.started) {
+    return t('reg.scanSummary', r.scanned || 0, r.failed || 0, r.critical || 0, r.high || 0) + (r.dbError ? ' · ' + t('reg.dbNotUpdated') : '');
+  }
   return j.summary || '';
 }
 
@@ -792,7 +823,10 @@ function jobsPage(data, ui) {
         if (await ui.ask({ title: t('reg.gcNow'), message: t('reg.gcConfirm'), confirm: t('reg.gcNow'), danger: true })) start('gc', false);
       }, 'danger'),
       button(t('reg.verifyNow'), () => start('verify', false)),
-      button(t('reg.retentionAllDry'), () => start('retention', true)))));
+      button(t('reg.retentionAllDry'), () => start('retention', true)),
+      data.scanner && data.scanner.configured ? button(t('reg.scanAll'), async () => {
+        if (await ui.ask({ title: t('reg.scanAll'), message: t('reg.scanAllConfirm'), confirm: t('reg.scanAll') })) start('scan', false);
+      }) : null)));
   const sched = ui.panel(t('reg.schedules'), h('table', { class: 'flat' },
     h('thead', null, h('tr', null, ['job', 'cron', 'next', 'lastRun'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
     h('tbody', null, schedules.map(sc => h('tr', null,
@@ -812,8 +846,10 @@ function jobsPage(data, ui) {
       h('td', null, jobState(ui, j), j.status === 'running' ? [' ', stopButton(ui, j)] : null),
       h('td', null, j.error ? h('span', { class: 'status-bad' }, j.error) : [jobSummary(ui, j),
         j.alarm && j.kind === 'verify' ? h('div', { class: 'status-bad small-text' }, t('reg.verifyAlarm', ((j.report || {}).corrupt || []).length,
-          ((j.report || {}).missing || []).length)) : null]))))) : emptyState(t('reg.noJobs'));
-  return [problem(ui, data.info), head, sched, h('div', { class: 'reg-events' }, history)];
+          ((j.report || {}).missing || []).length)) : null,
+        j.alarm && j.kind === 'scan' && (j.report || {}).failed ? h('div', { class: 'status-bad small-text' },
+          t('reg.scanAlarm', j.report.failed, j.report.images)) : null]))))) : emptyState(t('reg.noJobs'));
+  return [problem(ui, data.info), head, scannerPanel(ui, data), sched, h('div', { class: 'reg-events' }, history)];
 }
 
 function scheduleDialog(ui, sc, zone) {
@@ -1133,4 +1169,119 @@ function secretDialog(ui, data, robot, secret) {
       "' --docker-password='" + secret + "'"),
     h('div', { class: 'dialog-actions' }, h('button', { type: 'button', class: 'btn primary', onclick: () => close() }, t('reg.secretSaved'))));
   const close = modal(form);
+}
+
+// ---------------------------------------------------------------- vulnerabilities
+
+const SEVERITIES = ['critical', 'high', 'medium', 'low', 'unknown'];
+
+// sevRank orders severities: 4 for critical down to 0 for unknown.
+function sevRank(sev) {
+  const i = SEVERITIES.indexOf(String(sev || '').toLowerCase());
+  return i < 0 ? 0 : 4 - i;
+}
+
+// sevBar shows what is known of an artifact's vulnerabilities: how many of
+// each severity (the worst of an index's images), and whether a scan
+// waits, runs or failed, or none ever ran.
+export function sevBar(ui, scan) {
+  const { h, t } = ui;
+  if (!scan) return null;
+  const s = scan.summary;
+  const parts = [];
+  if (scan.status === 'queued' || scan.status === 'scanning') parts.push(ui.pill(t('reg.scan.' + scan.status), 'warn'));
+  if (scan.status === 'failed') parts.push(h('span', { title: scan.error || '' }, ui.pill(t('reg.scan.failed'), 'bad')));
+  if (s) {
+    const counts = SEVERITIES.filter(k => s[k] > 0).map(k => h('span', { class: 'reg-sev reg-sev-' + k, title: t('reg.sev.' + k) }, t('reg.sevShort.' + k) + ' ' + s[k]));
+    parts.push(counts.length ? counts : ui.pill(t('reg.scan.clean'), 'ok'));
+  } else if (scan.status === 'none') {
+    parts.push(h('span', { class: 'muted small-text' }, t('reg.scan.none')));
+  }
+  if (scan.images && scan.done < scan.images) parts.push(h('span', { class: 'muted small-text' }, t('reg.scan.ofImages', scan.done, scan.images)));
+  return h('span', { class: 'reg-sevbar' }, parts);
+}
+
+function scanButton(ui, repo, a) {
+  return ui.button(ui.t('reg.scanNow'), () => act(ui, () => ui.api('registry/scan', { method: 'POST', body: { repo, digest: a.digest } }), ui.t('reg.scanQueued')));
+}
+
+// vulnPanel lists an image's vulnerabilities, as its last scan found them,
+// to be narrowed by severity, by whether a fix is out, and by words.
+function vulnPanel(ui, data) {
+  const { h, t, mono, button } = ui;
+  const v = data.vulns;
+  const sc = v.scan || {};
+  const rep = v.report;
+  const sbom = v.sbom ? button(t('reg.sbomDownload'), async () => {
+    try {
+      const text = await ui.api('registry/sbom?repo=' + enc(data.repo) + '&digest=' + enc(data.artifact.digest), { text: true });
+      ui.download(text, data.repo.split('/').pop() + '-' + shortDigest(data.artifact.digest) + '.cdx.json');
+    } catch (e) {
+      ui.toast(e.message, true);
+    }
+  }) : null;
+  if (!rep) {
+    const why = sc.status === 'failed' ? t('reg.lastScanFailed', sc.error || '') : sc.status === 'queued' || sc.status === 'scanning' ? t('reg.scanWaiting') : t('reg.notScannedYet');
+    return ui.panel(t('reg.vulns'), h('p', { class: sc.status === 'failed' ? 'status-bad' : 'muted' }, why));
+  }
+  const vulns = rep.vulnerabilities || [];
+  const sev = h('select', { 'aria-label': t('reg.col.severity') }, h('option', { value: '' }, t('reg.sevAll')),
+    SEVERITIES.slice(0, 4).map(k => h('option', { value: k }, t('reg.sevAtLeast', t('reg.sev.' + k)))));
+  const fixable = h('input', { type: 'checkbox' });
+  const q = h('input', { type: 'text', placeholder: t('reg.vulnSearch') });
+  const tbody = h('tbody');
+  const count = h('span', { class: 'muted small-text' });
+  const shown = 500;
+  const draw = () => {
+    const min = sev.value ? sevRank(sev.value) : -1;
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = vulns.filter(x => sevRank(x.severity) >= min && (!fixable.checked || x.fixed) &&
+      words.every(w => [x.id, x.package, x.installed, x.fixed, x.title, x.target].some(f => String(f || '').toLowerCase().includes(w))));
+    count.textContent = t('reg.vulnCount', rows.length, vulns.length);
+    tbody.replaceChildren(...rows.slice(0, shown).map(x => {
+      const s = String(x.severity || 'unknown').toLowerCase();
+      return h('tr', null,
+        h('td', null, h('span', { class: 'reg-sev reg-sev-' + s }, t('reg.sev.' + s)), x.score ? h('div', { class: 'muted small-text' }, x.score.toFixed(1)) : null),
+        h('td', null, x.url && /^https:\/\//.test(x.url) ? h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer', class: 'mono' }, x.id) : mono(x.id)),
+        h('td', null, h('strong', null, x.package), x.target ? h('div', { class: 'muted small-text' }, x.target) : null),
+        h('td', null, mono(x.installed || '')),
+        h('td', null, x.fixed ? mono(x.fixed) : h('span', { class: 'muted' }, t('reg.noFix'))),
+        h('td', { class: 'reg-step' }, x.title || ''));
+    }), ...(rows.length > shown ? [h('tr', null, h('td', { colspan: 6, class: 'muted' }, t('reg.vulnMore', rows.length - shown)))] : []));
+  };
+  [sev, fixable].forEach(el => el.addEventListener('change', draw));
+  q.addEventListener('input', draw);
+  draw();
+  const about = [rep.os, t('reg.packages', rep.packages || 0), rep.scanner, rep.db ? t('reg.dbOf', ui.ago(rep.db)) : null,
+    sc.scanned ? t('reg.scannedAgo', ui.ago(sc.scanned)) : null].filter(Boolean).join(' · ');
+  return ui.panel(t('reg.vulns'), h('div', { class: 'reg-body' },
+    h('div', { class: 'reg-filters' }, h('span', { class: 'muted small-text' }, about), sbom),
+    sc.status === 'failed' ? h('div', { class: 'status-bad small-text' }, t('reg.lastScanFailed', sc.error || '')) : null,
+    sc.status === 'queued' || sc.status === 'scanning' ? h('div', { class: 'status-warn small-text' }, t('reg.scanWaiting')) : null,
+    vulns.length ? [h('div', { class: 'reg-filters' }, sev, h('label', { class: 'check-item' }, fixable, ' ', t('reg.fixableOnly')), q, count),
+      h('table', { class: 'flat' }, h('thead', null, h('tr', null, ['severity', 'vuln', 'package', 'installed', 'fixed', 'title'].map(k => h('th', null, t('reg.col.' + k))))), tbody)]
+      : h('p', { class: 'status-ok' }, t('reg.noVulns'))));
+}
+
+// scannerPanel tells the registry's admins of its scanner: Trivy's version,
+// how old its databases are, and what waits to be scanned.
+function scannerPanel(ui, data) {
+  const { h, t, button, api } = ui;
+  const v = data.scanner;
+  if (!v || !v.configured) return null;
+  const st = v.status || null;
+  const kv = (k, val) => val == null || val === '' ? null : h('div', { class: 'kv-row' }, h('span', { class: 'kv-key' }, t(k)), h('span', { class: 'kv-value' }, val));
+  const dbText = db => db && db.updatedAt ? t('reg.dbBuilt', ui.ago(db.updatedAt)) + (db.downloadedAt ? ' · ' + t('reg.dbFetched', ui.ago(db.downloadedAt)) : '') : t('reg.noDB');
+  return ui.panel(t('reg.scanner'), h('div', { class: 'reg-body' },
+    v.problem ? h('div', { class: 'status-bad' }, t('reg.scannerProblem', v.problem)) : null,
+    st && st.updating ? h('div', { class: 'status-warn' }, t('reg.dbUpdating')) : null,
+    st && st.updateError ? h('div', { class: 'status-bad small-text' }, t('reg.dbUpdateFailed', st.updateError)) : null,
+    h('div', { class: 'kv' },
+      kv('reg.scannerVersion', st ? st.scanner : null),
+      kv('reg.scannerDB', st ? dbText(st.db) : null),
+      kv('reg.scannerJavaDB', st ? dbText(st.javaDB) : null),
+      kv('reg.scannerDBFrom', st ? [st.dbRepository, st.javaDBRepository].filter(Boolean).join(', ') || t('reg.dbFromTrivy') : null),
+      kv('reg.scannerQueue', t('reg.scannerQueueText', v.queued || 0, st ? st.scanning : 0, st ? st.workers : 0)),
+      kv('reg.scannerPulls', v.address ? ui.mono(v.address) : null)),
+    h('div', { class: 'actions' }, button(t('reg.updateDB'), () => act(ui, () => api('registry/scanner/db', { method: 'POST' }), t('reg.dbUpdateStarted'))))), 'reg-events');
 }

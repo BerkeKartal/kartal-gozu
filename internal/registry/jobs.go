@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,7 +47,13 @@ var (
 // ScheduledBy is who a schedule's jobs are by.
 const ScheduledBy = "schedule"
 
-func jobKind(kind string) bool { return kind == JobGC || kind == JobVerify || kind == JobRetention }
+func jobKind(kind string) bool {
+	return kind == JobGC || kind == JobVerify || kind == JobRetention || kind == JobScan
+}
+
+// scanSchedule is when a registry with a scanner scans every image again:
+// every night, after the night's collection and checks.
+var scanSchedule = meta.Schedule{Kind: JobScan, Cron: "0 5 * * *", Enabled: true}
 
 // Start lets jobs run until ctx ends, and runs the schedules. A job that was
 // running when the registry stopped is marked as failed.
@@ -67,7 +74,11 @@ func (s *Server) Start(ctx context.Context) {
 	for _, sc := range s.cfg.DB.Schedules() {
 		have[sc.Kind] = true
 	}
-	for _, sc := range defaultSchedules {
+	defaults := defaultSchedules
+	if s.cfg.Scanner != nil {
+		defaults = append(append([]meta.Schedule(nil), defaults...), scanSchedule)
+	}
+	for _, sc := range defaults {
 		if !have[sc.Kind] {
 			sc.Since = s.now().UTC()
 			if err := s.cfg.DB.SetSchedule(sc, ""); err != nil {
@@ -75,6 +86,7 @@ func (s *Server) Start(ctx context.Context) {
 			}
 		}
 	}
+	s.startScans(ctx)
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
@@ -122,7 +134,7 @@ func (s *Server) RunDue() {
 	now := s.now()
 	for _, sc := range s.cfg.DB.Schedules() {
 		next := s.NextRun(sc)
-		if next.IsZero() || next.After(now) {
+		if next.IsZero() || next.After(now) || (sc.Kind == JobScan && s.cfg.Scanner == nil) {
 			continue
 		}
 		if err := s.cfg.DB.MarkScheduled(sc.Kind, now); err != nil {
@@ -182,8 +194,11 @@ func (s *Server) StartJob(kind string, dryRun bool, project, by string) (meta.Jo
 		}
 		return meta.Job{}, fmt.Errorf("%w: %q", ErrJob, kind)
 	}
-	if dryRun && kind == JobVerify {
+	if dryRun && (kind == JobVerify || kind == JobScan) {
 		return meta.Job{}, fmt.Errorf("%w: a %s has no dry run", ErrJob, kind)
+	}
+	if kind == JobScan && s.cfg.Scanner == nil {
+		return meta.Job{}, fmt.Errorf("%w: %w", ErrJob, ErrNoScanner)
 	}
 	if project != "" {
 		p, ok := s.cfg.DB.Project(project)
@@ -332,6 +347,20 @@ func (s *Server) runJob(ctx context.Context, j meta.Job) {
 		report, j.Summary = rep, rep.String()
 		if err == nil && rep.Failed > 0 {
 			j.Alarm = fmt.Sprintf("%d of %d images could not be copied", rep.Failed, rep.Picked)
+		}
+	case JobScan:
+		var rep ScanReport
+		rep, err = s.ScanAll(ctx, j.By, func(p meta.JobProgress) { s.setProgress(j.ID, p) })
+		report, j.Summary = rep, rep.String()
+		var alarms []string
+		if rep.DBError != "" {
+			alarms = append(alarms, "the vulnerability DB could not be updated: "+rep.DBError)
+		}
+		if rep.Failed > 0 {
+			alarms = append(alarms, fmt.Sprintf("%d of %d images could not be scanned", rep.Failed, rep.Images))
+		}
+		if err == nil {
+			j.Alarm = strings.Join(alarms, "; ")
 		}
 	}
 	if b, merr := json.Marshal(report); merr == nil {

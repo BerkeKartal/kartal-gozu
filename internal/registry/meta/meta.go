@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/manifest"
+	"github.com/BerkeKartal/kartal-gozu/internal/scanner"
 )
 
 var (
@@ -66,7 +67,40 @@ type Project struct {
 	// some and keeps some of those; one that a rule picks and none keeps
 	// is deleted when retention runs. What no rule picks is left alone.
 	Retention []RetentionRule `json:"retention,omitempty"`
+	// ScanOnPush scans each image pushed (or copied) into the project for
+	// known vulnerabilities, when the registry has a scanner.
+	ScanOnPush bool `json:"scanOnPush,omitempty"`
 }
+
+// Scan is what is known of an image's vulnerabilities: what its last scan
+// found, and whether another is waiting or under way. Its report is kept
+// next to the metadata, not in it.
+type Scan struct {
+	Digest string `json:"digest"`
+	// Repo is a repository it is pulled from to be scanned.
+	Repo   string     `json:"repo"`
+	Status string     `json:"status"`
+	Queued time.Time  `json:"queued"`
+	By     string     `json:"by,omitempty"`
+	Start  *time.Time `json:"start,omitempty"`
+	// Of the last scan that ended: when, by what scanner, with a database
+	// of when, and what it found, or why it failed (Error).
+	Scanned  *time.Time       `json:"scanned,omitempty"`
+	Scanner  string           `json:"scanner,omitempty"`
+	DB       *time.Time       `json:"db,omitempty"`
+	Summary  *scanner.Summary `json:"summary,omitempty"`
+	OS       string           `json:"os,omitempty"`
+	Packages int              `json:"packages,omitempty"`
+	Error    string           `json:"error,omitempty"`
+}
+
+// A scan's states: waiting its turn, under way, and ended.
+const (
+	ScanQueued   = "queued"
+	ScanScanning = "scanning"
+	ScanDone     = "done"
+	ScanFailed   = "failed"
+)
 
 // RetentionRule picks artifacts of some repositories by their tags, and
 // keeps some of them.
@@ -403,6 +437,7 @@ type entry struct {
 	Running  *RunningImages   `json:"running,omitempty"`
 	Source   *Source          `json:"source,omitempty"`
 	Rule     *ReplicationRule `json:"rule,omitempty"`
+	Scan     *Scan            `json:"scan,omitempty"`
 }
 
 type state struct {
@@ -414,6 +449,7 @@ type state struct {
 	Running   map[string]RunningImages `json:"running,omitempty"`
 	Sources   []Source                 `json:"sources,omitempty"`
 	Rules     []ReplicationRule        `json:"rules,omitempty"`
+	Scans     []Scan                   `json:"scans,omitempty"`
 }
 
 // DB is the registry's metadata.
@@ -438,6 +474,8 @@ type DB struct {
 	running map[string]RunningImages
 	sources map[string]Source
 	rules   map[string]ReplicationRule
+	// scans are by digest.
+	scans map[string]Scan
 	// pulled are the artifacts pulled since their counts were last written.
 	pulled map[[2]string]bool
 	// onEvent hears of each event as it is written.
@@ -460,7 +498,7 @@ func Open(dir string) (*DB, error) {
 	}
 	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{},
 		schedules: map[string]Schedule{}, running: map[string]RunningImages{}, sources: map[string]Source{},
-		rules: map[string]ReplicationRule{}}
+		rules: map[string]ReplicationRule{}, scans: map[string]Scan{}}
 	if b, err := os.ReadFile(d.path("snapshot.json")); err == nil {
 		var s state
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -486,6 +524,9 @@ func Open(dir string) (*DB, error) {
 		}
 		for _, r := range s.Rules {
 			d.rules[r.ID] = r
+		}
+		for _, sc := range s.Scans {
+			d.scans[sc.Digest] = sc
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -666,6 +707,10 @@ func (d *DB) apply(e entry) {
 		d.rules[e.Rule.ID] = *e.Rule
 	case "rule-del":
 		delete(d.rules, e.Name)
+	case "scan":
+		d.scans[e.Scan.Digest] = *e.Scan
+	case "scan-del":
+		delete(d.scans, e.Name)
 	}
 }
 
@@ -734,6 +779,10 @@ func (d *DB) snapshot() error {
 		s.Rules = append(s.Rules, r)
 	}
 	sort.Slice(s.Rules, func(i, j int) bool { return s.Rules[i].ID < s.Rules[j].ID })
+	for _, sc := range d.scans {
+		s.Scans = append(s.Scans, sc)
+	}
+	sort.Slice(s.Scans, func(i, j int) bool { return s.Scans[i].Digest < s.Scans[j].Digest })
 	for _, p := range d.projects {
 		s.Projects = append(s.Projects, p)
 	}
@@ -889,6 +938,7 @@ type ProjectChange struct {
 	Immutable   *[]string        `json:"immutable"`
 	Quota       *int64           `json:"quota"`
 	Retention   *[]RetentionRule `json:"retention"`
+	ScanOnPush  *bool            `json:"scanOnPush"`
 }
 
 // UpdateProject changes a project: whether it is public, its description,
@@ -934,6 +984,14 @@ func (d *DB) UpdateProject(name string, ch ProjectChange, user string) (Project,
 			said = append(said, "no quota")
 		} else {
 			said = append(said, "quota "+HumanBytes(p.Quota))
+		}
+	}
+	if ch.ScanOnPush != nil && *ch.ScanOnPush != p.ScanOnPush {
+		p.ScanOnPush = *ch.ScanOnPush
+		if p.ScanOnPush {
+			said = append(said, "scan on push")
+		} else {
+			said = append(said, "no scan on push")
 		}
 	}
 	if err := d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-update", name, "", "", "", strings.Join(said, "; "))); err != nil {
@@ -1675,6 +1733,78 @@ func (d *DB) Referrers(repo, digest, artifactType string) []Artifact {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Digest < out[j].Digest })
+	return out
+}
+
+// ---------------------------------------------------------------- scans
+
+// PutScan records an image's scan, or what became of it.
+func (d *DB) PutScan(sc Scan) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.commit(entry{Op: "scan", Scan: &sc})
+}
+
+// Scan is what is known of an image's vulnerabilities.
+func (d *DB) Scan(digest string) (Scan, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	sc, ok := d.scans[digest]
+	return sc, ok
+}
+
+// Scans are every image's scan, by digest.
+func (d *DB) Scans() []Scan {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]Scan, 0, len(d.scans))
+	for _, sc := range d.scans {
+		out = append(out, sc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Digest < out[j].Digest })
+	return out
+}
+
+// DeleteScan forgets an image's scan.
+func (d *DB) DeleteScan(digest string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.scans[digest]; !ok {
+		return nil
+	}
+	return d.commit(entry{Op: "scan-del", Name: digest})
+}
+
+// Holders are the repositories that have an artifact, by name.
+func (d *DB) Holders(digest string) []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var out []string
+	for name, r := range d.repos {
+		if r.Artifacts[digest] != nil {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Images are the artifacts of a kind (such as image) the registry holds,
+// each once: by digest, the first repository by name that has it.
+func (d *DB) Images(kind string) map[string]string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string]string{}
+	for name, r := range d.repos {
+		for dg, a := range r.Artifacts {
+			if a.Kind != kind {
+				continue
+			}
+			if cur, ok := out[dg]; !ok || name < cur {
+				out[dg] = name
+			}
+		}
+	}
 	return out
 }
 

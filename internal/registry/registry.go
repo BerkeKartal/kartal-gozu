@@ -83,7 +83,15 @@ type Config struct {
 	SourcesKey []byte
 	// RemoteHTTP replaces the sources' clients, for tests.
 	RemoteHTTP *http.Client
-	Log        *slog.Logger
+	// Scanner scans images for known vulnerabilities; without it nothing
+	// is scanned. Its reports are kept in ScanDir. It pulls from
+	// ScanAddress (such as http://kartal-registry:5000), or PublicURL;
+	// ScanWorkers scans run at once (2 when zero).
+	Scanner     Scanner
+	ScanDir     string
+	ScanAddress string
+	ScanWorkers int
+	Log         *slog.Logger
 }
 
 // Server is a registry.
@@ -95,6 +103,15 @@ type Server struct {
 	tokens map[string]*grant
 	// uploads tie an upload to the repository it was started in.
 	uploads map[string]string
+	// tickets are the scans' passwords: what each lets the scanner pull.
+	tickets map[string]ticket
+
+	// scanMu guards the scans' queue, and which images wait or are being
+	// scanned (scanPending); scanWake wakes a worker.
+	scanMu      sync.Mutex
+	scanQueue   []queued
+	scanPending map[string]bool
+	scanWake    chan struct{}
 
 	// gcMu lets one garbage collection run at a time.
 	gcMu sync.Mutex
@@ -121,6 +138,9 @@ type grant struct {
 	// the token was not given for the catalog.
 	catalog map[string]bool
 	expires time.Time
+	// scanner is the scanner pulling to scan: its pulls are not counted,
+	// and no project's policy stops them.
+	scanner bool
 }
 
 // New makes a registry.
@@ -135,7 +155,8 @@ func New(cfg Config) *Server {
 		cfg.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{},
-		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, replicating: make(chan struct{}, maxReplications), jobProgress: map[string]meta.JobProgress{}}
+		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, replicating: make(chan struct{}, maxReplications), jobProgress: map[string]meta.JobProgress{},
+		tickets: map[string]ticket{}, scanPending: map[string]bool{}, scanWake: make(chan struct{}, 1)}
 }
 
 // maxReplications is how many replications run at once.
@@ -321,6 +342,29 @@ func (s *Server) tokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(projects)
 
+	// The scanner signs in with a scan's password, which pulls the one
+	// repository that scan is of; kartal-server is not asked.
+	if hasCreds && user == ScannerUser {
+		t, ok := s.scanTicket(secret)
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="kartal-registry"`)
+			writeError(w, errorf(http.StatusUnauthorized, "UNAUTHORIZED", "the scan's password is not valid, or no longer"))
+			return
+		}
+		g := &grant{subject: ScannerUser, access: map[string]map[string]bool{}, expires: s.now().Add(s.cfg.TokenTTL), scanner: true}
+		for _, sc := range asked {
+			if sc.typ == "repository" && sc.name == t.repo {
+				for _, a := range sc.actions {
+					if a == "pull" || a == "*" {
+						g.access["repository:"+t.repo] = map[string]bool{"pull": true}
+					}
+				}
+			}
+		}
+		s.issue(w, g)
+		return
+	}
+
 	var id Identity
 	if hasCreds {
 		var err error
@@ -368,6 +412,11 @@ func (s *Server) tokenHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.issue(w, g)
+}
+
+// issue gives a token for a grant.
+func (s *Server) issue(w http.ResponseWriter, g *grant) {
 	tok := newToken()
 	s.mu.Lock()
 	now := s.now()
@@ -409,6 +458,11 @@ func (s *Server) grantOf(r *http.Request) *grant {
 
 // realm is where clients get tokens.
 func (s *Server) realm(r *http.Request) string {
+	// The scanner, which may reach the registry by another address, gets
+	// its tokens there.
+	if realm := s.scanRealm(r.Host); realm != "" {
+		return realm
+	}
 	if s.cfg.PublicURL != "" {
 		return strings.TrimSuffix(s.cfg.PublicURL, "/") + "/token"
 	}

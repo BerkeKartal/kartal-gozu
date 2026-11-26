@@ -355,7 +355,8 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 		if r.Method == http.MethodHead {
 			return
 		}
-		if _, err := io.Copy(w, f); err == nil {
+		// The scanner's pulls are not people's: retention goes by those.
+		if _, err := io.Copy(w, f); err == nil && (g == nil || !g.scanner) {
 			s.cfg.DB.RecordPull(t.name, digest)
 		}
 	case http.MethodPut:
@@ -446,7 +447,8 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 	if err != nil {
 		return "", nil, errorf(http.StatusBadRequest, "MANIFEST_INVALID", "%s", err.Error())
 	}
-	if _, ok := s.cfg.DB.Project(meta.ProjectOf(repo)); !ok {
+	project, ok := s.cfg.DB.Project(meta.ProjectOf(repo))
+	if !ok {
 		return "", nil, noProject(repo)
 	}
 	// Everything it refers to must be in this repository already.
@@ -493,6 +495,14 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 	} else if err != nil {
 		s.cfg.Log.Error("registry: recording a manifest", "err", err)
 		return "", nil, errorf(http.StatusInternalServerError, "UNKNOWN", "recording a manifest failed")
+	}
+	// An image pushed into a project that scans them is scanned, unless it
+	// was (pushed again, or by another tag); an index's images were each
+	// pushed before it.
+	if _, scanned := s.cfg.DB.Scan(digest); a.Kind == "image" && project.ScanOnPush && s.cfg.Scanner != nil && !scanned {
+		if _, err := s.queue(repo, digest, user); err != nil {
+			s.cfg.Log.Warn("registry: queueing a scan", "repo", repo, "digest", digest, "err", err)
+		}
 	}
 	return digest, m, nil
 }

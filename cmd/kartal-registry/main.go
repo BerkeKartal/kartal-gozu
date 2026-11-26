@@ -4,6 +4,12 @@
 // :5001, to be reached from inside the cluster only). Both sides share a
 // secret (KARTAL_REGISTRY_SECRET or _FILE): the registry asks kartal-server
 // who signs in (KARTAL_SERVER_URL), and kartal-server calls the admin API.
+//
+// With a scanner (KARTAL_REGISTRY_SCANNER_URL, such as
+// http://kartal-scanner:8090, and KARTAL_REGISTRY_SCANNER_SECRET or _FILE),
+// images are scanned for known vulnerabilities; the scanner pulls them from
+// KARTAL_REGISTRY_SCAN_ADDRESS (such as http://kartal-registry:5000), or else
+// KARTAL_REGISTRY_PUBLIC_URL.
 package main
 
 import (
@@ -26,6 +32,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/registry"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/blobstore"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/meta"
+	"github.com/BerkeKartal/kartal-gozu/internal/scanner"
 )
 
 var version = "dev"
@@ -86,10 +93,32 @@ func run(log *slog.Logger) error {
 		sourcesKey = secret
 	}
 	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
-	reg := registry.New(registry.Config{
+	cfg := registry.Config{
 		Store: store, DB: db, Log: log, Zone: zone, Auth: server, Running: server, SourcesKey: registry.SourcesKey(sourcesKey),
 		PublicURL: config.String("KARTAL_REGISTRY_PUBLIC_URL", ""),
-	})
+	}
+	// The scanner, when there is one.
+	if scannerURL := config.String("KARTAL_REGISTRY_SCANNER_URL", ""); scannerURL != "" {
+		scannerSecret, err := config.Secret("KARTAL_REGISTRY_SCANNER_SECRET")
+		if err != nil {
+			return err
+		}
+		if len(scannerSecret) < auth.MinTokenLength {
+			return fmt.Errorf("KARTAL_REGISTRY_SCANNER_SECRET must be at least %d characters; it is the scanner's KARTAL_SCANNER_SECRET", auth.MinTokenLength)
+		}
+		workers, err := config.Number("KARTAL_REGISTRY_SCAN_WORKERS", 2, 1, 16)
+		if err != nil {
+			return err
+		}
+		cfg.Scanner = &scanner.Client{URL: scannerURL, Secret: scannerSecret}
+		cfg.ScanDir = filepath.Join(dir, "scans")
+		cfg.ScanAddress = config.String("KARTAL_REGISTRY_SCAN_ADDRESS", "")
+		cfg.ScanWorkers = int(workers)
+		if cfg.ScanAddress == "" && cfg.PublicURL == "" {
+			return errors.New("the scanner pulls from KARTAL_REGISTRY_SCAN_ADDRESS (such as http://kartal-registry:5000) or KARTAL_REGISTRY_PUBLIC_URL; set one")
+		}
+	}
+	reg := registry.New(cfg)
 	// Garbage collection and the blobs' checks, on their schedules.
 	reg.Start(ctx)
 	// Pull counts are written every half minute.
@@ -127,7 +156,8 @@ func run(log *slog.Logger) error {
 	errc := make(chan error, 2)
 	go func() { errc <- public.ListenAndServe() }()
 	go func() { errc <- admin.ListenAndServe() }()
-	log.Info("kartal-registry started", "version", version, "listen", public.Addr, "admin", admin.Addr, "data", dir, "server", serverURL)
+	log.Info("kartal-registry started", "version", version, "listen", public.Addr, "admin", admin.Addr, "data", dir, "server", serverURL,
+		"scanner", cfg.Scanner != nil)
 	select {
 	case err := <-errc:
 		return err

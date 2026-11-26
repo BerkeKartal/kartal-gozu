@@ -1105,6 +1105,19 @@ users, passwords, directory and roles the rest has.
   the source tells, as Harbor does), and a rule for each copies all its
   repositories at once, and, if asked, every hour while people move
   over.
+- **Vulnerability scanning.** With a scanner (`kartal-scanner`: Trivy and
+  a small API around it), images are scanned for known vulnerabilities:
+  each one pushed or copied into a project that scans on push, any one
+  someone asks for (an operator of its project), and every image again
+  each night after the scanner's databases are updated (the *Vulnerability
+  scan* job). An index's images are scanned one by one. Lists show how
+  many critical, high, medium and low vulnerabilities each image has, an
+  index the worst of its images; an image's page lists them, by severity,
+  with the version that fixes each, to be narrowed by severity, by whether
+  a fix is out and by words, and gives its SBOM (CycloneDX) to download.
+  The scanner pulls each image with a password made for that scan, which
+  pulls that one repository and ends with the scan; its pulls are not
+  counted as people's, which retention goes by.
 - **Alerts.** The server looks at the registry every minute and tells of
   its problems as of any other, on the Alerts page and through the
   notification channels: it cannot be reached, it cannot save its
@@ -1138,7 +1151,49 @@ limiting a request's size or cutting a long upload. The images go on a
 | `KARTAL_REGISTRY_ADMIN_LISTEN` | `:5001` | The admin API, for the server only |
 | `KARTAL_REGISTRY_TIMEZONE` | `Europe/Istanbul` | The time zone the jobs' schedules are read in |
 | `KARTAL_REGISTRY_SOURCES_KEY` / `_FILE` | *(made of the shared secret)* | What the sources' passwords are sealed with; changing it means typing them again |
+| `KARTAL_REGISTRY_SCANNER_URL` | — | The vulnerability scanner, such as `http://kartal-scanner:8090`; without it nothing is scanned |
+| `KARTAL_REGISTRY_SCANNER_SECRET` / `_FILE` | — | The secret it shares with the scanner, at least 16 characters |
+| `KARTAL_REGISTRY_SCAN_ADDRESS` | *(`KARTAL_REGISTRY_PUBLIC_URL`)* | Where the scanner pulls images from, such as `http://kartal-registry:5000` inside the cluster |
+| `KARTAL_REGISTRY_SCAN_WORKERS` | `2` | How many images are scanned at once |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+
+### The vulnerability scanner
+
+`kartal-scanner` is built on Trivy's own image (`Dockerfile.scanner`,
+`make scanner-image`), pinned to a version: 0.69.3 by default. Trivy's
+0.69.4, 0.69.5 and 0.69.6 were malicious builds, published when its
+release process was broken into in March 2026; the scanner refuses to run
+them. Pin the image by digest as well once you have checked it.
+
+To install it, add a `scanner-secret` key to the server's Secret, apply
+`deploy/scanner`, and give the registry `KARTAL_REGISTRY_SCANNER_URL`,
+`KARTAL_REGISTRY_SCANNER_SECRET_FILE` (the same key) and
+`KARTAL_REGISTRY_SCAN_ADDRESS`:
+
+```sh
+kubectl -n $NS patch secret kartal-server -p '{"stringData":{"scanner-secret":"<secret>"}}'
+kubectl apply -k deploy/scanner
+```
+
+Trivy gets its vulnerability databases from `ghcr.io` by default. Where
+the internet is out of reach, a replication rule elsewhere can copy
+`aquasecurity/trivy-db` (tag `2`) and `aquasecurity/trivy-java-db` (tag
+`1`) into a public project `trivy` of the registry, and the scanner reads
+them there. Its cache (5 GiB, `deploy/scanner/cache.yaml`) keeps the
+databases and what Trivy learned of each layer, so that a layer shared by
+many images is read once.
+
+| Variable (`kartal-scanner`) | Default | Meaning |
+|---|---|---|
+| `KARTAL_SCANNER_SECRET` / `_FILE` | — | The secret the registry calls it with |
+| `KARTAL_SCANNER_LISTEN` | `:8090` | Its API, for the registry only |
+| `KARTAL_SCANNER_CACHE_DIR` | `/var/cache/trivy` | Trivy's databases and layer cache |
+| `KARTAL_SCANNER_WORKERS` | `2` | Scans at once; others wait their turn |
+| `KARTAL_SCANNER_TIMEOUT` | `15m` | The longest a scan may take |
+| `KARTAL_SCANNER_DB_REPOSITORY` | *(Trivy's, on ghcr.io)* | Where the vulnerability DB comes from, such as `registry.example.org/trivy/trivy-db:2` |
+| `KARTAL_SCANNER_JAVA_DB_REPOSITORY` | *(Trivy's, on ghcr.io)* | Where the Java DB comes from, such as `registry.example.org/trivy/trivy-java-db:1` |
+| `KARTAL_SCANNER_OFFLINE` | `false` | Asks the internet nothing while scanning (such as Maven Central about unknown jars) |
+| `KARTAL_SCANNER_TRIVY` | `trivy` | The trivy binary |
 
 ## MCP: AI assistants and agents
 

@@ -931,3 +931,12 @@ table.sizing td > div + div { margin-top: 2px; }
 .reg-keep input { width: 80px; }
 @media (max-width: 640px) { .reg-rule { grid-template-columns: 1fr 1fr; } }
 .reg-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.reg-sevbar { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.reg-sev { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 18px; white-space: nowrap; border: 1px solid var(--line); }
+.reg-sev-critical { background: var(--bad); border-color: var(--bad); color: #fff; }
+.reg-sev-high { color: var(--bad); border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.reg-sev-medium { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.reg-sev-low { color: var(--muted, inherit); }
+.reg-sev-unknown { color: var(--muted, inherit); border-style: dashed; }
+.reg-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; }
+.reg-filters input[type=text] { min-width: 180px; flex: 1; max-width: 320px; }

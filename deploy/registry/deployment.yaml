@@ -44,6 +44,15 @@ spec:
             # clients ask for /v2/ there. Sign-in tokens are given below it.
             - name: KARTAL_REGISTRY_PUBLIC_URL
               value: https://registry.example.org
+            # With the vulnerability scanner (deploy/scanner), and the
+            # scanner-secret item below:
+            # - name: KARTAL_REGISTRY_SCANNER_URL
+            #   value: http://kartal-scanner:8090
+            # - name: KARTAL_REGISTRY_SCANNER_SECRET_FILE
+            #   value: /etc/kartal/scanner-secret
+            # Where the scanner pulls from, inside the cluster.
+            # - name: KARTAL_REGISTRY_SCAN_ADDRESS
+            #   value: http://kartal-registry:5000
           ports:
             # docker push and pull, and /token: the one to publish.
             - name: registry
@@ -86,6 +95,8 @@ spec:
             items:
               - key: registry-secret
                 path: registry-secret
+              # - key: scanner-secret
+              #   path: scanner-secret
         - name: data
           persistentVolumeClaim:
             claimName: kartal-registry-data

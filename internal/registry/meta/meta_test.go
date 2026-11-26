@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/manifest"
+	"github.com/BerkeKartal/kartal-gozu/internal/scanner"
 )
 
 const (
@@ -542,4 +543,40 @@ func TestJobsOfEachKind(t *testing.T) {
 	if len(d.Jobs(0)) != keepJobsEach+1 {
 		t.Errorf("after reopening: %d", len(d.Jobs(0)))
 	}
+}
+
+func TestScansAreKept(t *testing.T) {
+	dir := t.TempDir()
+	d := open(t, dir)
+	if err := d.CreateProject(Project{Name: "shop"}, "root"); err != nil {
+		t.Fatal(err)
+	}
+	d.PutArtifact("shop/web", image(dM), "1", "ci")
+	d.PutArtifact("shop/api", image(dM), "", "ci")
+	if got := d.Holders(dM); len(got) != 2 || got[0] != "shop/api" {
+		t.Errorf("holders %v", got)
+	}
+	if got := d.Images("image"); len(got) != 1 || got[dM] != "shop/api" {
+		t.Errorf("images %v", got)
+	}
+	at := time.Date(2026, 11, 26, 5, 0, 0, 0, time.UTC)
+	sum := scanner.Summary{Critical: 2, Fixable: 1}
+	d.PutScan(Scan{Digest: dM, Repo: "shop/web", Status: ScanDone, Scanned: &at, Summary: &sum, Scanner: "Trivy 0.69.3"})
+	d.PutScan(Scan{Digest: dS, Repo: "shop/web", Status: ScanQueued})
+	d.DeleteScan(dS)
+	// From the log, then from the snapshot.
+	for round := 0; round < 2; round++ {
+		other := open(t, dir)
+		sc, ok := other.Scan(dM)
+		if !ok || sc.Summary == nil || sc.Summary.Critical != 2 || sc.Scanner != "Trivy 0.69.3" || !sc.Scanned.Equal(at) {
+			t.Errorf("round %d: %+v %v", round, sc, ok)
+		}
+		if _, ok := other.Scan(dS); ok || len(other.Scans()) != 1 {
+			t.Errorf("round %d: a forgotten scan came back", round)
+		}
+		if round == 0 {
+			other.Close()
+		}
+	}
+	d.Close()
 }

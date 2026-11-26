@@ -68,6 +68,7 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/registry/robots/{name}", s.signedIn(s.robotUpdate))
 	mux.HandleFunc("POST /api/v1/registry/robots/{name}/rotate", s.signedIn(s.robotRotate))
 	mux.HandleFunc("DELETE /api/v1/registry/robots/{name}", s.signedIn(s.robotRemove))
+	s.routeRegistryScans(mux)
 }
 
 // registrySecret tells whether a call carries the secret the registry and
@@ -363,8 +364,17 @@ func (s *Server) registryInfo(w http.ResponseWriter, r *http.Request) {
 	status, b, err := s.registryCall(r, http.MethodGet, "/admin/v1/status", nil, nil)
 	if err != nil || status != http.StatusOK {
 		out["problem"] = "the image registry could not be reached"
-	} else if u.RegistryAdmin() {
-		out["status"] = json.RawMessage(b)
+	} else {
+		// Everyone may know whether images are scanned; the rest is the
+		// registry's admins'.
+		var st struct {
+			Scanner bool `json:"scanner"`
+		}
+		json.Unmarshal(b, &st)
+		out["scanner"] = st.Scanner
+		if u.RegistryAdmin() {
+			out["status"] = json.RawMessage(b)
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -434,7 +444,7 @@ func (s *Server) registryUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// A field left out stays as it is.
 	var body meta.ProjectChange
-	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes}`) {
+	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush"}`) {
 		return
 	}
 	// A project's admins set its rules; its room is the registry's admins'
@@ -562,7 +572,7 @@ func (s *Server) registryStartJob(w http.ResponseWriter, r *http.Request) {
 		Project string `json:"project,omitempty"`
 		Rule    string `json:"rule,omitempty"`
 	}
-	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention"|"replication", "dryRun", "project", "rule"}`) {
+	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention"|"replication"|"scan", "dryRun", "project", "rule"}`) {
 		return
 	}
 	// A project's admins apply its retention rules; the rest is the

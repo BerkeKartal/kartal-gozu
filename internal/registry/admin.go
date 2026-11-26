@@ -1,12 +1,14 @@
 package registry
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/blobstore"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/manifest"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/meta"
+	"github.com/BerkeKartal/kartal-gozu/internal/scanner"
 )
 
 // UserHeader names the person on whose behalf kartal-server calls the
@@ -55,6 +58,11 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("PUT /admin/v1/rules/{id}", s.updateRule)
 	mux.HandleFunc("DELETE /admin/v1/rules/{id}", s.deleteRule)
 	mux.HandleFunc("DELETE /admin/v1/jobs/{id}", s.cancelJob)
+	mux.HandleFunc("POST /admin/v1/scan", s.startScan)
+	mux.HandleFunc("GET /admin/v1/vulnerabilities", s.vulnerabilities)
+	mux.HandleFunc("GET /admin/v1/sbom", s.sbom)
+	mux.HandleFunc("GET /admin/v1/scanner", s.scannerStatus)
+	mux.HandleFunc("POST /admin/v1/scanner/db", s.updateScannerDB)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		tok := ""
@@ -105,7 +113,8 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		repos += p.Repositories
 		artifacts += p.Artifacts
 	}
-	out := map[string]any{"projects": len(projects), "repositories": repos, "artifacts": artifacts, "blobs": blobs, "size": size}
+	out := map[string]any{"projects": len(projects), "repositories": repos, "artifacts": artifacts, "blobs": blobs, "size": size,
+		"scanner": s.cfg.Scanner != nil}
 	if err := s.cfg.DB.Healthy(); err != nil {
 		out["problem"] = "the metadata snapshot fails: " + err.Error()
 	}
@@ -290,6 +299,8 @@ type ArtifactSummary struct {
 	Total int64 `json:"total"`
 	// Referrers counts the signatures, SBOMs and other artifacts about it.
 	Referrers int `json:"referrers"`
+	// Scan is what is known of its vulnerabilities, or of its images'.
+	Scan *ScanView `json:"scan,omitempty"`
 }
 
 // total sums an artifact and what it refers to.
@@ -328,7 +339,8 @@ func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]ArtifactSummary, 0, len(arts))
 	for _, a := range arts {
-		out = append(out, ArtifactSummary{ArtifactInfo: a, Total: total(a.Artifact, byDigest), Referrers: refs[a.Digest]})
+		out = append(out, ArtifactSummary{ArtifactInfo: a, Total: total(a.Artifact, byDigest), Referrers: refs[a.Digest],
+			Scan: s.scanView(a.Artifact, byDigest)})
 	}
 	var info meta.RepoInfo
 	for _, ri := range s.cfg.DB.Repositories(meta.ProjectOf(name)) {
@@ -390,8 +402,8 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	if referrers == nil {
 		referrers = []meta.Artifact{}
 	}
-	d := ArtifactDetail{ArtifactSummary: ArtifactSummary{ArtifactInfo: info, Total: total(info.Artifact, byDigest), Referrers: len(referrers)},
-		ReferrerList: referrers}
+	d := ArtifactDetail{ArtifactSummary: ArtifactSummary{ArtifactInfo: info, Total: total(info.Artifact, byDigest), Referrers: len(referrers),
+		Scan: s.scanView(info.Artifact, byDigest)}, ReferrerList: referrers}
 	if f, _, err := s.cfg.Store.Open(digest); err == nil {
 		b, err := io.ReadAll(io.LimitReader(f, manifest.MaxSize))
 		f.Close()
@@ -404,7 +416,8 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, m := range info.Manifests {
 		if child, ok := byDigest[m.Digest]; ok {
-			d.Children = append(d.Children, ArtifactSummary{ArtifactInfo: meta.ArtifactInfo{Artifact: child, Tags: []string{}}, Total: total(child, nil)})
+			d.Children = append(d.Children, ArtifactSummary{ArtifactInfo: meta.ArtifactInfo{Artifact: child, Tags: []string{}}, Total: total(child, nil),
+				Scan: s.scanView(child, byDigest)})
 		}
 	}
 	adminJSON(w, http.StatusOK, d)
@@ -584,4 +597,163 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		keep = func(project string) bool { return project == p }
 	}
 	adminJSON(w, http.StatusOK, s.cfg.DB.Events(keep, limit))
+}
+
+// ---------------------------------------------------------------- scans
+
+func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Repo   string `json:"repo"`
+		Digest string `json:"digest"`
+	}
+	if !readBody(w, r, &in) {
+		return
+	}
+	images, err := s.QueueScan(in.Repo, in.Digest, actor(r))
+	switch {
+	case errors.Is(err, ErrNoScanner):
+		adminError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, meta.ErrNotFound):
+		adminError(w, http.StatusNotFound, "no such artifact")
+	case errors.Is(err, ErrNotScannable):
+		adminError(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		s.adminInternal(w, "queueing a scan", err)
+	default:
+		adminJSON(w, http.StatusAccepted, map[string]any{"images": images})
+	}
+}
+
+// VulnerabilityView is an image's last scan with its report.
+type VulnerabilityView struct {
+	Scan ScanView `json:"scan"`
+	// Report is what the last scan that ended found, if one did; SBOM says
+	// whether the image's SBOM is there.
+	Report *scanner.Report `json:"report,omitempty"`
+	SBOM   bool            `json:"sbom"`
+}
+
+// scannedImage reads ?repo= and ?digest=, an image of that repository,
+// answering the request itself when it is not one.
+func (s *Server) scannedImage(w http.ResponseWriter, r *http.Request) (meta.Artifact, bool) {
+	q := r.URL.Query()
+	a, ok := s.cfg.DB.Artifact(q.Get("repo"), q.Get("digest"))
+	if !ok {
+		adminError(w, http.StatusNotFound, "no such artifact")
+		return a, false
+	}
+	if a.Kind != "image" {
+		adminError(w, http.StatusBadRequest, "only images are scanned; an index's images are, each")
+		return a, false
+	}
+	return a, true
+}
+
+func (s *Server) vulnerabilities(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.scannedImage(w, r)
+	if !ok {
+		return
+	}
+	sc, known := s.cfg.DB.Scan(a.Digest)
+	out := VulnerabilityView{Scan: viewOf(sc, known)}
+	res, err := s.readReport(a.Digest)
+	switch {
+	case err == nil:
+		out.Report, out.SBOM = &res.Report, len(res.SBOM) > 0
+	case !errors.Is(err, os.ErrNotExist):
+		s.adminInternal(w, "reading a scan's report", err)
+		return
+	}
+	adminJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) sbom(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.scannedImage(w, r)
+	if !ok {
+		return
+	}
+	res, err := s.readReport(a.Digest)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && len(res.SBOM) == 0) {
+		adminError(w, http.StatusNotFound, "the image has no SBOM yet; scan it")
+		return
+	}
+	if err != nil {
+		s.adminInternal(w, "reading an SBOM", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.cyclonedx+json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(res.SBOM)
+}
+
+// ScannerView is the scanner as the registry sees it.
+type ScannerView struct {
+	// Configured says the registry has a scanner; Status is what it says
+	// of itself, or Problem why it could not be asked.
+	Configured bool            `json:"configured"`
+	Status     *scanner.Status `json:"status,omitempty"`
+	Problem    string          `json:"problem,omitempty"`
+	// Queued are the images waiting or being scanned; Address where the
+	// scanner pulls them from.
+	Queued  int    `json:"queued"`
+	Address string `json:"address,omitempty"`
+}
+
+func (s *Server) scannerView(st scanner.Status, err error) ScannerView {
+	v := ScannerView{Configured: s.cfg.Scanner != nil, Queued: s.QueuedScans()}
+	if host, insecure, aerr := s.scanTarget(); aerr == nil {
+		v.Address = "https://" + host
+		if insecure {
+			v.Address = "http://" + host
+		}
+	}
+	if err != nil {
+		v.Problem = err.Error()
+		if st.Scanner != "" {
+			v.Status = &st
+		}
+	} else if v.Configured {
+		v.Status = &st
+	}
+	return v
+}
+
+func (s *Server) scannerStatus(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Scanner == nil {
+		adminJSON(w, http.StatusOK, s.scannerView(scanner.Status{}, nil))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	st, err := s.cfg.Scanner.Status(ctx)
+	adminJSON(w, http.StatusOK, s.scannerView(st, err))
+}
+
+// updateScannerDB has the scanner get its databases anew. That takes
+// minutes; it answers at once, and the scanner's status tells how it goes.
+func (s *Server) updateScannerDB(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Scanner == nil {
+		adminError(w, http.StatusConflict, ErrNoScanner.Error())
+		return
+	}
+	by := actor(r)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+		defer cancel()
+		detail := ""
+		st, err := s.cfg.Scanner.UpdateDB(ctx)
+		if err != nil {
+			s.cfg.Log.Warn("registry: updating the scanner's databases", "err", err)
+			detail = "failed: " + err.Error()
+		} else {
+			detail = st.Scanner
+			if st.DB != nil && st.DB.UpdatedAt != nil {
+				detail += ", DB of " + st.DB.UpdatedAt.UTC().Format(time.DateTime)
+			}
+		}
+		if err := s.cfg.DB.Record(by, "scanner-db", "", "", "", "", detail); err != nil {
+			s.cfg.Log.Warn("registry: recording a DB update", "err", err)
+		}
+	}()
+	adminJSON(w, http.StatusAccepted, map[string]bool{"started": true})
 }

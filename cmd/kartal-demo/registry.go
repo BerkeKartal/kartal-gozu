@@ -69,8 +69,9 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	// early.
 	ctx, cancel := context.WithCancel(ctx)
 	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
+	// A scanner that makes up what it finds, the same each time.
 	reg := registry.New(registry.Config{Store: store, DB: db, Auth: server, Running: server, SourcesKey: registry.SourcesKey(secret),
-		PublicURL: "http://" + public, Log: log})
+		PublicURL: "http://" + public, Log: log, Scanner: newDemoScanner(), ScanDir: filepath.Join(dir, "scans")})
 	// What happens in it goes to the server's audit log.
 	events := registry.NewForwarder(serverURL, secret, log)
 	db.SetOnEvent(events.Hand)
@@ -99,7 +100,7 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	for _, job := range []struct {
 		kind string
 		dry  bool
-	}{{registry.JobVerify, false}, {registry.JobGC, true}} {
+	}{{registry.JobVerify, false}, {registry.JobGC, true}, {registry.JobScan, false}} {
 		if _, err := reg.StartJob(job.kind, job.dry, "", "ayse"); err != nil {
 			log.Warn("demo registry: a first job", "err", err)
 		}
@@ -349,12 +350,12 @@ func seedRegistry(store blobstore.Store, db *meta.DB, log *slog.Logger) error {
 	}
 
 	ago(120)
-	check(db.CreateProject(meta.Project{Name: "library", Public: true, Description: "Base images anyone may pull"}, "ayse"))
+	check(db.CreateProject(meta.Project{Name: "library", Public: true, Description: "Base images anyone may pull", ScanOnPush: true}, "ayse"))
 	ago(90)
 	check(db.CreateProject(meta.Project{Name: "team-0", Description: "The web team's images and charts",
 		// Released versions stay as they were pushed; of the rest, the 3
 		// latest builds stay, and untagged ones for a week.
-		Immutable: []string{"[0-9]*"}, Quota: 2 << 30, Retention: []meta.RetentionRule{
+		Immutable: []string{"[0-9]*"}, Quota: 2 << 30, ScanOnPush: true, Retention: []meta.RetentionRule{
 			{Tags: "**", Keep: registry.KeepLatestPushed, Count: 3},
 			{Untagged: true, Keep: registry.KeepPushedWithin, Days: 7},
 		}}, "ayse"))
