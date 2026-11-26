@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kartal-registry
+  labels:
+    app.kubernetes.io/name: kartal-registry
+spec:
+  selector:
+    app.kubernetes.io/name: kartal-registry
+  ports:
+    # Publish this one (deploy/examples/traefik-registry.yaml).
+    - name: registry
+      port: 5000
+      targetPort: registry
+    # The server's KARTAL_REGISTRY_URL: http://kartal-registry:5001. Never
+    # publish it.
+    - name: admin
+      port: 5001
+      targetPort: admin

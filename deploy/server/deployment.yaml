@@ -63,6 +63,15 @@ spec:
             #     Platform-Oncall => operator
             #     Team-Payments => operator@production/payments-*+staging
             #     Developers => viewer
+            # The image registry (deploy/registry): its admin API, the secret
+            # both share (a registry-secret key in this Secret), and where
+            # people push and pull, which the UI's commands show.
+            # - name: KARTAL_REGISTRY_URL
+            #   value: http://kartal-registry:5001
+            # - name: KARTAL_REGISTRY_SECRET_FILE
+            #   value: /etc/kartal/registry-secret
+            # - name: KARTAL_REGISTRY_PUBLIC
+            #   value: registry.example.org
             # Where people open the UI; notifications link to it.
             # - name: KARTAL_PUBLIC_URL
             #   value: https://panel.example.org/devops/kartal

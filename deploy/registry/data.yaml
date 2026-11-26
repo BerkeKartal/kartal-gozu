@@ -1,0 +1,15 @@
+# The registry's blobs (image layers, configs, manifests) and its metadata.
+# Layers that images share are kept once. Size it for the images pushed and
+# kept; without a retention policy every push stays.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kartal-registry-data
+  labels:
+    app.kubernetes.io/name: kartal-registry
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: standard
+  resources:
+    requests:
+      storage: 50Gi

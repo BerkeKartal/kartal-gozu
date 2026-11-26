@@ -7,6 +7,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/kartal-server ./cmd/kartal-server
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/kartal-agent ./cmd/kartal-agent
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/kartal-registry ./cmd/kartal-registry
 
 test:
 	go vet ./...

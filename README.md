@@ -86,6 +86,11 @@ tunnel), and the server works under any URL path without configuration.
   server keeps itself, or with Active Directory or another LDAP directory,
   whose groups give them their roles. Every change is recorded with who made
   it.
+- **An image registry of its own.** `docker push` and `docker pull` to
+  projects, signed in with the same users, passwords and directory, or with
+  robot accounts for CI and the nodes: multi-arch images, Helm charts,
+  signatures and SBOMs, each artifact's layers and the steps that built
+  them, and every push in the audit log. Optional, and a binary of its own.
 - **AI assistants through MCP.** Claude, Copilot or any other MCP client can
   look into the clusters (lists, logs, events, any object, alerts, changes,
   metrics) and, with an operator's token, restart, scale or roll back: with
@@ -139,6 +144,11 @@ minutes, a new build of one app in production. Options:
 - `-namespaces 500` makes the main cluster big (1,500 pods) so you can check
   the speed.
 - `-listen 127.0.0.1:9090` serves on another address.
+- `-registry=false` leaves out the [image registry](#image-registry), which
+  the demo otherwise runs with a public project of base images and a team's
+  signed builds. It prints the registry's address; `docker pull` works
+  anonymously from the public project, and pushing needs `-admin-token` or
+  `-ldap`.
 
 ## The web UI
 
@@ -147,7 +157,8 @@ objects of every cluster (workloads, nodes, logs, YAML, versions, changes),
 and **Observe**, what is watched over time (dashboards, Explore, the metrics
 apps expose, alerts and URL checks, in an accent of their own). The address
 `#/` asks which one to open; the top bar switches between them, each opening
-where it was left.
+where it was left. A server with an [image registry](#image-registry) has a
+third space, **Images**, for it.
 
 - **Top bar:** the Clusters | Observe switch, and each cluster with its
   status (online, offline or never connected) and a count of its problems.
@@ -357,8 +368,8 @@ docker push registry.example.org/library/kartal-gozu:0.1.0
 
 To use a private mirror, point the base images at it with
 `--build-arg GO_IMAGE=...` and `--build-arg RUNTIME_IMAGE=...`. One image holds
-both programs. It starts `kartal-server` by default, and the agent deployment
-runs `kartal-agent`.
+all three programs. It starts `kartal-server` by default, the agent
+deployment runs `kartal-agent`, and the registry's runs `kartal-registry`.
 
 ### 2. Server
 
@@ -463,6 +474,7 @@ name that starts so):
 | `operator@production/payments` | operator in one namespace |
 | `operator@production/team-*+staging` | operator in production's `team-…` namespaces and in all of staging |
 | `viewer@*/monitoring` | viewer of the `monitoring` namespace in every cluster |
+| `operator@registry:team-a` | operator of the [image registry](#image-registry)'s project `team-a`, and of no cluster |
 
 Someone with roles only in some namespaces sees only those namespaces, their
 objects and their alerts; the clusters list counts only what they may see.
@@ -471,6 +483,10 @@ role over a whole cluster (`cluster` or `cluster/*`). The audit log shows
 each operator the entries of the places where they are operators. The
 server's own settings (e-mail, URL checks, test notifications) need an admin
 role everywhere.
+
+A scope `registry:project` is a project of the image registry; it reaches
+no cluster, and no cluster's scope reaches the registry. Someone with
+roles in the registry alone sees only it.
 
 ### Tokens
 
@@ -975,6 +991,9 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 | `KARTAL_DATA_DIR` | — | Directory of the [metric store](#metric-store), of the workloads' usage behind right-sizing (`sizing.json`) and of the alerts (`alerts.json`); without it there is no store, and the usage and the alerts are kept in memory |
 | `KARTAL_VERSION_LOOKUPS` | `true` | Let the browser ask GitHub and OSV.dev what is newer than what runs, for the [Updates & security](#the-web-ui) page; the server asks nothing itself |
 | `KARTAL_UPDATE_REPO` | `BerkeKartal/kartal-gozu` | The GitHub repository (`owner/name`) the server is built from, whose commits it is compared with |
+| `KARTAL_REGISTRY_URL` | — | The [image registry](#image-registry)'s admin API, such as `http://kartal-registry:5001`; without it there is no registry |
+| `KARTAL_REGISTRY_SECRET` / `_FILE` | — | The secret the server and the registry share, at least 16 characters |
+| `KARTAL_REGISTRY_PUBLIC` | — | Where people push and pull, such as `registry.example.org`, shown in the UI's commands |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ### Agent
@@ -1003,6 +1022,66 @@ They are kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 
 CPU and memory usage need [metrics-server](https://github.com/kubernetes-sigs/metrics-server)
 in the cluster. Without it, everything else still works.
+
+## Image registry
+
+`kartal-registry` is an image registry of Kartal Gözü's own, written from
+the OCI Distribution specification with nothing but Go's standard library.
+It holds images (multi-arch too), Helm charts and any OCI artifact, and the
+signatures and SBOMs about them (the referrers API). The server says who
+signs in to it, keeps its audit log and shows it in the UI, so it has the
+users, passwords, directory and roles the rest has.
+
+- **Projects.** Every repository is in a project, its name's first part:
+  `team-a/web`. Grants give roles in projects: `viewer@registry:team-a`
+  pulls, `operator@registry:team-a` also pushes, tags and deletes, and
+  `admin@registry:team-a` changes the project. A public project lets anyone
+  pull without signing in. The registry's admins (admin everywhere, or
+  `admin@registry:*`) make projects and robot accounts.
+- **Signing in.** `docker login registry.example.org` takes a user name and
+  password (the server's own users, or the directory's), a user's token as
+  the password, or a robot account.
+- **Robot accounts**, `robot$name`, are for CI and for the nodes that pull:
+  they sign in to the registry only, with grants of registry projects only.
+  Their secret is shown once, when made or rotated, with the `docker login`
+  and the `imagePullSecret` to use it; only its digest is kept. They can
+  expire and be disabled.
+- **In the UI**, the Images space lists the projects one may see; a
+  project's repositories and what happened in it; a repository's artifacts,
+  with their tags, platforms, size, pushes and pulls; and an artifact's
+  manifest, labels (with a link to the commit it was built from, out of its
+  `org.opencontainers.image.source` and `.revision` labels), layers and the
+  steps that built them, and the signatures and SBOMs about it.
+- **Storage** is a volume: blobs are kept once, by digest, however many
+  repositories hold them; metadata is kept in memory and written to a log
+  on the same volume before a change is answered. A push is never half
+  there after a crash.
+
+To install it, add a `registry-secret` key (`openssl rand -hex 24`) to the
+server's Secret, uncomment the `KARTAL_REGISTRY_*` variables in
+`deploy/server/deployment.yaml`, and set `KARTAL_REGISTRY_PUBLIC_URL` in
+`deploy/registry/deployment.yaml`:
+
+```sh
+kubectl -n $NS patch secret kartal-server -p '{"stringData":{"registry-secret":"<secret>"}}'
+kubectl apply -k deploy/server
+kubectl apply -k deploy/registry
+```
+
+A registry lives at the root of a host, and its layers are large: see
+`deploy/examples/traefik-registry.yaml` for publishing it, with nothing
+limiting a request's size or cutting a long upload. The images go on a
+50 GiB volume claim (`deploy/registry/data.yaml`).
+
+| Variable (`kartal-registry`) | Default | Meaning |
+|---|---|---|
+| `KARTAL_SERVER_URL` | — | The server, which says who signs in |
+| `KARTAL_REGISTRY_SECRET` / `_FILE` | — | The secret it shares with the server |
+| `KARTAL_REGISTRY_PUBLIC_URL` | *(from each request)* | Where clients reach it, such as `https://registry.example.org` |
+| `KARTAL_REGISTRY_DATA_DIR` | `/var/lib/kartal-registry` | Its blobs and metadata |
+| `KARTAL_REGISTRY_LISTEN` | `:5000` | docker's API and the sign-in |
+| `KARTAL_REGISTRY_ADMIN_LISTEN` | `:5001` | The admin API, for the server only |
+| `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## MCP: AI assistants and agents
 
@@ -1226,6 +1305,14 @@ are `api/v1/`, `agent/v1/` and `_ui/`.
 - MCP clients sign in with the tokens people use, have their roles and leave
   the same audit log. No tool edits YAML or runs commands in containers. A
   request that a page of another site sends through a browser is refused.
+- The image registry gives out short-lived tokens, five minutes long, for
+  exactly the repositories and actions asked and allowed. A repository
+  reads and refers to only the blobs pushed or mounted into it, so a digest
+  known from elsewhere opens nothing; an upload belongs to the repository
+  it was started in. Its admin API takes the secret it shares with the
+  server, and the NetworkPolicy lets only the server reach it. Robot
+  secrets are kept as digests, and a token of an open server (with no
+  users) never signs in to it.
 - Containers run as a non-root user, with a read-only file system and all
   Linux capabilities dropped.
 
@@ -1233,7 +1320,7 @@ are `api/v1/`, `agent/v1/` and `_ui/`.
 
 ```sh
 make test    # go vet, then the tests with the race detector
-make build   # both binaries into bin/
+make build   # the three binaries into bin/
 make demo    # the UI against simulated clusters, on http://127.0.0.1:8080/
 ```
 

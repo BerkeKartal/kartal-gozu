@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The image registry, next to the server: the same namespace, the same
+# image, and the server's Secret, which holds the secret both share
+# (registry-secret).
+namespace: kartal-gozu
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  # Where its images live (see data.yaml).
+  - data.yaml
+  # Only the server reaches its admin API; leave it out where nothing
+  # enforces NetworkPolicies.
+  - networkpolicy.yaml
+
+images:
+  - name: kartal-gozu
+    newName: kartal-gozu # e.g. registry.example.org/library/kartal-gozu
+    newTag: latest

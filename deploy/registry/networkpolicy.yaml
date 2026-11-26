@@ -1,0 +1,22 @@
+# Anyone may reach docker's port (the registry checks who signs in); only
+# the server reaches the admin API, which acts for whoever the server says.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kartal-registry
+  labels:
+    app.kubernetes.io/name: kartal-registry
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kartal-registry
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - port: 5000
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kartal-server
+      ports:
+        - port: 5001

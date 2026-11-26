@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kartal-registry
+  labels:
+    app.kubernetes.io/name: kartal-registry
+spec:
+  # The metadata lives in memory and in a log on one volume, so run exactly
+  # one replica.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kartal-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kartal-registry
+    spec:
+      # It needs nothing of the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # The image runs as 65532; the data volume is made writable for it.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry
+          image: kartal-gozu
+          command: ["/usr/local/bin/kartal-registry"]
+          env:
+            # The server, which says who signs in and keeps the audit log.
+            - name: KARTAL_SERVER_URL
+              value: http://kartal-server:8080
+            # The secret the server and the registry share (at least 16
+            # characters), the server's KARTAL_REGISTRY_SECRET_FILE too.
+            - name: KARTAL_REGISTRY_SECRET_FILE
+              value: /etc/kartal/registry-secret
+            - name: KARTAL_REGISTRY_DATA_DIR
+              value: /var/lib/kartal-registry
+            # Where docker and the nodes reach it, at the root of a host:
+            # clients ask for /v2/ there. Sign-in tokens are given below it.
+            - name: KARTAL_REGISTRY_PUBLIC_URL
+              value: https://registry.example.org
+          ports:
+            # docker push and pull, and /token: the one to publish.
+            - name: registry
+              containerPort: 5000
+            # The admin API, for the server only.
+            - name: admin
+              containerPort: 5001
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: registry
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: registry
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /etc/kartal
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/kartal-registry
+      volumes:
+        - name: secrets
+          secret:
+            secretName: kartal-server
+            items:
+              - key: registry-secret
+                path: registry-secret
+        - name: data
+          persistentVolumeClaim:
+            claimName: kartal-registry-data
