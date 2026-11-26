@@ -78,6 +78,10 @@ type Project struct {
 	Allowlist     []string `json:"allowlist,omitempty"`
 	// Store is the blob store its blobs go to; empty is DefaultStore.
 	Store string `json:"store,omitempty"`
+	// MovedFrom is the store a move takes the project's blobs from: until
+	// the move ends, a blob Store lacks is read there, and that store
+	// keeps the project's blobs.
+	MovedFrom string `json:"movedFrom,omitempty"`
 }
 
 // DefaultStore is the registry's own blob store, on its data volume.
@@ -412,8 +416,10 @@ type Job struct {
 	Kind   string `json:"kind"`
 	DryRun bool   `json:"dryRun,omitempty"`
 	// Project is the one project a job is about, if one; Rule the
-	// replication rule it runs, and RuleName the rule's name then.
+	// replication rule it runs, and RuleName the rule's name then; Store
+	// the blob store a move takes a project to.
 	Project  string `json:"project,omitempty"`
+	Store    string `json:"store,omitempty"`
 	Rule     string `json:"rule,omitempty"`
 	RuleName string `json:"ruleName,omitempty"`
 	// Progress is how far a running job got; it is not kept.
@@ -1076,6 +1082,9 @@ func (d *DB) UpdateProject(name string, ch ProjectChange, user string) (Project,
 		if to != p.Store {
 			if _, ok := d.stores[to]; to != "" && !ok {
 				return Project{}, fmt.Errorf("%w: no blob store %s", ErrNotFound, to)
+			}
+			if p.MovedFrom != "" {
+				return Project{}, fmt.Errorf("%w: the project is being moved from %s", ErrNotEmpty, p.MovedFrom)
 			}
 			for rn := range d.repos {
 				if ProjectOf(rn) == name {
@@ -1928,7 +1937,7 @@ func (d *DB) DeleteBlobStore(name, user string) error {
 		return ErrNotFound
 	}
 	for _, p := range d.projects {
-		if p.Store == name {
+		if p.Store == name || p.MovedFrom == name {
 			return fmt.Errorf("%w: the project %s keeps its blobs there", ErrInUse, p.Name)
 		}
 	}
@@ -1958,7 +1967,75 @@ func (d *DB) inStore(repo, store string) bool {
 		// collection is where they would be.
 		return store == DefaultStore
 	}
-	return p.StoreName() == store
+	return p.StoreName() == store || p.MovedFrom == store
+}
+
+// MoveProject points a project at another blob store, which its blobs
+// were copied to; the one they come from stays MovedFrom until EndMove.
+func (d *DB) MoveProject(name, to, user string) (Project, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	cur, ok := d.projects[name]
+	if !ok {
+		return Project{}, ErrNoProject
+	}
+	if to == DefaultStore {
+		to = ""
+	}
+	if _, ok := d.stores[to]; to != "" && !ok {
+		return Project{}, fmt.Errorf("%w: no blob store %s", ErrNotFound, to)
+	}
+	p := *cur
+	from := p.StoreName()
+	if p.Store == to {
+		return p, nil
+	}
+	p.Store, p.MovedFrom = to, from
+	if p.MovedFrom == p.StoreName() {
+		p.MovedFrom = ""
+	}
+	if err := d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-move", name, "", "", "", from+" → "+p.StoreName())); err != nil {
+		return Project{}, err
+	}
+	return p, nil
+}
+
+// EndMove ends a project's move: the store it came from has nothing of it
+// any more.
+func (d *DB) EndMove(name, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	cur, ok := d.projects[name]
+	if !ok {
+		return ErrNoProject
+	}
+	if cur.MovedFrom == "" {
+		return nil
+	}
+	p := *cur
+	from := p.MovedFrom
+	p.MovedFrom = ""
+	return d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-moved", name, "", "", "", from+" → "+p.StoreName()))
+}
+
+// ProjectBlobs are, with their sizes, the blobs a project's repositories
+// link and the manifests they have: what a move copies.
+func (d *DB) ProjectBlobs(project string) map[string]int64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string]int64{}
+	for name, r := range d.repos {
+		if ProjectOf(name) != project {
+			continue
+		}
+		for dg, n := range r.Blobs {
+			out[dg] = n
+		}
+		for dg, a := range r.Artifacts {
+			out[dg] = a.Size
+		}
+	}
+	return out
 }
 
 // InUseIn is InUse of the repositories whose blobs are in a blob store.

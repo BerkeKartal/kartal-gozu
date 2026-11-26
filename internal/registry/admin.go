@@ -425,13 +425,11 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	project, _ := s.cfg.DB.Project(meta.ProjectOf(repo))
 	d := ArtifactDetail{ArtifactSummary: ArtifactSummary{ArtifactInfo: info, Total: total(info.Artifact, byDigest), Referrers: len(referrers),
 		Scan: s.withPolicy(s.scanView(info.Artifact, byDigest), project, info.Artifact, byDigest)}, ReferrerList: referrers}
-	if st, _, err := s.storeOf(repo); err == nil {
-		if f, _, err := st.Open(digest); err == nil {
-			b, err := io.ReadAll(io.LimitReader(f, manifest.MaxSize))
-			f.Close()
-			if err == nil && json.Valid(b) {
-				d.Manifest = b
-			}
+	if f, _, err := s.openBlob(repo, digest); err == nil {
+		b, err := io.ReadAll(io.LimitReader(f, manifest.MaxSize))
+		f.Close()
+		if err == nil && json.Valid(b) {
+			d.Manifest = b
 		}
 	}
 	if info.Config != nil && manifest.IsImageConfig(info.Config.MediaType) {
@@ -554,15 +552,19 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 		DryRun  bool   `json:"dryRun"`
 		Project string `json:"project"`
 		Rule    string `json:"rule"`
+		Store   string `json:"store"`
 	}
 	if !readBody(w, r, &in) {
 		return
 	}
 	var j meta.Job
 	var err error
-	if in.Kind == JobReplication {
+	switch in.Kind {
+	case JobReplication:
 		j, err = s.StartReplication(in.Rule, in.DryRun, actor(r))
-	} else {
+	case JobMove:
+		j, err = s.StartMove(in.Project, in.Store, in.DryRun, actor(r))
+	default:
 		j, err = s.StartJob(in.Kind, in.DryRun, in.Project, actor(r))
 	}
 	switch {

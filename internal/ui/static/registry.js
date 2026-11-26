@@ -292,6 +292,7 @@ function projectPage(data, ui) {
   const reg = host(data.info);
   const actions = [
     mine >= RANK.admin ? button(t('reg.projectSettings'), () => projectDialog(ui, p, data.info)) : null,
+    admin && !p.movedFrom && p.repositories ? button(t('reg.store.moveProject'), () => moveDialog(ui, p)) : null,
     admin ? button(t('reg.deleteProject'), async () => {
       const ok = await ask({ title: t('reg.deleteProject'), message: t('reg.deleteProjectConfirm', p.name), confirm: t('reg.deleteProject'), danger: true });
       if (!ok) return;
@@ -319,6 +320,8 @@ function projectPage(data, ui) {
           p.immutable.map(x => h('span', { class: 'label-chip reg-tag' }, '🔒 ', x))) : null,
         p.scanOnPush && data.info && data.info.scanner ? h('div', { class: 'detail muted' }, t('reg.scansOnPush')) : null,
         p.store && p.store !== 'default' ? h('div', { class: 'detail muted' }, t('reg.store.kept', p.store)) : null,
+        p.movedFrom ? h('div', { class: 'detail status-warn' }, t('reg.store.moving', p.movedFrom, p.store || 'default'), ' ',
+          admin ? button(t('reg.store.goOn'), () => startMove(ui, p, p.store || 'default', false)) : null) : null,
         p.blockSeverity ? h('div', { class: 'detail status-warn' }, t('reg.blocksPulls', t('reg.sev.' + p.blockSeverity.toLowerCase())),
           p.allowlist && p.allowlist.length ? ' ' + t('reg.allowedCount', p.allowlist.length) : '') : null),
       h('div', { class: 'actions' }, actions)),
@@ -830,6 +833,10 @@ function jobSummary(ui, j) {
   }
   if (j.kind === 'replication' && r.started) {
     return t(r.dryRun ? 'reg.replDrySummary' : 'reg.replSummary', r.picked, r.copied, bytes(r.bytes), r.present, r.kept, r.failed);
+  }
+  if (j.kind === 'move' && r.started) {
+    return t(r.dryRun ? 'reg.moveDrySummary' : 'reg.moveSummary', r.project, r.from, r.to, r.blobs, r.copied, bytes(r.bytes), r.present,
+      (r.missing || []).length);
   }
   if (j.kind === 'scan' && r.started) {
     return t('reg.scanSummary', r.scanned || 0, r.failed || 0, r.critical || 0, r.high || 0) + (r.dbError ? ' · ' + t('reg.dbNotUpdated') : '');
@@ -1523,4 +1530,38 @@ function storeDialog(ui, cur) {
     h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
   const close = modal(form);
   (editing ? quota : name).focus();
+}
+
+// startMove starts a project's move to a store, or its dry run, and shows
+// how it goes.
+async function startMove(ui, p, store, dryRun) {
+  try {
+    const j = await ui.api('registry/jobs', { method: 'POST', body: { kind: 'move', project: p.name, store, dryRun } });
+    jobDialog(ui, j.id, ui.t('reg.store.moveTitle', p.name, store));
+  } catch (e) {
+    ui.toast(e.message, true);
+  }
+}
+
+// moveDialog moves a project with repositories to another blob store.
+function moveDialog(ui, p) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const here = p.store || 'default';
+  const store = h('select', { disabled: true });
+  const note = formNote();
+  api('registry/stores').then(list => {
+    const others = list.filter(x => x.name !== here);
+    store.replaceChildren(...others.map(x => h('option', { value: x.name }, x.name + ' (' + t('reg.store.kind.' + x.kind) + ')')));
+    store.disabled = !others.length;
+    if (!others.length) note.say(t('reg.store.noOther'), 'bad');
+  }).catch(e => note.say(e.message, 'bad'));
+  const box = h('div', { class: 'dialog' }, h('h2', null, t('reg.store.moveProject')),
+    h('p', { class: 'muted' }, t('reg.store.moveHint', p.name, here)),
+    dialogField(t('reg.store.moveTo'), store),
+    note,
+    h('div', { class: 'dialog-actions' },
+      button(t('cancel'), () => close()),
+      button(t('reg.retentionDry'), () => { if (!store.disabled) { close(); startMove(ui, p, store.value, true); } }),
+      h('button', { type: 'button', class: 'btn primary', onclick: () => { if (!store.disabled) { close(); startMove(ui, p, store.value, false); } } }, t('reg.store.moveRun'))));
+  const close = modal(box);
 }

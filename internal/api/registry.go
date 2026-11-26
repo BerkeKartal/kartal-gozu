@@ -578,8 +578,9 @@ func (s *Server) registryStartJob(w http.ResponseWriter, r *http.Request) {
 		DryRun  bool   `json:"dryRun"`
 		Project string `json:"project,omitempty"`
 		Rule    string `json:"rule,omitempty"`
+		Store   string `json:"store,omitempty"`
 	}
-	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention"|"replication"|"scan", "dryRun", "project", "rule"}`) {
+	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention"|"replication"|"scan"|"move", "dryRun", "project", "rule", "store"}`) {
 		return
 	}
 	// A project's admins apply its retention rules; the rest is the

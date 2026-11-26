@@ -54,18 +54,13 @@ func (s *Server) blob(w http.ResponseWriter, r *http.Request, g *grant, t target
 				s.cfg.Log.Warn("registry: renewing a link", "repo", t.name, "digest", t.ref, "err", err)
 			}
 		}
-		st, _, err := s.storeOf(t.name)
-		if err != nil {
-			s.noStore(w, err)
-			return
-		}
-		f, size, err := st.Open(t.ref)
+		f, size, err := s.openBlob(t.name, t.ref)
 		if errors.Is(err, blobstore.ErrNotFound) {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UNKNOWN", "%s is gone from the store", t.ref))
 			return
 		}
 		if err != nil {
-			s.internal(w, "opening a blob", err)
+			s.noStore(w, err)
 			return
 		}
 		defer f.Close()
@@ -116,17 +111,17 @@ func (s *Server) uploadURL(name, id string) string { return "/v2/" + name + "/bl
 // store it goes to, which a project moved meanwhile does not change.
 type uploadRef struct{ repo, store string }
 
-// uploadIn is the blob store of an upload started in the repository; a
-// restart forgets it, and the client starts over.
-func (s *Server) uploadIn(id, name string) (blobstore.Store, bool) {
+// uploadIn is the blob store of an upload started in the repository, and
+// its name; a restart forgets it, and the client starts over.
+func (s *Server) uploadIn(id, name string) (blobstore.Store, string, bool) {
 	s.mu.Lock()
 	ref, ok := s.uploads[id]
 	s.mu.Unlock()
 	if id == "" || !ok || ref.repo != name {
-		return nil, false
+		return nil, "", false
 	}
 	st, err := s.storeNamed(ref.store)
-	return st, err == nil
+	return st, ref.store, err == nil
 }
 
 func (s *Server) forget(id string) {
@@ -153,7 +148,7 @@ func (s *Server) created(w http.ResponseWriter, name, digest string) {
 }
 
 // finish makes an upload a blob of the repository.
-func (s *Server) finish(w http.ResponseWriter, st blobstore.Store, name, id, digest string) {
+func (s *Server) finish(w http.ResponseWriter, st blobstore.Store, storeName, name, id, digest string) {
 	if !blobstore.ValidDigest(digest) {
 		writeError(w, errorf(http.StatusBadRequest, "DIGEST_INVALID", "%q is not a sha256 digest", digest))
 		return
@@ -171,6 +166,11 @@ func (s *Server) finish(w http.ResponseWriter, st blobstore.Store, name, id, dig
 		return
 	}
 	s.forget(id)
+	// The project moved to another store while the upload went on.
+	if err := s.settle(name, storeName, digest); err != nil {
+		s.internal(w, "copying a blob into the project's new store", err)
+		return
+	}
 	if err := s.cfg.DB.LinkBlob(name, digest, size); errors.Is(err, meta.ErrNoProject) {
 		writeError(w, noProject(name))
 		return
@@ -200,7 +200,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 		s.startUpload(w, r, g, t)
 		return
 	}
-	st, ok := s.uploadIn(t.ref, t.name)
+	st, storeName, ok := s.uploadIn(t.ref, t.name)
 	if !ok {
 		writeError(w, errorf(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "no such upload in %s", t.name))
 		return
@@ -253,7 +253,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 			s.internal(w, "writing the last chunk", err)
 			return
 		}
-		s.finish(w, st, t.name, t.ref, r.URL.Query().Get("digest"))
+		s.finish(w, st, storeName, t.name, t.ref, r.URL.Query().Get("digest"))
 	case http.MethodDelete:
 		s.forget(t.ref)
 		if err := st.Cancel(t.ref); err != nil && !errors.Is(err, blobstore.ErrNotFound) {
@@ -331,6 +331,10 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 			return
 		}
 		s.forget(id)
+		if err := s.settle(t.name, storeName, digest); err != nil {
+			s.internal(w, "copying a blob into the project's new store", err)
+			return
+		}
 		size, _ := st.Stat(digest)
 		if err := s.cfg.DB.LinkBlob(t.name, digest, size); errors.Is(err, meta.ErrNoProject) {
 			writeError(w, noProject(t.name))
@@ -361,11 +365,6 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 			return
 		}
 		a, _ := s.cfg.DB.Artifact(t.name, digest)
-		st, _, err := s.storeOf(t.name)
-		if err != nil {
-			s.noStore(w, err)
-			return
-		}
 		// The project's policy may refuse an image with vulnerabilities;
 		// the scanner pulls them all.
 		if r.Method == http.MethodGet && (g == nil || !g.scanner) {
@@ -374,9 +373,13 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 				return
 			}
 		}
-		f, size, err := st.Open(digest)
-		if err != nil {
+		f, size, err := s.openBlob(t.name, digest)
+		if errors.Is(err, blobstore.ErrNotFound) {
 			writeError(w, errorf(http.StatusNotFound, "MANIFEST_UNKNOWN", "the manifest %s is gone from the store", digest))
+			return
+		}
+		if err != nil {
+			s.noStore(w, err)
 			return
 		}
 		defer f.Close()
@@ -547,11 +550,7 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 
 // readConfig reads an image's config from its repository's store, or nil.
 func (s *Server) readConfig(repo, digest string) *manifest.Config {
-	st, _, err := s.storeOf(repo)
-	if err != nil {
-		return nil
-	}
-	f, size, err := st.Open(digest)
+	f, size, err := s.openBlob(repo, digest)
 	if err != nil || size > manifest.MaxConfigSize {
 		if f != nil {
 			f.Close()

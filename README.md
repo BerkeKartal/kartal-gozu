@@ -1131,7 +1131,12 @@ users, passwords, directory and roles the rest has.
   others, a directory (a volume of its own) or a bucket of S3, MinIO or
   Ceph, each tried out (an object written, read and deleted) before it is
   kept, its secret key sealed as the sources' passwords are. A project is
-  made on a store, and an empty one may move to another. Blobs go to the
+  made on a store; an empty one may move to another at once, one with
+  repositories with *Move to another store*: its blobs are copied, each
+  digest checked, while it is pulled and pushed as ever; then it keeps its
+  blobs in the new store, reading what that lacks from the old one until
+  the move ends (what was pushed meanwhile is copied too). A move cut short
+  leaves the project readable, and goes on when run again. Blobs go to the
   bucket laid out as on a disk (`<prefix>blobs/sha256/ab/<hex>`), so one
   can be copied into the other; uploads under way stay on the registry's
   volume until they are whole, then go in one request, or in parts when

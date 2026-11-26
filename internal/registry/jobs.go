@@ -193,6 +193,9 @@ func (s *Server) StartJob(kind string, dryRun bool, project, by string) (meta.Jo
 		if kind == JobReplication {
 			return meta.Job{}, fmt.Errorf("%w: a replication runs a rule", ErrJob)
 		}
+		if kind == JobMove {
+			return meta.Job{}, fmt.Errorf("%w: a move is of a project, to a store", ErrJob)
+		}
 		return meta.Job{}, fmt.Errorf("%w: %q", ErrJob, kind)
 	}
 	if dryRun && (kind == JobVerify || kind == JobScan) {
@@ -348,6 +351,13 @@ func (s *Server) runJob(ctx context.Context, j meta.Job) {
 		report, j.Summary = rep, rep.String()
 		if err == nil && rep.Failed > 0 {
 			j.Alarm = fmt.Sprintf("%d of %d images could not be copied", rep.Failed, rep.Picked)
+		}
+	case JobMove:
+		var rep MoveReport
+		rep, err = s.Move(ctx, j.Project, j.Store, j.DryRun, j.By, func(p meta.JobProgress) { s.setProgress(j.ID, p) })
+		report, j.Summary = rep, rep.String()
+		if err == nil && len(rep.Missing) > 0 {
+			j.Alarm = fmt.Sprintf("%d blobs of the project were in neither store", len(rep.Missing))
 		}
 	case JobScan:
 		var rep ScanReport
