@@ -505,7 +505,9 @@ input:disabled, textarea:disabled { opacity: .65; cursor: not-allowed; }
 
 /* ---------------------------------------------------------------- palette, login, toasts */
 
-.overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: start center; padding-top: 12vh; z-index: 20; }
+/* A dialog taller than the window scrolls with its overlay, so that its
+   last fields and its buttons can be reached. */
+.overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: start center; padding: 12vh 0 4vh; z-index: 20; overflow-y: auto; overscroll-behavior: contain; }
 .palette { width: min(640px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .4); overflow: hidden; }
 .palette input { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 16px; font-size: 16px; background: var(--panel); }
 .palette ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
