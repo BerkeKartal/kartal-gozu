@@ -82,7 +82,7 @@ func newRegEnv(t *testing.T, opts ...func(*registry.Config)) *regEnv {
 	t.Cleanup(adm.Close)
 	srv := New(Config{
 		AgentTokens: map[string]string{agentTok: "demo"}, Users: users, StaleAfter: time.Minute, CommandTimeout: time.Second,
-		Accounts: accts, RegistryURL: adm.URL, RegistrySecret: regSecret, RegistryPublic: "registry.example.org",
+		Accounts: accts, Login: auth.Chain{accts}, RegistryURL: adm.URL, RegistrySecret: regSecret, RegistryPublic: "registry.example.org",
 	}, e.st, log)
 	e.srv = srv
 	e.api = httptest.NewServer(srv)

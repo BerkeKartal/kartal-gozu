@@ -74,6 +74,7 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/registry/stores/{name}", s.signedIn(s.registryStores))
 	mux.HandleFunc("DELETE /api/v1/registry/stores/{name}", s.signedIn(s.registryStores))
 	s.routeRegistryScans(mux)
+	s.routeRegistryMembers(mux)
 }
 
 // registrySecret tells whether a call carries the secret the registry and
