@@ -398,6 +398,17 @@ func TestIndexReferrersAndLists(t *testing.T) {
 	if a := e.do("GET", "/v2/shop/web/manifests/"+arm, ci, nil); a.code != 200 {
 		t.Errorf("the image after its tag went: %d", a.code)
 	}
+	// An image the index lists stays while the index does.
+	if a := e.do("DELETE", "/v2/shop/web/manifests/"+amd, ci, nil); a.code != 409 || a.errCode() != "DENIED" {
+		t.Errorf("delete an index's image: %d %s", a.code, a.body)
+	}
+	// The index goes by its digest, and the SBOM about it with it.
+	if a := e.do("DELETE", "/v2/shop/web/manifests/"+indexDigest, ci, nil); a.code != 202 {
+		t.Errorf("delete the index: %d %s", a.code, a.body)
+	}
+	if a := e.do("GET", "/v2/shop/web/manifests/"+blobstore.Digest(sbom), ci, nil); a.code != 404 {
+		t.Errorf("the SBOM about a deleted index: %d", a.code)
+	}
 	if a := e.do("DELETE", "/v2/shop/web/manifests/"+amd, ci, nil); a.code != 202 {
 		t.Errorf("delete by digest: %d", a.code)
 	}

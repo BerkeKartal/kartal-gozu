@@ -131,20 +131,54 @@ func TestArtifactsTagsAndReferrers(t *testing.T) {
 	if _, ok := d.Resolve("shop/web", "latest"); ok {
 		t.Error("the tag is still there")
 	}
-	// Deleting an artifact takes its tags with it.
+	// Deleting an artifact takes its tags with it, and its signature, which
+	// is about nothing then.
 	if err := d.DeleteArtifact("shop/web", dM, "dev"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := d.Resolve("shop/web", "1.0"); ok {
 		t.Error("1.0 still points at the deleted artifact")
 	}
+	if _, ok := d.Artifact("shop/web", dS); ok {
+		t.Error("the signature of the deleted artifact is still there")
+	}
 	projects := d.Projects()
-	if len(projects) != 1 || projects[0].Repositories != 1 || projects[0].Artifacts != 1 || projects[0].Size != 100+2000+300 {
+	if len(projects) != 1 || projects[0].Repositories != 1 || projects[0].Artifacts != 0 || projects[0].Size != 100+2000 {
 		t.Errorf("projects: %+v", projects)
 	}
 	events := d.Events(nil, 0)
-	if len(events) != 6 || events[0].Action != "delete" || events[len(events)-1].Action != "project-create" {
+	if len(events) != 7 || events[0].Action != "delete" || events[0].Digest != dS || events[0].Detail != "about "+dM ||
+		events[1].Digest != dM || events[len(events)-1].Action != "project-create" {
 		t.Errorf("events: %+v", events)
+	}
+}
+
+// An image an index lists stays until the index goes.
+func TestIndexKeepsItsImages(t *testing.T) {
+	d := open(t, t.TempDir())
+	defer d.Close()
+	d.CreateProject(Project{Name: "shop"}, "admin")
+	push(t, d, "shop/web", dM, "")
+	index := Artifact{Digest: dC, MediaType: manifest.OCIIndex, Kind: "index", Size: 200,
+		Manifests: []manifest.Descriptor{{MediaType: manifest.OCIManifest, Digest: dM, Size: 500}}}
+	if err := d.PutArtifact("shop/web", index, "1.0", "ci"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteArtifact("shop/web", dM, "dev"); !errors.Is(err, ErrInUse) || !strings.Contains(err.Error(), dC) {
+		t.Errorf("deleting an index's image: %v", err)
+	}
+	if err := d.DeleteArtifact("shop/web", dC, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	// The image stays, untagged, once its index is gone.
+	if err := d.DeleteArtifact("shop/web", dM, "dev"); err != nil {
+		t.Errorf("deleting the image after its index: %v", err)
+	}
+	// Replayed, the log says the same.
+	d.Close()
+	d = open(t, d.dir)
+	if arts, _ := d.Artifacts("shop/web"); len(arts) != 0 {
+		t.Errorf("after reopening: %+v", arts)
 	}
 }
 

@@ -560,7 +560,7 @@ const STRINGS = {
     'reg.tagHelp': 'Letters, digits and . _ -, up to 128; a tag already in use moves here.',
     'reg.tagged': 'Tagged {0}.', 'reg.removeTag': 'Remove the tag {0}', 'reg.removeTagShort': 'Remove tag',
     'reg.removeTagConfirm': 'Remove the tag {0}? The artifact stays.', 'reg.tagRemoved': 'Tag {0} removed.',
-    'reg.deleteArtifact': 'Delete', 'reg.deleteArtifactConfirm': 'Delete {0}? Its tags go with it.', 'reg.artifactDeleted': 'Artifact deleted.',
+    'reg.deleteArtifact': 'Delete', 'reg.deleteArtifactConfirm': 'Delete {0}? Its tags go with it, and the signatures and SBOMs about it.', 'reg.artifactDeleted': 'Artifact deleted.',
     'reg.deleteNote': 'Deleting takes an artifact out of its repository; the space its layers alone take is given back by garbage collection.',
     'reg.kind.image': 'image', 'reg.kind.index': 'multi-arch', 'reg.kind.helm': 'Helm chart', 'reg.kind.signature': 'signature',
     'reg.kind.sbom': 'SBOM', 'reg.kind.artifact': 'artifact',
@@ -1088,7 +1088,7 @@ const STRINGS = {
     'reg.tagHelp': 'Harf, rakam ve . _ -, en çok 128; kullanımdaki bir tag buraya taşınır.',
     'reg.tagged': '{0} tag’i eklendi.', 'reg.removeTag': '{0} tag’ini kaldır', 'reg.removeTagShort': 'Tag’i kaldır',
     'reg.removeTagConfirm': '{0} tag’i kaldırılsın mı? Artifact kalır.', 'reg.tagRemoved': '{0} tag’i kaldırıldı.',
-    'reg.deleteArtifact': 'Sil', 'reg.deleteArtifactConfirm': '{0} silinsin mi? Tag’leri de gider.', 'reg.artifactDeleted': 'Artifact silindi.',
+    'reg.deleteArtifact': 'Sil', 'reg.deleteArtifactConfirm': '{0} silinsin mi? Tag’leri ve hakkındaki imzalar ile SBOM’lar da gider.', 'reg.artifactDeleted': 'Artifact silindi.',
     'reg.deleteNote': 'Silmek bir artifact’i reposundan çıkarır; yalnızca onun kullandığı katmanların yerini çöp toplama geri verir.',
     'reg.kind.image': 'imaj', 'reg.kind.index': 'çok mimarili', 'reg.kind.helm': 'Helm chart', 'reg.kind.signature': 'imza',
     'reg.kind.sbom': 'SBOM', 'reg.kind.artifact': 'artifact',
@@ -2737,6 +2737,12 @@ const regUI = {
   h, t, button, pill, panel, emptyState, mono, bytes, age, ago, copyText, modal, ask, toast, dialogField, formNote, api,
   grantChips, matches, routeHash, go, refresh: () => refresh(),
   words: () => state.q.toLowerCase().split(/\s+/).filter(Boolean),
+  // until is how long until a time, or since it passed.
+  until: v => {
+    const at = when(v);
+    const left = at - Date.now();
+    return h('span', { title: new Date(at).toLocaleString() }, left > 0 ? t('expiresIn', span(left)) : t('expiredAgo', span(-left)));
+  },
 };
 
 function renderContent() {

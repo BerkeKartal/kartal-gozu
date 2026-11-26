@@ -37,6 +37,9 @@ var (
 	ErrNotEmpty = errors.New("the project still has repositories")
 	// ErrExists is a project that is already there.
 	ErrExists = errors.New("already exists")
+	// ErrInUse is an image that an index of its repository lists: deleting
+	// it would take a platform out of the index, which goes first.
+	ErrInUse = errors.New("an index of the repository lists it")
 )
 
 // Project groups repositories: the first part of a repository's name.
@@ -770,7 +773,10 @@ func (d *DB) Artifacts(repo string) ([]ArtifactInfo, bool) {
 	return out, true
 }
 
-// DeleteArtifact removes an artifact and the tags that point at it.
+// DeleteArtifact removes an artifact, the tags that point at it, and what
+// is about it (its signatures and SBOMs, and theirs), which means nothing
+// without it. An image that an index of the repository lists stays
+// (ErrInUse).
 func (d *DB) DeleteArtifact(repo, digest, user string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -778,7 +784,34 @@ func (d *DB) DeleteArtifact(repo, digest, user string) error {
 	if r == nil || r.Artifacts[digest] == nil {
 		return ErrNotFound
 	}
-	return d.commit(entry{Op: "artifact-del", Repo: repo, Digest: digest}, d.event(user, "delete", ProjectOf(repo), repo, digest, "", ""))
+	listed := map[string]string{} // an index's image: the index
+	for _, a := range r.Artifacts {
+		for _, m := range a.Manifests {
+			listed[m.Digest] = a.Digest
+		}
+	}
+	if index, ok := listed[digest]; ok {
+		return fmt.Errorf("%w: %s", ErrInUse, index)
+	}
+	entries := []entry{{Op: "artifact-del", Repo: repo, Digest: digest}, d.event(user, "delete", ProjectOf(repo), repo, digest, "", "")}
+	gone := []string{digest}
+	seen := map[string]bool{digest: true}
+	for i := 0; i < len(gone); i++ {
+		about := []string{}
+		for _, a := range r.Artifacts {
+			if a.Subject == gone[i] && !seen[a.Digest] && listed[a.Digest] == "" {
+				about = append(about, a.Digest)
+			}
+		}
+		sort.Strings(about)
+		for _, dg := range about {
+			seen[dg] = true
+			gone = append(gone, dg)
+			entries = append(entries, entry{Op: "artifact-del", Repo: repo, Digest: dg},
+				d.event(user, "delete", ProjectOf(repo), repo, dg, "", "about "+gone[i]))
+		}
+	}
+	return d.commit(entries...)
 }
 
 // Tag points a tag at an artifact of the repository.

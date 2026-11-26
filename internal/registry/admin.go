@@ -339,6 +339,10 @@ func (s *Server) deleteArtifact(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusNotFound, "no such artifact")
 		return
 	}
+	if errors.Is(err, meta.ErrInUse) {
+		adminError(w, http.StatusConflict, err.Error()+"; delete the index first")
+		return
+	}
 	if err != nil {
 		s.adminInternal(w, "deleting an artifact", err)
 		return

@@ -420,7 +420,7 @@ function robotsPage(data, ui) {
         h('td', null, h('strong', { class: 'mono' }, r.login), r.description ? h('div', { class: 'muted small-text' }, r.description) : null,
           r.disabled ? ui.pill(t('reg.disabled'), 'bad') : null),
         h('td', null, ui.grantChips(r.grants)),
-        h('td', null, r.expires ? (r.expired ? ui.pill(t('reg.expired'), 'bad') : age(r.expires)) : h('span', { class: 'muted' }, t('reg.never'))),
+        h('td', null, r.expires ? (r.expired ? ui.pill(t('reg.expired'), 'bad') : ui.until(r.expires)) : h('span', { class: 'muted' }, t('reg.never'))),
         h('td', null, age(r.created), h('div', { class: 'muted small-text' }, r.by)),
         h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
           button(t('edit'), () => robotDialog(ui, data, r)),
@@ -449,6 +449,7 @@ function robotDialog(ui, data, robot) {
   const grants = h('textarea', { rows: '4', class: 'mono', placeholder: 'operator@registry:team-a\nviewer@registry:shared-*' });
   grants.value = editing ? robot.grants.join('\n') : '';
   const expires = h('input', { type: 'date', value: editing && robot.expires ? robot.expires.slice(0, 10) : '' });
+  const expiresBefore = expires.value;
   const disabled = h('input', { type: 'checkbox', checked: editing && robot.disabled });
   const note = formNote();
   const form = h('form', {
@@ -458,8 +459,12 @@ function robotDialog(ui, data, robot) {
       const body = {
         description: desc.value,
         grants: grants.value.split(/[\n,]+/).map(x => x.trim()).filter(Boolean),
-        expires: expires.value ? new Date(expires.value + 'T23:59:59Z').toISOString().replace(/\.\d+Z$/, 'Z') : '',
       };
+      // The day is all the field shows: an expiry left as it was keeps its
+      // time too.
+      if (!editing || expires.value !== expiresBefore) {
+        body.expires = expires.value ? new Date(expires.value + 'T23:59:59Z').toISOString().replace(/\.\d+Z$/, 'Z') : '';
+      }
       try {
         if (editing) {
           body.disabled = disabled.checked;

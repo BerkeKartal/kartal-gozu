@@ -228,6 +228,9 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, g *grant, t targ
 	}
 }
 
+// startUpload starts an upload, or takes a blob whole, or mounts one; upload
+// checked that the project is there. It may go meanwhile, while the
+// repository is not made yet.
 func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t target) {
 	q := r.URL.Query()
 	// A blob another repository has is linked here without a copy, when the
@@ -236,7 +239,10 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 		if from := q.Get("from"); ValidName(from) && g != nil && g.access["repository:"+from]["pull"] {
 			if size, ok := s.cfg.DB.Blob(from, mount); ok {
 				if _, err := s.cfg.Store.Stat(mount); err == nil {
-					if err := s.cfg.DB.LinkBlob(t.name, mount, size); err != nil {
+					if err := s.cfg.DB.LinkBlob(t.name, mount, size); errors.Is(err, meta.ErrNoProject) {
+						writeError(w, noProject(t.name))
+						return
+					} else if err != nil {
 						s.internal(w, "mounting a blob", err)
 						return
 					}
@@ -280,7 +286,10 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 		}
 		s.forget(id)
 		size, _ := s.cfg.Store.Stat(digest)
-		if err := s.cfg.DB.LinkBlob(t.name, digest, size); err != nil {
+		if err := s.cfg.DB.LinkBlob(t.name, digest, size); errors.Is(err, meta.ErrNoProject) {
+			writeError(w, noProject(t.name))
+			return
+		} else if err != nil {
 			s.internal(w, "recording a blob", err)
 			return
 		}
@@ -338,6 +347,10 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 		}
 		if errors.Is(err, meta.ErrNotFound) {
 			writeError(w, errorf(http.StatusNotFound, "MANIFEST_UNKNOWN", "%s:%s is not there", t.name, t.ref))
+			return
+		}
+		if errors.Is(err, meta.ErrInUse) {
+			writeError(w, errorf(http.StatusConflict, "DENIED", "%s; delete the index first", err))
 			return
 		}
 		if err != nil {
