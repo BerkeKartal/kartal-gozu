@@ -278,12 +278,13 @@ func (s *Server) Migrate(ctx context.Context, sourceID string, projects []string
 	for _, p := range there {
 		public[p.Name] = p.Public
 	}
-	rules := map[string]meta.ReplicationRule{}
-	for _, r := range s.cfg.DB.Rules() {
-		rules[strings.ToLower(r.Name)] = r
-	}
 	var out []Migration
+	seen := map[string]bool{}
 	for _, name := range projects {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		m := Migration{Project: name, Public: public[name]}
 		pub, listed := public[name]
 		switch {
@@ -304,19 +305,18 @@ func (s *Server) Migrate(ctx context.Context, sourceID string, projects []string
 			}
 			m.Created = true
 		}
-		ruleName := "Migration of " + name
-		if len(ruleName) > 64 {
-			ruleName = ruleName[:64]
-		}
-		r, exists := rules[strings.ToLower(ruleName)]
-		if !exists || r.Source != src.ID {
+		r, found := migrationRule(s.cfg.DB.Rules(), src.ID, name)
+		if !found {
 			b := make([]byte, 8)
 			rand.Read(b)
 			now := s.now().UTC()
-			r = meta.ReplicationRule{ID: hex.EncodeToString(b), Name: ruleName, Source: src.ID, Repositories: name + "/**", Tags: "**",
+			r = meta.ReplicationRule{ID: hex.EncodeToString(b), Name: migrationName(name), Source: src.ID, Repositories: name + "/**", Tags: "**",
 				Project: name, Referrers: true, Concurrency: 2, Created: now, By: by, Since: now}
-			if exists {
-				r.Name = ruleName[:min(len(ruleName), 56)] + " " + r.ID[:7]
+			for _, other := range s.cfg.DB.Rules() {
+				if strings.EqualFold(other.Name, r.Name) {
+					r.Name = r.Name[:min(len(r.Name), 56)] + " " + r.ID[:7]
+					break
+				}
 			}
 		}
 		if sync {
@@ -346,6 +346,30 @@ func (s *Server) Migrate(ctx context.Context, sourceID string, projects []string
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// migrationName is the name of the rule that moves a project, cut to the
+// 64 a name may have.
+func migrationName(project string) string {
+	n := "Migration of " + project
+	return n[:min(len(n), 64)]
+}
+
+// migrationRule is the rule that moves a project from a source: one of the
+// source that copies into the project, by the name a migration gives it, or
+// by that name with the suffix it got as another rule had the name.
+func migrationRule(rules []meta.ReplicationRule, source, project string) (meta.ReplicationRule, bool) {
+	name := strings.ToLower(migrationName(project))
+	cut := name[:min(len(name), 56)] + " "
+	for _, r := range rules {
+		if r.Source != source || r.Project != project {
+			continue
+		}
+		if n := strings.ToLower(r.Name); n == name || (strings.HasPrefix(n, cut) && len(n) == len(cut)+7) {
+			return r, true
+		}
+	}
+	return meta.ReplicationRule{}, false
 }
 
 func (s *Server) migrate(w http.ResponseWriter, r *http.Request) {

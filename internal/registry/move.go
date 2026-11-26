@@ -22,8 +22,8 @@ import (
 //  3. What was pushed into the old store as the switch was made is copied
 //     too; then the move ends.
 //
-// An upload started in the old store and finished after the switch is
-// copied into the new one as it finishes. A move stopped or failed after
+// A blob or manifest written into the old store and recorded after the
+// switch is copied into the new one then (see settle). A move stopped or failed after
 // the switch leaves the project readable; run again, it goes on.
 
 // JobMove moves a project to another blob store.
@@ -258,8 +258,11 @@ func (s *Server) openBlob(repo, digest string) (blobstore.ReadSeekCloser, int64,
 	return f, n, err
 }
 
-// settle makes a blob an upload finished in a store the project left
-// (it moved meanwhile) the project's in its store now.
+// settle makes a blob written into a store the project left (it moved
+// meanwhile) the project's in its store now. It is called once the blob is
+// recorded: a move that switched before then copies it itself, as its
+// passes that follow the switch see the record; one that switched after
+// that is seen here.
 func (s *Server) settle(repo, uploadStore, digest string) error {
 	now := s.storeNameOf(repo)
 	if uploadStore == now {

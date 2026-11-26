@@ -166,11 +166,6 @@ func (s *Server) finish(w http.ResponseWriter, st blobstore.Store, storeName, na
 		return
 	}
 	s.forget(id)
-	// The project moved to another store while the upload went on.
-	if err := s.settle(name, storeName, digest); err != nil {
-		s.internal(w, "copying a blob into the project's new store", err)
-		return
-	}
 	if err := s.cfg.DB.LinkBlob(name, digest, size); errors.Is(err, meta.ErrNoProject) {
 		writeError(w, noProject(name))
 		return
@@ -178,6 +173,11 @@ func (s *Server) finish(w http.ResponseWriter, st blobstore.Store, storeName, na
 		return
 	} else if err != nil {
 		s.internal(w, "recording a blob", err)
+		return
+	}
+	// The project moved to another store while the upload went on.
+	if err := s.settle(name, storeName, digest); err != nil {
+		s.internal(w, "copying a blob into the project's new store", err)
 		return
 	}
 	s.created(w, name, digest)
@@ -292,6 +292,10 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 						s.internal(w, "mounting a blob", err)
 						return
 					}
+					if err := s.settle(t.name, storeName, mount); err != nil {
+						s.internal(w, "copying a blob into the project's new store", err)
+						return
+					}
 					s.created(w, t.name, mount)
 					return
 				}
@@ -331,10 +335,6 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 			return
 		}
 		s.forget(id)
-		if err := s.settle(t.name, storeName, digest); err != nil {
-			s.internal(w, "copying a blob into the project's new store", err)
-			return
-		}
 		size, _ := st.Stat(digest)
 		if err := s.cfg.DB.LinkBlob(t.name, digest, size); errors.Is(err, meta.ErrNoProject) {
 			writeError(w, noProject(t.name))
@@ -343,6 +343,10 @@ func (s *Server) startUpload(w http.ResponseWriter, r *http.Request, g *grant, t
 			return
 		} else if err != nil {
 			s.internal(w, "recording a blob", err)
+			return
+		}
+		if err := s.settle(t.name, storeName, digest); err != nil {
+			s.internal(w, "copying a blob into the project's new store", err)
 			return
 		}
 		s.created(w, t.name, digest)
@@ -507,7 +511,7 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 	if m.Subject != nil {
 		a.Subject = m.Subject.Digest
 	}
-	st, _, err := s.storeOf(repo)
+	st, storeName, err := s.storeOf(repo)
 	if err != nil {
 		s.cfg.Log.Error("registry: a blob store", "err", err)
 		return "", nil, errorf(http.StatusServiceUnavailable, "UNAVAILABLE", "the project's blob store is not available now")
@@ -536,6 +540,11 @@ func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user 
 	} else if err != nil {
 		s.cfg.Log.Error("registry: recording a manifest", "err", err)
 		return "", nil, errorf(http.StatusInternalServerError, "UNKNOWN", "recording a manifest failed")
+	}
+	// The project moved to another store as the manifest was stored.
+	if err := s.settle(repo, storeName, digest); err != nil {
+		s.cfg.Log.Error("registry: copying a manifest into the project's new store", "err", err)
+		return "", nil, errorf(http.StatusInternalServerError, "UNKNOWN", "copying the manifest into the project's new blob store failed")
 	}
 	// An image pushed into a project that scans them is scanned, unless it
 	// was (pushed again, or by another tag); an index's images were each

@@ -279,6 +279,13 @@ func (cp *copier) blob(ctx context.Context, from, to string, d manifest.Descript
 		return nil
 	}
 	defer cp.hold(d.Digest)()
+	// A blob some repository has is linked. One the store has and no
+	// repository does is garbage, which a collection may be deleting right
+	// now: it is pulled again, which makes it new in the store.
+	st, storeName, err := s.storeOf(to)
+	if err != nil {
+		return err
+	}
 	link := func(size int64) error {
 		if err := s.cfg.DB.LinkBlob(to, d.Digest, size); err != nil {
 			if errors.Is(err, meta.ErrQuota) {
@@ -286,14 +293,11 @@ func (cp *copier) blob(ctx context.Context, from, to string, d manifest.Descript
 			}
 			return fmt.Errorf("recording %s: %w", d.Digest, err)
 		}
+		// The project moved to another store meanwhile.
+		if err := s.settle(to, storeName, d.Digest); err != nil {
+			return fmt.Errorf("copying %s into the project's new store: %w", d.Digest, err)
+		}
 		return nil
-	}
-	// A blob some repository has is linked. One the store has and no
-	// repository does is garbage, which a collection may be deleting right
-	// now: it is pulled again, which makes it new in the store.
-	st, storeName, err := s.storeOf(to)
-	if err != nil {
-		return err
 	}
 	if size, err := st.Stat(d.Digest); err == nil && s.cfg.DB.InUseIn(d.Digest, storeName) {
 		return link(size)
