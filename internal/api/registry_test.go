@@ -16,6 +16,7 @@ import (
 
 	"github.com/BerkeKartal/kartal-gozu/internal/accounts"
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
+	"github.com/BerkeKartal/kartal-gozu/internal/protocol"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/blobstore"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/meta"
@@ -35,6 +36,7 @@ const (
 
 type regEnv struct {
 	t      *testing.T
+	st     *store.Store
 	api    *httptest.Server
 	public *httptest.Server
 }
@@ -63,14 +65,14 @@ func newRegEnv(t *testing.T) *regEnv {
 		regLeadTok: auth.NewUser("lead", []auth.Grant{lead}),
 	}
 	accts := accounts.New(keeper, nil)
-	e := &regEnv{t: t}
+	e := &regEnv{t: t, st: store.New("demo", "lab")}
 	reg := registry.New(registry.Config{Store: blobs, DB: db, Log: log})
 	adm := httptest.NewServer(reg.Admin(regSecret))
 	t.Cleanup(adm.Close)
 	srv := New(Config{
 		AgentTokens: map[string]string{agentTok: "demo"}, Users: users, StaleAfter: time.Minute, CommandTimeout: time.Second,
 		Accounts: accts, RegistryURL: adm.URL, RegistrySecret: regSecret, RegistryPublic: "registry.example.org",
-	}, store.New("demo"), log)
+	}, e.st, log)
 	e.api = httptest.NewServer(srv)
 	t.Cleanup(e.api.Close)
 	// The registry asks the server, which is up by now.
@@ -302,5 +304,73 @@ func TestRegistryJobs(t *testing.T) {
 	}
 	if code, b := e.call("GET", "/api/v1/registry/jobs", bossTok, ""); code != 200 || !strings.Contains(string(b), `"zone":"Europe/Istanbul"`) {
 		t.Errorf("the jobs: %d %s", code, b)
+	}
+}
+
+// The registry hears what runs in the clusters, which retention keeps.
+func TestRegistryRunning(t *testing.T) {
+	e := newRegEnv(t)
+	d := "sha256:" + strings.Repeat("c", 64)
+	snap := &protocol.Snapshot{
+		Pods: []protocol.Pod{{Name: "web-1", Images: []string{"registry.example.org/team-a/web:1.4", "nginx:1.27"},
+			ImageIDs: []string{"docker-pullable://registry.example.org/team-a/web@" + d}}},
+		Workloads: []protocol.Workload{{Name: "api", Images: []string{"registry.example.org/team-a/api:2.0"}}},
+		CronJobs:  []protocol.CronJob{{Name: "report", Images: []string{"registry.example.org/team-a/report@" + d}}},
+	}
+	if err := e.st.PutSnapshot("demo", snap, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := e.call("GET", "/api/v1/registry/running", bossTok, ""); code != 401 {
+		t.Errorf("without the shared secret: %d", code)
+	}
+	code, b := e.call("GET", "/api/v1/registry/running", regSecret, "")
+	var out struct {
+		Clusters []registry.ClusterImages
+	}
+	if json.Unmarshal(b, &out); code != 200 || len(out.Clusters) != 2 {
+		t.Fatalf("running: %d %s", code, b)
+	}
+	demo, lab := out.Clusters[0], out.Clusters[1]
+	if !demo.Known || strings.Join(demo.Digests, ",") != d ||
+		strings.Join(demo.Refs, ",") != "team-a/api:2.0,team-a/report@"+d+",team-a/web:1.4,team-a/web@"+d {
+		t.Errorf("demo: %+v", demo)
+	}
+	if lab.Known || len(lab.Refs) != 0 {
+		t.Errorf("a cluster that said nothing: %+v", lab)
+	}
+}
+
+// A project's admins set its retention rules and apply them, but only
+// theirs.
+func TestRegistryProjectRetention(t *testing.T) {
+	e := newRegEnv(t)
+	for _, p := range []string{"team-a", "team-b"} {
+		if code, b := e.call("POST", "/api/v1/registry/projects", bossTok, `{"name":"`+p+`"}`); code != 201 {
+			t.Fatalf("make %s: %d %s", p, code, b)
+		}
+	}
+	rules := `{"retention":[{"tags":"**","untagged":true,"keep":"latestPushed","count":5}]}`
+	if code, b := e.call("PUT", "/api/v1/registry/projects/team-a", regLeadTok, rules); code != 200 {
+		t.Fatalf("the project's admin sets rules: %d %s", code, b)
+	}
+	if code, _ := e.call("PUT", "/api/v1/registry/projects/team-a", regLeadTok, `{"retention":[{"keep":"always"}]}`); code != 400 {
+		t.Errorf("a rule that picks nothing: %d", code)
+	}
+	code, b := e.call("POST", "/api/v1/registry/jobs", regLeadTok, `{"kind":"retention","project":"team-a","dryRun":true}`)
+	var j struct{ ID string }
+	if json.Unmarshal(b, &j); code != 202 {
+		t.Fatalf("a dry run of the project's rules: %d %s", code, b)
+	}
+	if code, _ := e.call("GET", "/api/v1/registry/jobs/"+j.ID, regLeadTok, ""); code != 200 {
+		t.Errorf("the project's admin reads its job: %d", code)
+	}
+	if code, _ := e.call("GET", "/api/v1/registry/jobs/"+j.ID, regTeamTok, ""); code != 403 {
+		t.Errorf("an operator reads the job: %d", code)
+	}
+	if code, _ := e.call("POST", "/api/v1/registry/jobs", regLeadTok, `{"kind":"retention","project":"team-b"}`); code != 403 {
+		t.Errorf("another project's retention: %d", code)
+	}
+	if code, _ := e.call("POST", "/api/v1/registry/jobs", regLeadTok, `{"kind":"retention"}`); code != 403 {
+		t.Errorf("every project's retention: %d", code)
 	}
 }

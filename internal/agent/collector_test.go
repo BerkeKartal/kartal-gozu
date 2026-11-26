@@ -359,3 +359,30 @@ func TestUnlimited(t *testing.T) {
 		}
 	}
 }
+
+// What runs, for an image registry to keep: the images of a pod's
+// containers, the digests the kubelet pulled them by, and a CronJob's.
+func TestRunningImages(t *testing.T) {
+	var p kube.Pod
+	d := "sha256:" + strings.Repeat("b", 64)
+	if err := json.Unmarshal([]byte(`{"metadata":{"name":"web-1","namespace":"shop"},
+		"spec":{"initContainers":[{"name":"init","image":"registry.example.org/shop/init:1"}],
+			"containers":[{"name":"web","image":"registry.example.org/shop/web:1.4"},{"name":"side","image":"registry.example.org/shop/web:1.4"}]},
+		"status":{"phase":"Running","containerStatuses":[{"name":"web","ready":true,"imageID":"docker-pullable://registry.example.org/shop/web@`+d+`"},
+			{"name":"side","ready":true,"imageID":"docker-pullable://registry.example.org/shop/web@`+d+`"}]}}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	out := toPod(p)
+	if !reflect.DeepEqual(out.Images, []string{"registry.example.org/shop/init:1", "registry.example.org/shop/web:1.4"}) ||
+		!reflect.DeepEqual(out.ImageIDs, []string{"docker-pullable://registry.example.org/shop/web@" + d}) {
+		t.Errorf("the pod's images: %v %v", out.Images, out.ImageIDs)
+	}
+	var cj kube.CronJob
+	if err := json.Unmarshal([]byte(`{"metadata":{"name":"report","namespace":"shop"},"spec":{"schedule":"0 1 * * *",
+		"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"report","image":"registry.example.org/shop/report:2"}]}}}}}}`), &cj); err != nil {
+		t.Fatal(err)
+	}
+	if got := toCronJob(cj).Images; !reflect.DeepEqual(got, []string{"registry.example.org/shop/report:2"}) {
+		t.Errorf("the CronJob's images: %v", got)
+	}
+}

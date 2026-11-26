@@ -29,22 +29,22 @@ func (e *env) wait(id string) meta.Job {
 
 func TestJobs(t *testing.T) {
 	e := newEnv(t)
-	if _, err := e.reg.StartJob("compact", false, "root"); !errors.Is(err, ErrJob) {
+	if _, err := e.reg.StartJob("compact", false, "", "root"); !errors.Is(err, ErrJob) {
 		t.Errorf("an unknown job: %v", err)
 	}
-	if _, err := e.reg.StartJob(JobVerify, true, "root"); !errors.Is(err, ErrJob) {
+	if _, err := e.reg.StartJob(JobVerify, true, "", "root"); !errors.Is(err, ErrJob) {
 		t.Errorf("a dry run of a check: %v", err)
 	}
 	// One of a kind at a time: a collection held up blocks the next.
 	e.reg.gcMu.Lock()
-	j, err := e.reg.StartJob(JobGC, true, "root")
+	j, err := e.reg.StartJob(JobGC, true, "", "root")
 	if err != nil || j.Status != meta.JobRunning {
 		t.Fatalf("start: %+v %v", j, err)
 	}
-	if _, err := e.reg.StartJob(JobGC, false, "root"); !errors.Is(err, ErrRunning) || !strings.Contains(err.Error(), j.ID) {
+	if _, err := e.reg.StartJob(JobGC, false, "", "root"); !errors.Is(err, ErrRunning) || !strings.Contains(err.Error(), j.ID) {
 		t.Errorf("a second collection: %v", err)
 	}
-	if v, err := e.reg.StartJob(JobVerify, false, "root"); err != nil {
+	if v, err := e.reg.StartJob(JobVerify, false, "", "root"); err != nil {
 		t.Errorf("another kind meanwhile: %v", err)
 	} else if done := e.wait(v.ID); done.Status != meta.JobDone || done.Alarm != "" {
 		t.Errorf("the check: %+v", done)
@@ -73,7 +73,8 @@ func TestSchedules(t *testing.T) {
 		t.Errorf("a job the registry stopped in: %+v", j)
 	}
 	scs := e.db.Schedules()
-	if len(scs) != 2 || scs[0].Kind != JobGC || scs[0].Cron != "0 3 * * *" || !scs[0].Enabled || scs[1].Kind != JobVerify {
+	if len(scs) != 3 || scs[0].Kind != JobGC || scs[0].Cron != "0 3 * * *" || !scs[0].Enabled || scs[1].Kind != JobRetention ||
+		scs[1].Cron != "0 2 * * *" || scs[2].Kind != JobVerify {
 		t.Fatalf("the default schedules: %+v", scs)
 	}
 	if _, err := e.reg.SetSchedule(JobGC, "every night", true, "root"); !errors.Is(err, ErrSchedule) {
@@ -85,18 +86,20 @@ func TestSchedules(t *testing.T) {
 	if _, err := e.reg.SetSchedule(JobVerify, "0 4 * * 0", false, "root"); err != nil {
 		t.Fatal(err)
 	}
-	// A day later the collection is due, once; the check is off.
+	// A day later retention and the collection are due, once; the check
+	// is off.
 	later := time.Now().Add(25 * time.Hour)
 	e.reg.now = func() time.Time { return later }
 	before := len(e.db.Jobs(0))
 	e.reg.RunDue()
 	jobs := e.db.Jobs(0)
-	if len(jobs) != before+1 || jobs[0].Kind != JobGC || jobs[0].By != ScheduledBy {
+	if len(jobs) != before+2 || jobs[0].Kind != JobRetention || jobs[1].Kind != JobGC || jobs[0].By != ScheduledBy {
 		t.Fatalf("after a day: %+v", jobs)
 	}
 	e.wait(jobs[0].ID)
+	e.wait(jobs[1].ID)
 	e.reg.RunDue()
-	if n := len(e.db.Jobs(0)); n != before+1 {
+	if n := len(e.db.Jobs(0)); n != before+2 {
 		t.Errorf("run again at once: %d jobs", n)
 	}
 	if sc := e.db.Schedules()[0]; sc.Last == nil || !sc.Last.Equal(later.UTC()) {
@@ -145,7 +148,7 @@ func TestJobsThroughTheAdminAPI(t *testing.T) {
 		Schedules []ScheduleView
 		Zone      string
 	}
-	if json.Unmarshal(a.body, &list); a.code != 200 || len(list.Jobs) != 1 || len(list.Schedules) != 2 || list.Zone != "Europe/Istanbul" {
+	if json.Unmarshal(a.body, &list); a.code != 200 || len(list.Jobs) != 1 || len(list.Schedules) != 3 || list.Zone != "Europe/Istanbul" {
 		t.Errorf("the jobs: %d %s", a.code, a.body)
 	}
 }

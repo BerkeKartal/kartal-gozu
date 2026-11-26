@@ -280,7 +280,7 @@ function projectPage(data, ui) {
       h('td', null, h('a', { href: routeHash({ view: 'regrepo', rest: [r.name], ns: '' }) }, h('strong', null, r.name.slice(p.name.length + 1)))),
       h('td', null, r.artifacts), h('td', null, r.tags), h('td', null, bytes(r.size)), h('td', null, age(r.updated)), h('td', null, r.pulls)))))
     : emptyState(t(data.repos && data.repos.length ? 'noMatch' : 'reg.noRepositories'));
-  return [problem(ui, data.info), head, table, data.events ? eventsPanel(ui, data.events) : null];
+  return [problem(ui, data.info), head, table, retentionPanel(ui, data), data.events ? eventsPanel(ui, data.events) : null];
 }
 
 function eventsPanel(ui, events) {
@@ -457,6 +457,146 @@ function artifactPage(data, ui) {
   return parts;
 }
 
+// ---------------------------------------------------------------- retention
+
+const KEEPS = ['latestPushed', 'latestPulled', 'pushedWithin', 'pulledWithin', 'always'];
+
+// The template people start from: the 5 latest, and what is newer than
+// 180 days.
+const TEMPLATE = [
+  { repositories: '**', tags: '**', untagged: true, keep: 'latestPushed', count: 5 },
+  { repositories: '**', tags: '**', untagged: true, keep: 'pushedWithin', days: 180 },
+];
+
+// ruleText says a rule in words.
+function ruleText(ui, r) {
+  const { t } = ui;
+  const repos = !r.repositories || r.repositories === '**' ? t('reg.allRepos') : r.repositories;
+  const tags = r.tags === '**' ? '*' : r.tags;
+  const picks = !r.tags ? t('reg.rulePicksUntagged', repos) : r.untagged ? t('reg.rulePicksBoth', repos, tags) : t('reg.rulePicks', repos, tags);
+  return picks + ' → ' + t('reg.keep.' + r.keep, r.keep.startsWith('latest') ? r.count : r.days);
+}
+
+function retentionPanel(ui, data) {
+  const { h, t, button } = ui;
+  const p = data.project;
+  const rules = p.retention || [];
+  const mine = role(data);
+  if (!rules.length && mine < RANK.admin) return null;
+  const run = async dryRun => {
+    if (!dryRun && !(await ui.ask({ title: t('reg.retentionRun'), message: t('reg.retentionConfirm', p.name), confirm: t('reg.retentionRun'), danger: true }))) return;
+    try {
+      const j = await ui.api('registry/jobs', { method: 'POST', body: { kind: 'retention', project: p.name, dryRun } });
+      jobDialog(ui, j.id, t('reg.retentionResult', p.name));
+    } catch (e) {
+      ui.toast(e.message, true);
+    }
+  };
+  return ui.panel(t('reg.retention'), h('div', { class: 'reg-body' },
+    h('div', { class: 'muted small-text' }, t('reg.retentionHint')),
+    rules.length ? h('ul', { class: 'reg-rules' }, rules.map(r => h('li', null, ruleText(ui, r)))) : h('div', { class: 'muted' }, t('reg.noRetention')),
+    mine >= RANK.admin ? h('div', { class: 'actions' },
+      button(t('reg.editRetention'), () => retentionDialog(ui, p)),
+      rules.length ? button(t('reg.retentionDry'), () => run(true)) : null,
+      rules.length ? button(t('reg.retentionRun'), () => run(false), 'danger') : null) : null), 'reg-events');
+}
+
+function retentionDialog(ui, p) {
+  const { h, t, button, modal, formNote, api } = ui;
+  const list = h('div', { class: 'reg-rule-list' });
+  const rows = [];
+  const addRow = r => {
+    const repos = h('input', { type: 'text', class: 'mono', value: r.repositories || '**', 'aria-label': t('reg.rule.repos') });
+    const tags = h('input', { type: 'text', class: 'mono', value: r.tags == null ? '**' : r.tags, 'aria-label': t('reg.rule.tags') });
+    const untagged = h('input', { type: 'checkbox', checked: !!r.untagged });
+    const keep = h('select', { 'aria-label': t('reg.rule.keep') }, KEEPS.map(k => h('option', { value: k, selected: k === r.keep }, t('reg.keepOpt.' + k))));
+    const n = h('input', { type: 'number', min: '1', step: '1', value: String(r.keep && r.keep.startsWith('latest') ? r.count || 5 : r.days || 30) });
+    const sync = () => { n.hidden = keep.value === 'always'; };
+    keep.addEventListener('change', sync);
+    sync();
+    const row = h('div', { class: 'reg-rule' },
+      h('label', { class: 'field' }, h('span', null, t('reg.rule.repos')), repos),
+      h('label', { class: 'field' }, h('span', null, t('reg.rule.tags')), tags),
+      h('label', { class: 'check-item' }, untagged, ' ', t('reg.rule.untagged')),
+      h('label', { class: 'field' }, h('span', null, t('reg.rule.keep')), h('div', { class: 'reg-keep' }, keep, n)),
+      button('✕', () => { row.remove(); rows.splice(rows.indexOf(item), 1); }, 'small'));
+    const item = {
+      row,
+      value: () => {
+        const v = { repositories: repos.value.trim(), tags: tags.value.trim(), untagged: untagged.checked, keep: keep.value };
+        if (v.keep.startsWith('latest')) v.count = Number(n.value);
+        else if (v.keep !== 'always') v.days = Number(n.value);
+        return v;
+      },
+    };
+    rows.push(item);
+    list.append(row);
+  };
+  (p.retention || []).forEach(addRow);
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      try {
+        await api('registry/projects/' + enc(p.name), { method: 'PUT', body: { retention: rows.map(x => x.value()) } });
+        close();
+        ui.toast(t('reg.retentionSaved'));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t('reg.retention') + ' · ' + p.name),
+  h('p', { class: 'muted small-text' }, t('reg.rulesHelp')),
+  list,
+  h('div', { class: 'actions' },
+    button(t('reg.addRule'), () => addRow({ repositories: '**', tags: '**', keep: 'latestPushed', count: 10 })),
+    button(t('reg.template'), () => {
+      rows.splice(0).forEach(x => x.row.remove());
+      TEMPLATE.forEach(addRow);
+    })),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+}
+
+// jobDialog waits for a job and shows what it did, or would do.
+function jobDialog(ui, id, title) {
+  const { h, t, modal } = ui;
+  const body = h('div', null, h('p', { class: 'muted' }, t('reg.waitJob')));
+  const box = h('div', { class: 'dialog wide' }, h('h2', null, title), body,
+    h('div', { class: 'dialog-actions' }, h('button', { type: 'button', class: 'btn primary', onclick: () => close() }, t('done'))));
+  const close = modal(box);
+  let tries = 0;
+  const poll = async () => {
+    if (!box.isConnected) return;
+    let j;
+    try {
+      j = await ui.api('registry/jobs/' + enc(id));
+    } catch (e) {
+      body.replaceChildren(h('p', { class: 'status-bad' }, e.message));
+      return;
+    }
+    if (j.status === 'running' && ++tries < 120) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    const r = j.report || {};
+    const removed = r.removed || [];
+    body.replaceChildren(
+      j.error ? h('p', { class: 'status-bad' }, j.error) : h('p', null, jobSummary(ui, j)),
+      r.unknown && r.unknown.length ? h('p', { class: 'muted small-text' }, t('reg.retentionUnknown', r.unknown.join(', '))) : null,
+      removed.length ? h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, ['repository', 'artifact', 'tags', 'pushed'].map(k => h('th', null, t('reg.col.' + k))))),
+        h('tbody', null, removed.map(x => h('tr', null, h('td', null, x.repo), h('td', null, ui.mono(shortDigest(x.digest))),
+          h('td', null, x.tags && x.tags.length ? x.tags.join(', ') : h('span', { class: 'muted' }, t('reg.untagged'))), h('td', null, ui.age(x.pushed))))))
+        : j.status === 'done' ? h('p', { class: 'muted' }, t('reg.removedNone')) : null);
+    ui.refresh();
+  };
+  poll();
+}
+
 // ---------------------------------------------------------------- jobs
 
 // jobSummary says what a job did, from its report.
@@ -468,6 +608,9 @@ function jobSummary(ui, j) {
   }
   if (j.kind === 'verify' && r.started) {
     return t('reg.verifySummary', r.checked, bytes(r.bytes), (r.corrupt || []).length, (r.missing || []).length);
+  }
+  if (j.kind === 'retention' && r.started) {
+    return t(r.dryRun ? 'reg.retentionDrySummary' : 'reg.retentionSummary', r.picked, r.kept, r.protected, r.deleted);
   }
   return j.summary || '';
 }
@@ -489,7 +632,8 @@ function jobsPage(data, ui) {
       button(t('reg.gcNow'), async () => {
         if (await ui.ask({ title: t('reg.gcNow'), message: t('reg.gcConfirm'), confirm: t('reg.gcNow'), danger: true })) start('gc', false);
       }, 'danger'),
-      button(t('reg.verifyNow'), () => start('verify', false)))));
+      button(t('reg.verifyNow'), () => start('verify', false)),
+      button(t('reg.retentionAllDry'), () => start('retention', true)))));
   const sched = ui.panel(t('reg.schedules'), h('table', { class: 'flat' },
     h('thead', null, h('tr', null, ['job', 'cron', 'next', 'lastRun'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
     h('tbody', null, schedules.map(sc => h('tr', null,
@@ -501,7 +645,8 @@ function jobsPage(data, ui) {
   const history = jobs.length ? h('table', null,
     h('thead', null, h('tr', null, ['job', 'by', 'started', 'took', 'status', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
     h('tbody', null, jobs.map(j => h('tr', { class: j.status === 'failed' || j.alarm ? 'problem' : null },
-      h('td', null, t('reg.job.' + j.kind), j.dryRun ? h('span', { class: 'muted' }, ' · ' + t('reg.dryRun')) : null),
+      h('td', null, t('reg.job.' + j.kind), j.project ? h('span', { class: 'muted' }, ' · ' + j.project) : null,
+        j.dryRun ? h('span', { class: 'muted' }, ' · ' + t('reg.dryRun')) : null),
       h('td', null, j.by === 'schedule' ? h('span', { class: 'muted' }, t('reg.bySchedule')) : j.by),
       h('td', null, age(j.started)),
       h('td', null, j.finished ? ui.duration(j.started, j.finished) : '…'),

@@ -924,3 +924,9 @@ table.sizing td > div + div { margin-top: 2px; }
 .reg-manifest pre { margin: 10px 0 0; max-height: 60vh; overflow: auto; font-size: 12px; }
 .reg-events { margin-top: 16px; }
 .reg-quota { max-width: 420px; margin-top: 6px; font-size: 13px; }
+.reg-rules { margin: 0; padding-left: 18px; line-height: 1.7; }
+.reg-rule-list { display: grid; gap: 10px; margin: 8px 0; }
+.reg-rule { display: grid; grid-template-columns: 1fr 1fr auto 1.4fr auto; gap: 8px; align-items: end; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); }
+.reg-keep { display: flex; gap: 6px; }
+.reg-keep input { width: 80px; }
+@media (max-width: 640px) { .reg-rule { grid-template-columns: 1fr 1fr; } }

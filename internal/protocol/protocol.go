@@ -214,6 +214,11 @@ type Pod struct {
 	// pod's containers have no limit for: the pod as a whole has none then,
 	// whatever Limits adds up.
 	Unlimited []string `json:"unlimited,omitempty"`
+	// Images are the images of its containers, init containers too, and
+	// ImageIDs the digests they were pulled by, as the kubelet says: an
+	// image registry keeps what runs.
+	Images   []string `json:"images,omitempty"`
+	ImageIDs []string `json:"imageIDs,omitempty"`
 }
 
 // Healthy reports whether the pod is running with all containers ready, or
@@ -372,6 +377,8 @@ type CronJob struct {
 	Active       int        `json:"active"`
 	LastSchedule *time.Time `json:"lastSchedule,omitempty"`
 	LastSuccess  *time.Time `json:"lastSuccess,omitempty"`
+	// Images are those its jobs run, which no pod may run between them.
+	Images []string `json:"images,omitempty"`
 }
 
 type Event struct {

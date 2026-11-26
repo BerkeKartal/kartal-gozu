@@ -68,8 +68,8 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	// Stopping it stops what runs beside it too, also when the demo stops
 	// early.
 	ctx, cancel := context.WithCancel(ctx)
-	reg := registry.New(registry.Config{Store: store, DB: db, Auth: &registry.ServerAuth{URL: serverURL, Secret: secret},
-		PublicURL: "http://" + public, Log: log})
+	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
+	reg := registry.New(registry.Config{Store: store, DB: db, Auth: server, Running: server, PublicURL: "http://" + public, Log: log})
 	// What happens in it goes to the server's audit log.
 	events := registry.NewForwarder(serverURL, secret, log)
 	db.SetOnEvent(events.Hand)
@@ -86,7 +86,7 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 		kind string
 		dry  bool
 	}{{registry.JobVerify, false}, {registry.JobGC, true}} {
-		if _, err := reg.StartJob(job.kind, job.dry, "ayse"); err != nil {
+		if _, err := reg.StartJob(job.kind, job.dry, "", "ayse"); err != nil {
 			log.Warn("demo registry: a first job", "err", err)
 		}
 	}
@@ -337,8 +337,12 @@ func seedRegistry(store blobstore.Store, db *meta.DB, log *slog.Logger) error {
 	check(db.CreateProject(meta.Project{Name: "library", Public: true, Description: "Base images anyone may pull"}, "ayse"))
 	ago(90)
 	check(db.CreateProject(meta.Project{Name: "team-0", Description: "The web team's images and charts",
-		// Released versions stay as they were pushed.
-		Immutable: []string{"[0-9]*"}, Quota: 2 << 30}, "ayse"))
+		// Released versions stay as they were pushed; of the rest, the 3
+		// latest builds stay, and untagged ones for a week.
+		Immutable: []string{"[0-9]*"}, Quota: 2 << 30, Retention: []meta.RetentionRule{
+			{Tags: "**", Keep: registry.KeepLatestPushed, Count: 3},
+			{Untagged: true, Keep: registry.KeepPushedWithin, Days: 7},
+		}}, "ayse"))
 
 	// A multi-arch base image.
 	base := func(arch string) []step {

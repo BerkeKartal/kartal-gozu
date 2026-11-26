@@ -75,9 +75,10 @@ func run(log *slog.Logger) error {
 	events := registry.NewForwarder(serverURL, secret, log)
 	db.SetOnEvent(events.Hand)
 	go events.Run(ctx)
+	// The server says who signs in, and what runs in the clusters.
+	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
 	reg := registry.New(registry.Config{
-		Store: store, DB: db, Log: log, Zone: zone,
-		Auth:      &registry.ServerAuth{URL: serverURL, Secret: secret},
+		Store: store, DB: db, Log: log, Zone: zone, Auth: server, Running: server,
 		PublicURL: config.String("KARTAL_REGISTRY_PUBLIC_URL", ""),
 	})
 	// Garbage collection and the blobs' checks, on their schedules.

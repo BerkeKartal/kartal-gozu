@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /api/v1/registry/authorize", s.registryAuthorize)
 	mux.HandleFunc("POST /api/v1/registry/events", s.registryEvents)
+	mux.HandleFunc("GET /api/v1/registry/running", s.registryRunning)
 	mux.HandleFunc("GET /api/v1/registry", s.signedIn(s.registryInfo))
 	mux.HandleFunc("GET /api/v1/registry/projects", s.signedIn(s.registryProjects))
 	mux.HandleFunc("POST /api/v1/registry/projects", s.signedIn(s.registryCreateProject))
@@ -47,7 +49,7 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/registry/events", s.signedIn(s.registryEventList))
 	mux.HandleFunc("GET /api/v1/registry/jobs", s.signedIn(s.registryAdminRelay))
 	mux.HandleFunc("POST /api/v1/registry/jobs", s.signedIn(s.registryStartJob))
-	mux.HandleFunc("GET /api/v1/registry/jobs/{id}", s.signedIn(s.registryAdminRelay))
+	mux.HandleFunc("GET /api/v1/registry/jobs/{id}", s.signedIn(s.registryJob))
 	mux.HandleFunc("PUT /api/v1/registry/schedules/{kind}", s.signedIn(s.registrySetSchedule))
 	mux.HandleFunc("GET /api/v1/registry/robots", s.signedIn(s.robotList))
 	mux.HandleFunc("POST /api/v1/registry/robots", s.signedIn(s.robotAdd))
@@ -171,6 +173,56 @@ func (s *Server) registryEvents(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("audit", "user", entry.User, "action", entry.Action, "project", entry.Project, "object", entry.Object, "detail", entry.Detail)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// registryRunning tells the registry what runs, or may run, in each
+// cluster: the images of its pods, workloads and CronJobs, which retention
+// keeps. A cluster that has sent nothing since the server started is not
+// known; the registry takes it at its last word.
+func (s *Server) registryRunning(w http.ResponseWriter, r *http.Request) {
+	if !s.registrySecret(r) {
+		writeError(w, http.StatusUnauthorized, "the registry's shared secret is needed")
+		return
+	}
+	out := []registry.ClusterImages{}
+	for _, c := range s.st.Clusters() {
+		ci := registry.ClusterImages{Name: c.Name, Digests: []string{}, Refs: []string{}}
+		if snap := c.Snapshot; snap != nil {
+			ci.Known, ci.At = true, c.LastSeen.UTC()
+			digests, refs := map[string]bool{}, map[string]bool{}
+			add := func(images ...string) {
+				for _, img := range images {
+					local, digest := registry.ImageRef(img, s.cfg.RegistryPublic)
+					if digest != "" {
+						digests[digest] = true
+					}
+					if local != "" {
+						refs[local] = true
+					}
+				}
+			}
+			for _, p := range snap.Pods {
+				add(p.Images...)
+				add(p.ImageIDs...)
+			}
+			for _, wl := range snap.Workloads {
+				add(wl.Images...)
+			}
+			for _, cj := range snap.CronJobs {
+				add(cj.Images...)
+			}
+			for d := range digests {
+				ci.Digests = append(ci.Digests, d)
+			}
+			for ref := range refs {
+				ci.Refs = append(ci.Refs, ref)
+			}
+			sort.Strings(ci.Digests)
+			sort.Strings(ci.Refs)
+		}
+		out = append(out, ci)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"clusters": out})
 }
 
 // ---------------------------------------------------------------- the UI asks
@@ -490,17 +542,46 @@ func (s *Server) registryAdminRelay(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) registryStartJob(w http.ResponseWriter, r *http.Request) {
-	if !s.registryAdminOnly(w, r) {
+	var body struct {
+		Kind    string `json:"kind"`
+		DryRun  bool   `json:"dryRun"`
+		Project string `json:"project,omitempty"`
+	}
+	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention", "dryRun", "project"}`) {
 		return
 	}
-	var body struct {
-		Kind   string `json:"kind"`
-		DryRun bool   `json:"dryRun"`
-	}
-	if !readJSON(w, r, &body, `{"kind": "gc"|"verify", "dryRun"}`) {
+	// A project's admins apply its retention rules; the rest is the
+	// registry's admins'.
+	if body.Kind == registry.JobRetention && body.Project != "" {
+		if !s.mayIn(w, r, body.Project, auth.Admin) {
+			return
+		}
+	} else if !s.registryAdminOnly(w, r) {
 		return
 	}
 	s.relay(w, r, http.MethodPost, "/admin/v1/jobs", nil, body)
+}
+
+// registryJob is a job, for the registry's admins and, of a job about a
+// project, the project's admins.
+func (s *Server) registryJob(w http.ResponseWriter, r *http.Request) {
+	status, b, err := s.registryCall(r, http.MethodGet, "/admin/v1/jobs/"+url.PathEscape(r.PathValue("id")), nil, nil)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "the image registry could not be reached")
+		return
+	}
+	var j meta.Job
+	u := userOf(r)
+	if status != http.StatusOK || json.Unmarshal(b, &j) != nil ||
+		!(u.RegistryAdmin() || (j.Project != "" && u.RoleInProject(j.Project) >= auth.Admin)) {
+		if !s.registryAdminOnly(w, r) {
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	w.Write(b)
 }
 
 func (s *Server) registrySetSchedule(w http.ResponseWriter, r *http.Request) {

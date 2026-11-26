@@ -1062,16 +1062,28 @@ users, passwords, directory and roles the rest has.
   repositories hold them; metadata is kept in memory and written to a log
   on the same volume before a change is answered. A push is never half
   there after a crash.
+- **Retention.** A project's rules decide which artifacts stay, as in
+  Harbor: each picks some (of repositories and tags matching its patterns,
+  the untagged too if it says so) and keeps the latest pushed or pulled,
+  or those pushed or pulled within some days, or all of them. What a rule
+  picks and none keeps is deleted; what no rule picks is left alone. A
+  template keeps the 5 latest and what is newer than 180 days. Retention
+  never deletes an image that runs, or may run, in a cluster: the agents
+  report the images and digests of every pod, workload and CronJob, and a
+  cluster whose agent says nothing at the moment counts as it said last.
+  Nor an artifact with an immutable tag. A project's admins set its rules,
+  and try them in a dry run that lists what would go.
 - **Jobs.** *Garbage collection* runs while the registry serves: it takes
   from each repository the blobs none of its artifacts uses, deletes the
   blobs no repository has, and the uploads left behind for a day. What is
   newer than two hours is spared, for the pushes under way, and a blob a
   push uses again is never taken. *The blob check* reads every blob again
   to see that it is still its digest, and finds what artifacts use that is
-  gone. Both run on schedules, cron expressions read in
-  `KARTAL_REGISTRY_TIMEZONE` (every night at 03:00, and Sundays at 04:00,
-  to begin with), or when an admin starts them on the Jobs page, which
-  also has a dry run and keeps what each job did.
+  gone. They and retention run on schedules, cron expressions read in
+  `KARTAL_REGISTRY_TIMEZONE` (retention every night at 02:00, garbage at
+  03:00, and the check on Sundays at 04:00, to begin with), or when an
+  admin starts them on the Jobs page, which also has dry runs and keeps
+  what each job did.
 
 To install it, add a `registry-secret` key (`openssl rand -hex 24`) to the
 server's Secret, uncomment the `KARTAL_REGISTRY_*` variables in

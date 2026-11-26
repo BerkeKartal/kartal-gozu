@@ -114,7 +114,11 @@ type projectInput struct {
 
 // projectRules checks a project's immutable tags and quota, answering the
 // request when they are wrong.
-func projectRules(w http.ResponseWriter, immutable []string, quota int64) bool {
+func projectRules(w http.ResponseWriter, immutable []string, quota int64, retention []meta.RetentionRule) bool {
+	if err := ValidRetention(retention); err != nil {
+		adminError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
 	if len(immutable) > 20 {
 		adminError(w, http.StatusBadRequest, "at most 20 patterns of immutable tags")
 		return false
@@ -160,7 +164,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusBadRequest, "the description is longer than 500 characters")
 		return
 	}
-	if !projectRules(w, in.Immutable, in.Quota) {
+	if !projectRules(w, in.Immutable, in.Quota, nil) {
 		return
 	}
 	if len(in.Immutable) == 0 {
@@ -214,13 +218,17 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var immutable []string
 	var quota int64
+	var retention []meta.RetentionRule
 	if in.Immutable != nil {
 		immutable = *in.Immutable
 	}
 	if in.Quota != nil {
 		quota = *in.Quota
 	}
-	if !projectRules(w, immutable, quota) {
+	if in.Retention != nil {
+		retention = *in.Retention
+	}
+	if !projectRules(w, immutable, quota, retention) {
 		return
 	}
 	p, err := s.cfg.DB.UpdateProject(r.PathValue("name"), in, actor(r))
@@ -490,13 +498,14 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Kind   string `json:"kind"`
-		DryRun bool   `json:"dryRun"`
+		Kind    string `json:"kind"`
+		DryRun  bool   `json:"dryRun"`
+		Project string `json:"project"`
 	}
 	if !readBody(w, r, &in) {
 		return
 	}
-	j, err := s.StartJob(in.Kind, in.DryRun, actor(r))
+	j, err := s.StartJob(in.Kind, in.DryRun, in.Project, actor(r))
 	switch {
 	case errors.Is(err, ErrRunning):
 		adminError(w, http.StatusConflict, err.Error())

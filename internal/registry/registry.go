@@ -75,7 +75,10 @@ type Config struct {
 	// Zone is the time zone the jobs' schedules are read in;
 	// cron.DefaultZone when nil.
 	Zone *time.Location
-	Log  *slog.Logger
+	// Running tells what the clusters run, which retention keeps; without
+	// it retention deletes nothing.
+	Running ImageSource
+	Log     *slog.Logger
 }
 
 // Server is a registry.

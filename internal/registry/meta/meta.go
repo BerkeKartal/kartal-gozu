@@ -62,6 +62,37 @@ type Project struct {
 	// Quota is how many bytes the project may hold, each blob counted
 	// once; 0 is no limit.
 	Quota int64 `json:"quota,omitempty"`
+	// Retention are the rules that decide which artifacts stay: each picks
+	// some and keeps some of those; one that a rule picks and none keeps
+	// is deleted when retention runs. What no rule picks is left alone.
+	Retention []RetentionRule `json:"retention,omitempty"`
+}
+
+// RetentionRule picks artifacts of some repositories by their tags, and
+// keeps some of them.
+type RetentionRule struct {
+	// Repositories is a pattern of the repositories' names without the
+	// project (web, charts/*); empty or ** is every one.
+	Repositories string `json:"repositories,omitempty"`
+	// Tags is a pattern of tags (v*, release-*; ** for every tag) the
+	// artifacts it picks have; empty picks no tagged one. Untagged picks
+	// the untagged too.
+	Tags     string `json:"tags,omitempty"`
+	Untagged bool   `json:"untagged,omitempty"`
+	// Keep is what of them it keeps: the Count latest pushed or pulled
+	// (latestPushed, latestPulled), those pushed or pulled within Days
+	// (pushedWithin, pulledWithin), or all of them (always).
+	Keep  string `json:"keep"`
+	Count int    `json:"count,omitempty"`
+	Days  int    `json:"days,omitempty"`
+}
+
+// RunningImages are what a cluster said it runs, or may run: the digests
+// and, of this registry, the repositories with their tags or digests.
+type RunningImages struct {
+	At      time.Time `json:"at"`
+	Digests []string  `json:"digests"`
+	Refs    []string  `json:"refs"`
 }
 
 // ValidTagPattern tells whether a pattern of immutable tags can be
@@ -216,9 +247,11 @@ type Event struct {
 // Job is a task the registry ran, or runs: collecting garbage, checking
 // the blobs.
 type Job struct {
-	ID       string     `json:"id"`
-	Kind     string     `json:"kind"`
-	DryRun   bool       `json:"dryRun,omitempty"`
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	DryRun bool   `json:"dryRun,omitempty"`
+	// Project is the one project a job is about, if one.
+	Project  string     `json:"project,omitempty"`
 	By       string     `json:"by"`
 	Started  time.Time  `json:"started"`
 	Finished *time.Time `json:"finished,omitempty"`
@@ -260,27 +293,29 @@ const snapshotEvery = 1000
 
 // entry is one line of the log.
 type entry struct {
-	Op       string     `json:"op"`
-	Project  *Project   `json:"project,omitempty"`
-	Name     string     `json:"name,omitempty"`
-	Repo     string     `json:"repo,omitempty"`
-	Digest   string     `json:"digest,omitempty"`
-	Size     int64      `json:"size,omitempty"`
-	Tag      string     `json:"tag,omitempty"`
-	Artifact *Artifact  `json:"artifact,omitempty"`
-	Pulls    int64      `json:"pulls,omitempty"`
-	At       *time.Time `json:"at,omitempty"`
-	Event    *Event     `json:"event,omitempty"`
-	Job      *Job       `json:"job,omitempty"`
-	Schedule *Schedule  `json:"schedule,omitempty"`
+	Op       string         `json:"op"`
+	Project  *Project       `json:"project,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	Repo     string         `json:"repo,omitempty"`
+	Digest   string         `json:"digest,omitempty"`
+	Size     int64          `json:"size,omitempty"`
+	Tag      string         `json:"tag,omitempty"`
+	Artifact *Artifact      `json:"artifact,omitempty"`
+	Pulls    int64          `json:"pulls,omitempty"`
+	At       *time.Time     `json:"at,omitempty"`
+	Event    *Event         `json:"event,omitempty"`
+	Job      *Job           `json:"job,omitempty"`
+	Schedule *Schedule      `json:"schedule,omitempty"`
+	Running  *RunningImages `json:"running,omitempty"`
 }
 
 type state struct {
-	Projects  []*Project    `json:"projects"`
-	Repos     []*Repository `json:"repositories"`
-	Events    []Event       `json:"events"`
-	Jobs      []Job         `json:"jobs,omitempty"`
-	Schedules []Schedule    `json:"schedules,omitempty"`
+	Projects  []*Project               `json:"projects"`
+	Repos     []*Repository            `json:"repositories"`
+	Events    []Event                  `json:"events"`
+	Jobs      []Job                    `json:"jobs,omitempty"`
+	Schedules []Schedule               `json:"schedules,omitempty"`
+	Running   map[string]RunningImages `json:"running,omitempty"`
 }
 
 // DB is the registry's metadata.
@@ -301,6 +336,8 @@ type DB struct {
 	events    []Event
 	jobs      []Job
 	schedules map[string]Schedule
+	// running are what each cluster last said it runs.
+	running map[string]RunningImages
 	// pulled are the artifacts pulled since their counts were last written.
 	pulled map[[2]string]bool
 	// onEvent hears of each event as it is written.
@@ -322,7 +359,7 @@ func Open(dir string) (*DB, error) {
 		return nil, err
 	}
 	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{},
-		schedules: map[string]Schedule{}}
+		schedules: map[string]Schedule{}, running: map[string]RunningImages{}}
 	if b, err := os.ReadFile(d.path("snapshot.json")); err == nil {
 		var s state
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -339,6 +376,9 @@ func Open(dir string) (*DB, error) {
 		d.jobs = s.Jobs
 		for _, sc := range s.Schedules {
 			d.schedules[sc.Kind] = sc
+		}
+		for name, ri := range s.Running {
+			d.running[name] = ri
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -495,6 +535,8 @@ func (d *DB) apply(e entry) {
 		}
 	case "schedule":
 		d.schedules[e.Schedule.Kind] = *e.Schedule
+	case "running":
+		d.running[e.Name] = *e.Running
 	}
 }
 
@@ -550,7 +592,7 @@ func (d *DB) Healthy() error {
 
 // snapshot writes the state and starts the log over; the lock is held.
 func (d *DB) snapshot() error {
-	s := state{Events: d.events, Jobs: d.jobs}
+	s := state{Events: d.events, Jobs: d.jobs, Running: d.running}
 	for _, sc := range d.schedules {
 		s.Schedules = append(s.Schedules, sc)
 	}
@@ -705,10 +747,11 @@ func visibility(public bool) string {
 // ProjectChange is what changes in a project; a field left nil stays as
 // it is.
 type ProjectChange struct {
-	Public      *bool     `json:"public"`
-	Description *string   `json:"description"`
-	Immutable   *[]string `json:"immutable"`
-	Quota       *int64    `json:"quota"`
+	Public      *bool            `json:"public"`
+	Description *string          `json:"description"`
+	Immutable   *[]string        `json:"immutable"`
+	Quota       *int64           `json:"quota"`
+	Retention   *[]RetentionRule `json:"retention"`
 }
 
 // UpdateProject changes a project: whether it is public, its description,
@@ -736,6 +779,16 @@ func (d *DB) UpdateProject(name string, ch ProjectChange, user string) (Project,
 			said = append(said, "no immutable tags")
 		} else {
 			said = append(said, "immutable tags "+strings.Join(p.Immutable, ", "))
+		}
+	}
+	if ch.Retention != nil {
+		before, _ := json.Marshal(p.Retention)
+		p.Retention = append([]RetentionRule(nil), *ch.Retention...)
+		if len(p.Retention) == 0 {
+			p.Retention = nil
+		}
+		if after, _ := json.Marshal(p.Retention); string(after) != string(before) {
+			said = append(said, fmt.Sprintf("retention rules: %d", len(p.Retention)))
 		}
 	}
 	if ch.Quota != nil && *ch.Quota != p.Quota {
@@ -1018,6 +1071,31 @@ func (d *DB) SetSchedule(sc Schedule, user string) error {
 		entries = append(entries, d.event(user, "schedule", "", "", "", "", sc.Kind+": "+sc.Cron+" ("+state+")"))
 	}
 	return d.commit(entries...)
+}
+
+// SetRunning keeps what a cluster said it runs, when it changed.
+func (d *DB) SetRunning(cluster string, ri RunningImages) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sort.Strings(ri.Digests)
+	sort.Strings(ri.Refs)
+	if cur, ok := d.running[cluster]; ok && strings.Join(cur.Digests, ",") == strings.Join(ri.Digests, ",") &&
+		strings.Join(cur.Refs, ",") == strings.Join(ri.Refs, ",") {
+		return nil
+	}
+	ri.At = ri.At.UTC()
+	return d.commit(entry{Op: "running", Name: cluster, Running: &ri})
+}
+
+// Running are what each cluster last said it runs.
+func (d *DB) Running() map[string]RunningImages {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make(map[string]RunningImages, len(d.running))
+	for name, ri := range d.running {
+		out[name] = ri
+	}
+	return out
 }
 
 // MarkScheduled notes that a schedule started its job.

@@ -547,6 +547,16 @@ func toPod(p kube.Pod) protocol.Pod {
 	for _, c := range p.Spec.Containers {
 		out.Containers = append(out.Containers, c.Name)
 	}
+	for _, c := range append(append([]kube.Container(nil), p.Spec.InitContainers...), p.Spec.Containers...) {
+		if c.Image != "" && !slices.Contains(out.Images, c.Image) {
+			out.Images = append(out.Images, c.Image)
+		}
+	}
+	for _, cs := range append(append([]kube.ContainerStatus(nil), p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+		if cs.ImageID != "" && !slices.Contains(out.ImageIDs, cs.ImageID) {
+			out.ImageIDs = append(out.ImageIDs, cs.ImageID)
+		}
+	}
 	for _, cs := range p.Status.InitContainerStatuses {
 		if r := stateReason(cs.State); r != "" && r != "Completed" && out.Reason == "" {
 			out.Reason = "Init:" + r
@@ -670,6 +680,7 @@ func toCronJob(cj kube.CronJob) protocol.CronJob {
 		Active:       len(cj.Status.Active),
 		LastSchedule: cj.Status.LastScheduleTime,
 		LastSuccess:  cj.Status.LastSuccessfulTime,
+		Images:       images(cj.Spec.JobTemplate.Spec.Template),
 	}
 }
 

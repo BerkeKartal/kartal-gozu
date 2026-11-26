@@ -19,13 +19,16 @@ import (
 
 // The kinds of jobs.
 const (
-	JobGC     = "gc"
-	JobVerify = "verify"
+	JobGC        = "gc"
+	JobVerify    = "verify"
+	JobRetention = "retention"
 )
 
-// defaultSchedules are the schedules a registry starts with: garbage
-// every night, the blobs checked every Sunday.
+// defaultSchedules are the schedules a registry starts with: the
+// projects' retention rules applied every night, and the garbage they
+// leave collected after; the blobs checked every Sunday.
 var defaultSchedules = []meta.Schedule{
+	{Kind: JobRetention, Cron: "0 2 * * *", Enabled: true},
 	{Kind: JobGC, Cron: "0 3 * * *", Enabled: true},
 	{Kind: JobVerify, Cron: "0 4 * * 0", Enabled: true},
 }
@@ -42,7 +45,7 @@ var (
 // ScheduledBy is who a schedule's jobs are by.
 const ScheduledBy = "schedule"
 
-func jobKind(kind string) bool { return kind == JobGC || kind == JobVerify }
+func jobKind(kind string) bool { return kind == JobGC || kind == JobVerify || kind == JobRetention }
 
 // Start lets jobs run until ctx ends, and runs the schedules. A job that was
 // running when the registry stopped is marked as failed.
@@ -125,7 +128,7 @@ func (s *Server) RunDue() {
 			s.cfg.Log.Warn("registry: noting a schedule's run", "kind", sc.Kind, "err", err)
 			continue
 		}
-		if _, err := s.StartJob(sc.Kind, false, ScheduledBy); err != nil && !errors.Is(err, ErrRunning) {
+		if _, err := s.StartJob(sc.Kind, false, "", ScheduledBy); err != nil && !errors.Is(err, ErrRunning) {
 			s.cfg.Log.Warn("registry: starting a scheduled job", "kind", sc.Kind, "err", err)
 		}
 	}
@@ -146,17 +149,29 @@ func (s *Server) SetSchedule(kind, expr string, enabled bool, user string) (meta
 }
 
 // StartJob starts a job, which runs on its own; the job is remembered as
-// running. Only collecting garbage has a dry run.
-func (s *Server) StartJob(kind string, dryRun bool, by string) (meta.Job, error) {
+// running. Collecting garbage and retention have dry runs, and retention
+// may be of one project.
+func (s *Server) StartJob(kind string, dryRun bool, project, by string) (meta.Job, error) {
 	if !jobKind(kind) {
 		return meta.Job{}, fmt.Errorf("%w: %q", ErrJob, kind)
 	}
-	if dryRun && kind != JobGC {
+	if dryRun && kind == JobVerify {
 		return meta.Job{}, fmt.Errorf("%w: a %s has no dry run", ErrJob, kind)
+	}
+	if project != "" {
+		p, ok := s.cfg.DB.Project(project)
+		switch {
+		case kind != JobRetention:
+			return meta.Job{}, fmt.Errorf("%w: only retention is of a project", ErrJob)
+		case !ok:
+			return meta.Job{}, fmt.Errorf("%w: project %s does not exist", ErrJob, project)
+		case len(p.Retention) == 0:
+			return meta.Job{}, fmt.Errorf("%w: project %s has no retention rules", ErrJob, project)
+		}
 	}
 	b := make([]byte, 8)
 	rand.Read(b)
-	j := meta.Job{ID: hex.EncodeToString(b), Kind: kind, DryRun: dryRun, By: by, Started: s.now().UTC(), Status: meta.JobRunning}
+	j := meta.Job{ID: hex.EncodeToString(b), Kind: kind, DryRun: dryRun, Project: project, By: by, Started: s.now().UTC(), Status: meta.JobRunning}
 	s.jobMu.Lock()
 	if id, ok := s.running[kind]; ok {
 		s.jobMu.Unlock()
@@ -198,6 +213,10 @@ func (s *Server) runJob(ctx context.Context, j meta.Job) {
 		if err == nil && !rep.OK() {
 			j.Alarm = fmt.Sprintf("%d corrupt and %d missing blobs", len(rep.Corrupt), len(rep.Missing))
 		}
+	case JobRetention:
+		var rep RetentionReport
+		rep, err = s.Retention(ctx, j.Project, j.DryRun, j.By)
+		report, j.Summary = rep, rep.String()
 	}
 	if b, merr := json.Marshal(report); merr == nil {
 		j.Report = b

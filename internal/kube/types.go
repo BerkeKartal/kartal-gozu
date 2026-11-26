@@ -133,8 +133,13 @@ type Job struct {
 type CronJob struct {
 	Metadata Meta `json:"metadata"`
 	Spec     struct {
-		Schedule string `json:"schedule"`
-		Suspend  *bool  `json:"suspend"`
+		Schedule    string `json:"schedule"`
+		Suspend     *bool  `json:"suspend"`
+		JobTemplate struct {
+			Spec struct {
+				Template PodTemplate `json:"template"`
+			} `json:"spec"`
+		} `json:"jobTemplate"`
 	} `json:"spec"`
 	Status struct {
 		Active []struct {
@@ -343,7 +348,11 @@ type ContainerState struct {
 }
 
 type ContainerStatus struct {
-	Name         string         `json:"name"`
+	Name string `json:"name"`
+	// Image is the image the container runs, and ImageID the digest it was
+	// pulled by (docker-pullable://host/repo@sha256:... and the like).
+	Image        string         `json:"image"`
+	ImageID      string         `json:"imageID"`
 	Ready        bool           `json:"ready"`
 	RestartCount int32          `json:"restartCount"`
 	State        ContainerState `json:"state"`
