@@ -456,3 +456,37 @@ func TestProjectChangeLeavesTheRest(t *testing.T) {
 		t.Errorf("after reopening: %+v", p)
 	}
 }
+
+// Links keep when they were made across a restart, and only garbage that
+// is still garbage goes.
+func TestGarbageLinks(t *testing.T) {
+	dir := t.TempDir()
+	d := open(t, dir)
+	d.CreateProject(Project{Name: "shop"}, "admin")
+	now := time.Now()
+	d.SetClock(func() time.Time { return now.Add(-3 * time.Hour) })
+	push(t, d, "shop/web", dM, "1.0")
+	d.LinkBlob("shop/web", dC, 50)
+	d.SetClock(time.Now)
+	d.Close()
+	d = open(t, dir)
+	defer d.Close()
+	before := now.Add(-2 * time.Hour)
+	g := d.GarbageLinks(before)
+	if len(g) != 1 || len(g["shop/web"]) != 1 || g["shop/web"][0] != dC {
+		t.Fatalf("garbage: %v", g)
+	}
+	if in := d.BlobsInUse(g); in[dC] || !in[dA] || !in[dB] || !in[dM] {
+		t.Errorf("in use but for the garbage: %v", in)
+	}
+	// Used again meanwhile: it stays.
+	if err := d.LinkBlob("shop/web", dC, 50); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.UnlinkGarbage(g, before); err != nil || n != 0 {
+		t.Errorf("garbage used again: %d %v", n, err)
+	}
+	if !d.InUse(dC) || !d.InUse(dM) || d.InUse(dS) {
+		t.Error("InUse")
+	}
+}

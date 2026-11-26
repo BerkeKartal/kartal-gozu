@@ -84,6 +84,9 @@ type Server struct {
 	tokens map[string]*grant
 	// uploads tie an upload to the repository it was started in.
 	uploads map[string]string
+
+	// gcMu lets one garbage collection run at a time.
+	gcMu sync.Mutex
 }
 
 // grant is what a token allows.

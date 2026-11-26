@@ -39,6 +39,7 @@ func (p *people) Authorize(_ context.Context, user, secret string, projects []st
 
 type env struct {
 	t   *testing.T
+	dir string // the blob store's
 	srv *httptest.Server
 	adm *httptest.Server
 	reg *Server
@@ -47,7 +48,8 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	store, err := blobstore.NewFile(t.TempDir())
+	dir := t.TempDir()
+	store, err := blobstore.NewFile(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,7 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(func() { db.Close() })
 	reg := New(Config{Store: store, DB: db, Auth: &people{}})
-	e := &env{t: t, reg: reg, db: db, srv: httptest.NewServer(reg.Public()), adm: httptest.NewServer(reg.Admin("admin-secret"))}
+	e := &env{t: t, dir: dir, reg: reg, db: db, srv: httptest.NewServer(reg.Public()), adm: httptest.NewServer(reg.Admin("admin-secret"))}
 	t.Cleanup(e.srv.Close)
 	t.Cleanup(e.adm.Close)
 	for _, p := range []meta.Project{{Name: "shop"}, {Name: "infra"}, {Name: "pub", Public: true}} {

@@ -45,9 +45,18 @@ func (s *Server) blob(w http.ResponseWriter, r *http.Request, g *grant, t target
 		if !s.may(w, r, g, t.name, "pull") {
 			return
 		}
-		if _, ok := s.cfg.DB.Blob(t.name, t.ref); !ok {
+		linked, ok := s.cfg.DB.Blob(t.name, t.ref)
+		if !ok {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UNKNOWN", "%s is not in %s", t.ref, t.name))
 			return
+		}
+		// A client that may push asks whether the blob is there before
+		// uploading it: it will use it, which renews the link that spares
+		// it from collecting garbage meanwhile.
+		if g != nil && g.access["repository:"+t.name]["push"] {
+			if err := s.cfg.DB.LinkBlob(t.name, t.ref, linked); err != nil && !errors.Is(err, meta.ErrQuota) {
+				s.cfg.Log.Warn("registry: renewing a link", "repo", t.name, "digest", t.ref, "err", err)
+			}
 		}
 		f, size, err := s.cfg.Store.Open(t.ref)
 		if errors.Is(err, blobstore.ErrNotFound) {
@@ -78,6 +87,9 @@ func (s *Server) blob(w http.ResponseWriter, r *http.Request, g *grant, t target
 		}
 		if err := s.cfg.DB.UnlinkBlob(t.name, t.ref); errors.Is(err, meta.ErrNotFound) {
 			writeError(w, errorf(http.StatusNotFound, "BLOB_UNKNOWN", "%s is not in %s", t.ref, t.name))
+			return
+		} else if errors.Is(err, meta.ErrInUse) {
+			writeError(w, errorf(http.StatusConflict, "DENIED", "%s", err))
 			return
 		} else if err != nil {
 			s.internal(w, "unlinking a blob", err)

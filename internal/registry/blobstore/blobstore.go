@@ -60,6 +60,11 @@ type Store interface {
 	Put(digest string, b []byte) error
 	// Delete removes a blob; a blob that is not there is no error.
 	Delete(digest string) error
+	// DeleteIf removes a blob last written before a time, unless keep says
+	// otherwise, asked at the last moment; it tells the size removed and
+	// whether it was. Storing the same blob meanwhile makes it new again,
+	// so that collecting garbage never takes a blob being pushed.
+	DeleteIf(digest string, before time.Time, keep func() bool) (int64, bool, error)
 	// Walk visits every blob.
 	Walk(fn func(digest string, size int64, modified time.Time) error) error
 
@@ -87,6 +92,9 @@ type File struct {
 
 	mu      sync.Mutex
 	hashers map[string]*upload
+	// placing is held while a blob is stored or deleted, so that a blob
+	// stored again is never deleted as old.
+	placing sync.Mutex
 }
 
 // upload is the digest of what an upload holds so far, so that finishing
@@ -168,7 +176,7 @@ func (f *File) Put(digest string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(p); err == nil {
+	if f.renew(p) {
 		return nil
 	}
 	tmp, err := os.CreateTemp(filepath.Join(f.root, "uploads"), "put-*")
@@ -183,8 +191,20 @@ func (f *File) Put(digest string, b []byte) error {
 	return f.place(tmp, p)
 }
 
+// renew tells whether a blob is there, and makes it new if so: it is being
+// stored again.
+func (f *File) renew(p string) bool {
+	f.placing.Lock()
+	defer f.placing.Unlock()
+	if _, err := os.Stat(p); err != nil {
+		return false
+	}
+	now := time.Now()
+	return os.Chtimes(p, now, now) == nil
+}
+
 // place syncs a finished file and moves it to its blob path, where a blob
-// that is already there wins: it has the same content.
+// that is already there wins: it has the same content, and is new again.
 func (f *File) place(fh *os.File, p string) error {
 	if err := fh.Sync(); err != nil {
 		fh.Close()
@@ -196,7 +216,13 @@ func (f *File) place(fh *os.File, p string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return err
 	}
+	f.placing.Lock()
+	defer f.placing.Unlock()
 	if _, err := os.Stat(p); err == nil {
+		now := time.Now()
+		if err := os.Chtimes(p, now, now); err != nil {
+			return err
+		}
 		return os.Remove(fh.Name())
 	}
 	if err := os.Rename(fh.Name(), p); err != nil {
@@ -222,10 +248,35 @@ func (f *File) Delete(digest string) error {
 	if err != nil {
 		return nil
 	}
+	f.placing.Lock()
+	defer f.placing.Unlock()
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+func (f *File) DeleteIf(digest string, before time.Time, keep func() bool) (int64, bool, error) {
+	p, err := f.blobPath(digest)
+	if err != nil {
+		return 0, false, nil
+	}
+	f.placing.Lock()
+	defer f.placing.Unlock()
+	fi, err := os.Stat(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if !fi.ModTime().Before(before) || keep() {
+		return 0, false, nil
+	}
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, false, err
+	}
+	return fi.Size(), true, nil
 }
 
 func (f *File) Walk(fn func(digest string, size int64, modified time.Time) error) error {

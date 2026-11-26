@@ -38,9 +38,10 @@ var (
 	ErrNotEmpty = errors.New("the project still has repositories")
 	// ErrExists is a project that is already there.
 	ErrExists = errors.New("already exists")
-	// ErrInUse is an image that an index of its repository lists: deleting
-	// it would take a platform out of the index, which goes first.
-	ErrInUse = errors.New("an index of the repository lists it")
+	// ErrInUse is what something else needs: an image an index of its
+	// repository lists (deleting it would take a platform out of the
+	// index, which goes first), or a blob an artifact uses.
+	ErrInUse = errors.New("in use")
 	// ErrImmutable is a change that an immutable tag does not allow.
 	ErrImmutable = errors.New("immutable")
 	// ErrQuota is a blob that does not fit in its project's quota.
@@ -191,7 +192,14 @@ type Repository struct {
 	// uploaded or mounted into it. A manifest may only refer to these, so
 	// that knowing a digest does not open another project's content.
 	Blobs map[string]int64 `json:"blobs"`
+	// Linked are when its blobs were uploaded or mounted, or used again by
+	// a push; collecting garbage spares a blob linked lately, which a push
+	// under way has not referred to yet.
+	Linked map[string]time.Time `json:"linked,omitempty"`
 }
+
+// linkRenewal is how old a link gets before using it again renews it.
+const linkRenewal = time.Hour
 
 // Event is something someone did.
 type Event struct {
@@ -318,6 +326,9 @@ func fill(r *Repository) {
 	if r.Blobs == nil {
 		r.Blobs = map[string]int64{}
 	}
+	if r.Linked == nil {
+		r.Linked = map[string]time.Time{}
+	}
 }
 
 // replay applies the log, and says where its last whole line ends.
@@ -375,10 +386,14 @@ func (d *DB) apply(e entry) {
 	case "link":
 		if r := d.repos[e.Repo]; r != nil {
 			r.Blobs[e.Digest] = e.Size
+			if e.At != nil {
+				r.Linked[e.Digest] = *e.At
+			}
 		}
 	case "unlink":
 		if r := d.repos[e.Repo]; r != nil {
 			delete(r.Blobs, e.Digest)
+			delete(r.Linked, e.Digest)
 		}
 	case "artifact":
 		if r := d.repos[e.Repo]; r != nil {
@@ -700,12 +715,14 @@ func (d *DB) ensure(repo string) ([]entry, error) {
 }
 
 // LinkBlob lets a repository read a blob, which was uploaded or mounted
-// into it.
+// into it, or which a push uses again: a link older than linkRenewal is
+// renewed then.
 func (d *DB) LinkBlob(repo, digest string, size int64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	now := d.now().UTC()
 	if r := d.repos[repo]; r != nil {
-		if n, ok := r.Blobs[digest]; ok && n == size {
+		if n, ok := r.Blobs[digest]; ok && n == size && now.Sub(r.Linked[digest]) < linkRenewal {
 			return nil
 		}
 	}
@@ -719,7 +736,7 @@ func (d *DB) LinkBlob(repo, digest string, size int64) error {
 			return fmt.Errorf("%w: %s holds %s of %s, and this is %s more", ErrQuota, p.Name, HumanBytes(used), HumanBytes(p.Quota), HumanBytes(size))
 		}
 	}
-	return d.commit(append(entries, entry{Op: "link", Repo: repo, Digest: digest, Size: size})...)
+	return d.commit(append(entries, entry{Op: "link", Repo: repo, Digest: digest, Size: size, At: &now})...)
 }
 
 // UnlinkBlob takes a blob away from a repository.
@@ -733,7 +750,147 @@ func (d *DB) UnlinkBlob(repo, digest string) error {
 	if _, ok := r.Blobs[digest]; !ok {
 		return ErrNotFound
 	}
+	// The artifacts that use it would not pull any more.
+	if usedBy(r)[digest] {
+		return fmt.Errorf("%w: an artifact of %s uses it", ErrInUse, repo)
+	}
 	return d.commit(entry{Op: "unlink", Repo: repo, Digest: digest})
+}
+
+// ---------------------------------------------------------------- garbage
+
+// usedBy are the blobs a repository's artifacts use: their manifests,
+// configs and layers, but for layers pulled from elsewhere (with urls),
+// which the registry never has.
+func usedBy(r *Repository) map[string]bool {
+	used := map[string]bool{}
+	for dg, a := range r.Artifacts {
+		used[dg] = true
+		if a.Config != nil {
+			used[a.Config.Digest] = true
+		}
+		for _, l := range a.Layers {
+			if len(l.URLs) == 0 {
+				used[l.Digest] = true
+			}
+		}
+	}
+	return used
+}
+
+// GarbageLinks are, by repository, the blobs it links that none of its
+// artifacts uses, linked before a time.
+func (d *DB) GarbageLinks(before time.Time) map[string][]string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string][]string{}
+	for name, r := range d.repos {
+		used := usedBy(r)
+		for dg := range r.Blobs {
+			if !used[dg] && r.Linked[dg].Before(before) {
+				out[name] = append(out[name], dg)
+			}
+		}
+		sort.Strings(out[name])
+	}
+	return out
+}
+
+// UnlinkGarbage takes the garbage links away, those that still are: unused,
+// and not linked again since the time. It tells how many it took.
+func (d *DB) UnlinkGarbage(garbage map[string][]string, before time.Time) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var entries []entry
+	done := 0
+	flush := func() error {
+		if len(entries) == 0 {
+			return nil
+		}
+		if err := d.commit(entries...); err != nil {
+			return err
+		}
+		done += len(entries)
+		entries = entries[:0]
+		return nil
+	}
+	names := make([]string, 0, len(garbage))
+	for name := range garbage {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		r := d.repos[name]
+		if r == nil {
+			continue
+		}
+		used := usedBy(r)
+		for _, dg := range garbage[name] {
+			if _, ok := r.Blobs[dg]; ok && !used[dg] && r.Linked[dg].Before(before) {
+				entries = append(entries, entry{Op: "unlink", Repo: name, Digest: dg})
+				if len(entries) >= 500 {
+					if err := flush(); err != nil {
+						return done, err
+					}
+				}
+			}
+		}
+	}
+	return done, flush()
+}
+
+// BlobsInUse are the blobs some repository links or uses, but for the
+// links left out (as GarbageLinks gives them).
+func (d *DB) BlobsInUse(except map[string][]string) map[string]bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string]bool{}
+	for name, r := range d.repos {
+		skip := map[string]bool{}
+		for _, dg := range except[name] {
+			skip[dg] = true
+		}
+		for dg := range r.Blobs {
+			if !skip[dg] {
+				out[dg] = true
+			}
+		}
+		for dg := range usedBy(r) {
+			out[dg] = true
+		}
+	}
+	return out
+}
+
+// InUse tells whether some repository links a blob, or has it as a
+// manifest. What an artifact uses is linked (UnlinkBlob keeps it so), so
+// that is all there is to look at.
+func (d *DB) InUse(digest string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, r := range d.repos {
+		if _, ok := r.Blobs[digest]; ok {
+			return true
+		}
+		if r.Artifacts[digest] != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Uses are, by repository, the blobs its artifacts use, sorted.
+func (d *DB) Uses() map[string][]string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := map[string][]string{}
+	for name, r := range d.repos {
+		for dg := range usedBy(r) {
+			out[name] = append(out[name], dg)
+		}
+		sort.Strings(out[name])
+	}
+	return out
 }
 
 // Blob is a blob's size, when the repository may read it.
@@ -938,7 +1095,7 @@ func (d *DB) DeleteArtifact(repo, digest, user string) error {
 		}
 	}
 	if index, ok := listed[digest]; ok {
-		return fmt.Errorf("%w: %s", ErrInUse, index)
+		return fmt.Errorf("%w: an index of the repository lists it, %s", ErrInUse, index)
 	}
 	if t := d.immutableTag(r, digest); t != "" {
 		return immutableError{repo, t}
