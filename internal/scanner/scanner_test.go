@@ -88,6 +88,9 @@ func fakeTrivy(args []string) int {
 		os.MkdirAll(filepath.Join(cache, "db"), 0o755)
 		os.WriteFile(filepath.Join(cache, "db", "metadata.json"), []byte(`{"Version":2,"UpdatedAt":"2026-11-26T06:00:00Z","NextUpdate":"2026-11-27T06:00:00Z","DownloadedAt":"2026-11-26T09:00:00Z"}`), 0o644)
 	case has("--download-java-db-only"):
+		if os.Getenv("FAKE_TRIVY_JAVA_FAIL") != "" {
+			return fatal("init error: Java DB error: failed to download Java DB: connection refused")
+		}
 		os.MkdirAll(filepath.Join(cache, "java-db"), 0o755)
 		os.WriteFile(filepath.Join(cache, "java-db", "metadata.json"), []byte(`{"Version":1,"UpdatedAt":"2026-11-25T01:00:00Z","NextUpdate":"2026-11-28T01:00:00Z","DownloadedAt":"2026-11-26T09:00:01Z"}`), 0o644)
 	case args[0] == "image":
@@ -425,5 +428,44 @@ func TestUpdatesAtOnceAreOne(t *testing.T) {
 func TestRank(t *testing.T) {
 	if Rank("critical") != 4 || Rank(Low) != 1 || Rank(Unknown) != 0 || Rank("nope") != -1 {
 		t.Fatal("ranks")
+	}
+}
+
+// Without the Java DB, images are still scanned; getting it again is tried
+// at most hourly, not before each scan.
+func TestScanWithoutTheJavaDB(t *testing.T) {
+	svc, c, logPath := fake(t, Config{}, "FAKE_TRIVY_JAVA_FAIL=1")
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if res, err := c.Scan(ctx, Request{Image: image}); err != nil || len(res.Report.Vulnerabilities) != 4 {
+			t.Fatalf("scan %d: %+v %v", i, res.Report, err)
+		}
+	}
+	javas := func() int {
+		n := 0
+		for _, cl := range calls(t, logPath) {
+			if strings.Contains(strings.Join(cl.Args, " "), "--download-java-db-only") {
+				n++
+			}
+		}
+		return n
+	}
+	if n := javas(); n != 1 {
+		t.Errorf("the Java DB was asked for %d times", n)
+	}
+	st, err := c.Status(ctx)
+	if err != nil || st.DB == nil || st.JavaDB != nil || !strings.Contains(st.UpdateError, "Java DB") {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	// An hour later, it is tried again.
+	svc.mu.Lock()
+	ago := time.Now().Add(-2 * time.Hour)
+	svc.lastUpdate = &ago
+	svc.mu.Unlock()
+	if _, err := c.Scan(ctx, Request{Image: image}); err != nil {
+		t.Fatal(err)
+	}
+	if n := javas(); n != 2 {
+		t.Errorf("after an hour, the Java DB was asked for %d times", n)
 	}
 }

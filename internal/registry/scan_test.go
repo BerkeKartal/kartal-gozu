@@ -503,6 +503,9 @@ func TestGCForgetsTheScansOfDeletedImages(t *testing.T) {
 	if _, ok := e.db.Scan(d); ok {
 		t.Error("the scan is still known")
 	}
+	if _, err := os.Stat(e.reg.refsPath(d)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the IDs are still there: %v", err)
+	}
 	if _, err := os.Stat(e.reg.reportPath(d)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the report is still there: %v", err)
 	}

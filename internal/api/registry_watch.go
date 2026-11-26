@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/alert"
@@ -21,6 +22,28 @@ import (
 
 // registryWatchEvery is how often the server looks at the registry.
 const registryWatchEvery = time.Minute
+
+// lastAlerts keeps what each look at the registry last found: a look that
+// fails once (a timeout, a restart) keeps its alerts as they were, rather
+// than resolving them and telling of them again a minute later.
+type lastAlerts struct {
+	mu    sync.Mutex
+	found map[string][]alert.Alert
+}
+
+// of is what a look found now, or what it last found when it failed.
+func (l *lastAlerts) of(look string, found []alert.Alert, err error) []alert.Alert {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.found == nil {
+		l.found = map[string][]alert.Alert{}
+	}
+	if err != nil {
+		return l.found[look]
+	}
+	l.found[look] = found
+	return found
+}
 
 func (s *Server) watchRegistry(ctx context.Context) {
 	t := time.NewTicker(registryWatchEvery)
@@ -72,23 +95,26 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 		out = append(out, alert.Alert{Kind: alert.RegistryMetadata, Severity: "critical", Object: object, Detail: status.Problem})
 	}
 	var projects []meta.ProjectInfo
-	if err := s.registryGet(ctx, "/admin/v1/projects", &projects); err == nil {
-		for _, p := range projects {
-			if p.Quota <= 0 || p.Size*100 < p.Quota*90 {
-				continue
-			}
-			sev := "warning"
-			if p.Size >= p.Quota {
-				sev = "critical"
-			}
-			out = append(out, alert.Alert{Kind: alert.RegistryQuota, Severity: sev, Object: p.Name,
-				Detail: fmt.Sprintf("%s of %s (%d%%)", meta.HumanBytes(p.Size), meta.HumanBytes(p.Quota), p.Size*100/p.Quota)})
+	err := s.registryGet(ctx, "/admin/v1/projects", &projects)
+	var quota []alert.Alert
+	for _, p := range projects {
+		if p.Quota <= 0 || p.Size*100 < p.Quota*90 {
+			continue
 		}
+		sev := "warning"
+		if p.Size >= p.Quota {
+			sev = "critical"
+		}
+		quota = append(quota, alert.Alert{Kind: alert.RegistryQuota, Severity: sev, Object: p.Name,
+			Detail: fmt.Sprintf("%s of %s (%d%%)", meta.HumanBytes(p.Size), meta.HumanBytes(p.Quota), p.Size*100/p.Quota)})
 	}
+	out = append(out, s.regAlerts.of("quota", quota, err)...)
 	var jobs struct {
 		Jobs []meta.Job `json:"jobs"`
 	}
-	if err := s.registryGet(ctx, "/admin/v1/jobs?limit=1000", &jobs); err == nil {
+	err = s.registryGet(ctx, "/admin/v1/jobs?limit=1000", &jobs)
+	var failed []alert.Alert
+	if err == nil {
 		// What counts is how each kind of job, of each project, last ended.
 		seen := map[string]bool{}
 		for _, j := range jobs.Jobs {
@@ -105,19 +131,21 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 				what += " of " + j.Project
 			}
 			if j.Status == meta.JobFailed {
-				out = append(out, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Error})
+				failed = append(failed, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Error})
 			}
 			switch {
 			case j.Alarm != "" && j.Kind == registry.JobVerify:
-				out = append(out, alert.Alert{Kind: alert.RegistryDamaged, Severity: "critical", Object: object, Detail: j.Alarm})
+				failed = append(failed, alert.Alert{Kind: alert.RegistryDamaged, Severity: "critical", Object: object, Detail: j.Alarm})
 			case j.Alarm != "":
-				out = append(out, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Alarm})
+				failed = append(failed, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Alarm})
 			}
 		}
 	}
+	out = append(out, s.regAlerts.of("jobs", failed, err)...)
 	// What runs with critical vulnerabilities, where images are scanned.
 	if status.Scanner {
-		out = append(out, s.vulnerableRunningAlerts(ctx)...)
+		vuln, err := s.vulnerableRunningAlerts(ctx)
+		out = append(out, s.regAlerts.of("vulnerable", vuln, err)...)
 	}
 	return out
 }

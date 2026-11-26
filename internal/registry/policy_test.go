@@ -2,6 +2,7 @@ package registry
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -157,5 +158,33 @@ func TestScanOnPushFromTheStart(t *testing.T) {
 	}
 	if p, _ := e.db.Project("team"); !p.ScanOnPush {
 		t.Error("a new project's scan on push was lost")
+	}
+}
+
+// The policy reads the small file of a scan's vulnerabilities, not its
+// report; without either, the scan's summary decides.
+func TestPolicyReadsTheVulnerabilitiesKept(t *testing.T) {
+	e, _ := newScanEnv(t)
+	ci := e.token("ci", "repository:shop/web:pull,push")
+	d, _ := e.pushImage("shop/web", "1.0", ci, "amd64")
+	if _, err := e.reg.QueueScan("shop/web", d, "root"); err != nil {
+		t.Fatal(err)
+	}
+	e.scanned(d)
+	p := meta.Project{Name: "shop", BlockSeverity: "LOW", Allowlist: []string{"CVE-2026-0001"}}
+	if _, err := os.Stat(e.reg.refsPath(d)); err != nil {
+		t.Fatalf("no file of IDs: %v", err)
+	}
+	if err := os.Remove(e.reg.reportPath(d)); err != nil {
+		t.Fatal(err)
+	}
+	e.reg.forgetVulns(d)
+	if n := e.reg.Blocking(p, d); n != 1 {
+		t.Errorf("from the IDs alone: %d", n)
+	}
+	os.Remove(e.reg.refsPath(d))
+	e.reg.forgetVulns(d)
+	if n := e.reg.Blocking(p, d); n != 2 {
+		t.Errorf("from the summary: %d", n)
 	}
 }

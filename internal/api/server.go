@@ -124,16 +124,19 @@ type Config struct {
 }
 
 type Server struct {
-	cfg      Config
-	st       *store.Store
-	log      *slog.Logger
-	now      func() time.Time
-	users    *auth.Directory
-	history  *history.Store
-	sizing   *sizing.Store
-	changes  *changes.Log
-	rollouts *rollout.Tracker
-	audit    *auditLog
+	// regAlerts are the registry's alerts last found of each kind of look
+	// (registry_watch.go), kept while a look fails.
+	regAlerts lastAlerts
+	cfg       Config
+	st        *store.Store
+	log       *slog.Logger
+	now       func() time.Time
+	users     *auth.Directory
+	history   *history.Store
+	sizing    *sizing.Store
+	changes   *changes.Log
+	rollouts  *rollout.Tracker
+	audit     *auditLog
 	// sessions are the sign-ins made with a password (Config.Login).
 	sessions *auth.Sessions
 	throttle throttle

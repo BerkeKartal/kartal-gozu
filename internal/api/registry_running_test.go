@@ -194,3 +194,21 @@ func TestLookupImage(t *testing.T) {
 		}
 	}
 }
+
+// A look at the registry that fails keeps the alerts it last found.
+func TestRegistryAlertsSurviveAFailedLook(t *testing.T) {
+	var l lastAlerts
+	a := []alert.Alert{{Kind: alert.RegistryQuota, Object: "team-a"}}
+	if got := l.of("quota", a, nil); len(got) != 1 {
+		t.Fatalf("found: %+v", got)
+	}
+	if got := l.of("quota", nil, context.DeadlineExceeded); len(got) != 1 || got[0].Object != "team-a" {
+		t.Errorf("a failed look: %+v", got)
+	}
+	if got := l.of("jobs", nil, context.DeadlineExceeded); len(got) != 0 {
+		t.Errorf("another look: %+v", got)
+	}
+	if got := l.of("quota", nil, nil); len(got) != 0 {
+		t.Errorf("all well again: %+v", got)
+	}
+}

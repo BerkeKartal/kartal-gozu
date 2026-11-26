@@ -21,8 +21,9 @@ type vulnRef struct {
 	rank int
 }
 
-// maxVulnCache is how many images' vulnerabilities are kept in memory.
-const maxVulnCache = 256
+// maxVulnCache is how many images' vulnerabilities are kept in memory: a
+// few KiB each, so that listing a large repository reads its files once.
+const maxVulnCache = 4096
 
 // vulnRefs are an image's vulnerabilities, as its last report lists them.
 func (s *Server) vulnRefs(digest string) ([]vulnRef, bool) {
@@ -32,13 +33,18 @@ func (s *Server) vulnRefs(digest string) ([]vulnRef, bool) {
 	if ok {
 		return refs, true
 	}
-	res, err := s.readReport(digest)
+	// The small file of IDs, or else the report itself, as a scan before
+	// it was kept left it.
+	refs, err := s.readVulnRefs(digest)
 	if err != nil {
-		return nil, false
-	}
-	refs = make([]vulnRef, 0, len(res.Report.Vulnerabilities))
-	for _, v := range res.Report.Vulnerabilities {
-		refs = append(refs, vulnRef{id: v.ID, rank: scanner.Rank(v.Severity)})
+		res, err := s.readReport(digest)
+		if err != nil {
+			return nil, false
+		}
+		refs = make([]vulnRef, 0, len(res.Report.Vulnerabilities))
+		for _, v := range res.Report.Vulnerabilities {
+			refs = append(refs, vulnRef{id: v.ID, rank: scanner.Rank(v.Severity)})
+		}
 	}
 	s.vulnMu.Lock()
 	if len(s.vulnCache) >= maxVulnCache {

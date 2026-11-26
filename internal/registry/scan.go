@@ -347,6 +347,10 @@ func (s *Server) scanOne(ctx context.Context, digest string) {
 		fail(fmt.Errorf("keeping the report: %w", err))
 		return
 	}
+	if err := s.writeVulnRefs(digest, res.Report.Vulnerabilities); err != nil {
+		// The policy reads the report instead, more slowly.
+		s.cfg.Log.Warn("registry: keeping a scan's vulnerability IDs", "digest", digest, "err", err)
+	}
 	s.forgetVulns(digest)
 	end := s.now().UTC()
 	sum := scanner.Summarize(res.Report.Vulnerabilities)
@@ -363,7 +367,10 @@ func (s *Server) dropScan(digest string) {
 	if err := s.cfg.DB.DeleteScan(digest); err != nil {
 		s.cfg.Log.Warn("registry: forgetting a scan", "digest", digest, "err", err)
 	}
-	if p := s.reportPath(digest); p != "" {
+	for _, p := range []string{s.reportPath(digest), s.refsPath(digest)} {
+		if p == "" {
+			continue
+		}
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			s.cfg.Log.Warn("registry: removing a scan's report", "digest", digest, "err", err)
 		}
@@ -399,6 +406,63 @@ func (s *Server) reportPath(digest string) string {
 		return ""
 	}
 	return filepath.Join(s.cfg.ScanDir, alg, hex+".json.gz")
+}
+
+// refsPath is where the IDs and severities of an image's vulnerabilities
+// are kept, all the pull policy reads, or "" without a place.
+func (s *Server) refsPath(digest string) string {
+	p := s.reportPath(digest)
+	if p == "" {
+		return ""
+	}
+	return strings.TrimSuffix(p, ".json.gz") + ".vulns.json"
+}
+
+// storedRef is a vulnerability as refsPath keeps it.
+type storedRef struct {
+	ID   string `json:"i"`
+	Rank int    `json:"r"`
+}
+
+func (s *Server) writeVulnRefs(digest string, vulns []scanner.Vulnerability) error {
+	p := s.refsPath(digest)
+	if p == "" {
+		return errors.New("there is no place for reports (Config.ScanDir)")
+	}
+	refs := make([]storedRef, 0, len(vulns))
+	for _, v := range vulns {
+		refs = append(refs, storedRef{ID: v.ID, Rank: scanner.Rank(v.Severity)})
+	}
+	b, err := json.Marshal(refs)
+	if err != nil {
+		return err
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, p)
+}
+
+// readVulnRefs reads what writeVulnRefs kept.
+func (s *Server) readVulnRefs(digest string) ([]vulnRef, error) {
+	p := s.refsPath(digest)
+	if p == "" {
+		return nil, os.ErrNotExist
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	var stored []storedRef
+	if err := json.Unmarshal(b, &stored); err != nil {
+		return nil, err
+	}
+	out := make([]vulnRef, 0, len(stored))
+	for _, r := range stored {
+		out = append(out, vulnRef{id: r.ID, rank: r.Rank})
+	}
+	return out, nil
 }
 
 func (s *Server) writeReport(digest string, res scanner.Result) error {

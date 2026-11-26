@@ -230,11 +230,11 @@ func (s *Server) registryRunningVulnerable(w http.ResponseWriter, r *http.Reques
 // vulnerableRunningAlerts are the images with critical vulnerabilities
 // their projects do not allow that some workload runs: one alert an
 // image, saying where.
-func (s *Server) vulnerableRunningAlerts(ctx context.Context) []alert.Alert {
+func (s *Server) vulnerableRunningAlerts(ctx context.Context) ([]alert.Alert, error) {
 	rows, err := s.runningVulnerable(ctx, nil, "kartal-server")
 	if err != nil {
 		s.log.Warn("asking the registry about running images", "err", err)
-		return nil
+		return nil, err
 	}
 	type found struct {
 		critical int
@@ -267,5 +267,5 @@ func (s *Server) vulnerableRunningAlerts(ctx context.Context) []alert.Alert {
 			Object: repo + "@" + strings.TrimPrefix(digest, "sha256:")[:12],
 			Detail: fmt.Sprintf("%d critical vulnerabilities its project does not allow; runs in %s%s", f.critical, strings.Join(where, ", "), more)})
 	}
-	return out
+	return out, nil
 }

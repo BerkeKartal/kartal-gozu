@@ -264,6 +264,26 @@ func (s *Service) UpdateDB(ctx context.Context) error {
 	return err
 }
 
+// retryUpdate is how long after a failed update a scan tries again.
+const retryUpdate = time.Hour
+
+// mayRetryUpdate tells whether a scan may update the databases now: none
+// failed lately.
+func (s *Service) mayRetryUpdate() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateError == "" || s.lastUpdate == nil || time.Since(*s.lastUpdate) > retryUpdate
+}
+
+func (s *Service) lastUpdateError() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateError == "" {
+		return "it was not fetched"
+	}
+	return "the last update failed: " + s.updateError
+}
+
 func (s *Service) updateDB(ctx context.Context) error {
 	// An update outlives the call that asked for it, which may give up
 	// waiting; half a database would be worse.
@@ -317,18 +337,25 @@ func (s *Service) Scan(ctx context.Context, req Request) (Result, error) {
 		s.mu.Unlock()
 	}()
 
-	// A scanner that has no database yet gets one first.
+	// A scanner that lacks a database gets it first: the Java DB too,
+	// which Trivy does not fetch itself while it skips updates. Where that
+	// keeps failing, it is tried again at most hourly; without the Java DB
+	// only images with jars fail.
 	st, err := s.Status(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	if st.DB == nil {
-		if err := s.UpdateDB(ctx); err != nil {
-			return Result{}, fmt.Errorf("the scanner has no vulnerability DB yet, and getting one failed: %w", err)
-		}
+	if (st.DB == nil || st.JavaDB == nil) && s.mayRetryUpdate() {
+		updateErr := s.UpdateDB(ctx)
 		if st, err = s.Status(ctx); err != nil {
 			return Result{}, err
 		}
+		if updateErr != nil && st.DB == nil {
+			return Result{}, fmt.Errorf("the scanner has no vulnerability DB yet, and getting one failed: %w", updateErr)
+		}
+	}
+	if st.DB == nil {
+		return Result{}, fmt.Errorf("the scanner has no vulnerability DB yet: %s", s.lastUpdateError())
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)
