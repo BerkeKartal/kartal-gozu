@@ -152,3 +152,20 @@ func TestJobsThroughTheAdminAPI(t *testing.T) {
 		t.Errorf("the jobs: %d %s", a.code, a.body)
 	}
 }
+
+// Who looks for failures every minute gets the jobs without their reports.
+func TestBriefJobs(t *testing.T) {
+	e := newEnv(t)
+	j, err := e.reg.StartJob(JobVerify, false, "", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.wait(j.ID)
+	if a := e.do("GET", "/admin/v1/jobs", "admin-secret", nil); !strings.Contains(string(a.body), `"report"`) {
+		t.Errorf("the full list has no reports: %s", a.body)
+	}
+	if a := e.do("GET", "/admin/v1/jobs?brief=true", "admin-secret", nil); a.code != 200 || strings.Contains(string(a.body), `"report"`) ||
+		!strings.Contains(string(a.body), `"kind":"verify"`) {
+		t.Errorf("the brief list: %d %s", a.code, a.body)
+	}
+}

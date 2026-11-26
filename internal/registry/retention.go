@@ -244,9 +244,11 @@ type RetentionReport struct {
 	// Deleted are those deleted; Removed says which (the first 200).
 	Deleted int       `json:"deleted"`
 	Removed []Removal `json:"removed"`
-	// Unknown are the clusters taken at their last word, or for running
-	// nothing, as they said nothing now.
+	// Unknown are the clusters taken at their last word, as they said
+	// nothing now; Never those that never said a word, for which retention
+	// deletes nothing but in a dry run.
 	Unknown []string `json:"unknown,omitempty"`
+	Never   []string `json:"never,omitempty"`
 }
 
 // Removal is an artifact retention deleted.
@@ -266,30 +268,34 @@ func (r RetentionReport) String() string {
 }
 
 // clusterImages are the digests and references that run in the clusters, as each
-// says now or said last.
-func (s *Server) clusterImages(ctx context.Context) (map[string]bool, map[string]bool, []string, error) {
+// says now or said last, the clusters that said nothing now, and those that
+// never said a word.
+func (s *Server) clusterImages(ctx context.Context) (map[string]bool, map[string]bool, []string, []string, error) {
 	if s.cfg.Running == nil {
-		return nil, nil, nil, errors.New("nothing tells the registry what runs in the clusters, so it deletes nothing")
+		return nil, nil, nil, nil, errors.New("nothing tells the registry what runs in the clusters, so it deletes nothing")
 	}
 	now, err := s.cfg.Running.Running(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("what runs in the clusters could not be known: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("what runs in the clusters could not be known: %w", err)
 	}
 	for _, c := range now {
 		if c.Known {
 			if err := s.cfg.DB.SetRunning(c.Name, meta.RunningImages{At: c.At, Digests: c.Digests, Refs: c.Refs}); err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 		}
 	}
 	// The clusters there are: those that said nothing now count as they
 	// said last; one no longer there counts for nothing.
 	digests, refs := map[string]bool{}, map[string]bool{}
-	var unknown []string
+	var unknown, never []string
 	last := s.cfg.DB.Running()
 	for _, c := range now {
 		if !c.Known {
 			unknown = append(unknown, c.Name)
+			if _, ok := last[c.Name]; !ok {
+				never = append(never, c.Name)
+			}
 		}
 		ri := last[c.Name]
 		for _, d := range ri.Digests {
@@ -300,7 +306,8 @@ func (s *Server) clusterImages(ctx context.Context) (map[string]bool, map[string
 		}
 	}
 	sort.Strings(unknown)
-	return digests, refs, unknown, nil
+	sort.Strings(never)
+	return digests, refs, unknown, never, nil
 }
 
 // Retention applies the projects' rules, of one project or of all.
@@ -319,10 +326,17 @@ func (s *Server) Retention(ctx context.Context, project string, dryRun bool, use
 		rep.Seconds = time.Since(start).Seconds()
 		return rep, nil
 	}
-	digests, refs, unknown, err := s.clusterImages(ctx)
-	rep.Unknown = unknown
+	digests, refs, unknown, never, err := s.clusterImages(ctx)
+	rep.Unknown, rep.Never = unknown, never
 	if err != nil {
 		return rep, err
+	}
+	// What a cluster that never said a word runs is not known: nothing is
+	// deleted that it may run. A dry run tells what would go otherwise.
+	if len(never) > 0 && !dryRun {
+		rep.Seconds = time.Since(start).Seconds()
+		return rep, fmt.Errorf("the clusters %s never said what they run; retention deletes nothing until they do, or until they are taken out of kartal-server's agents",
+			strings.Join(never, ", "))
 	}
 	now := s.now()
 	for _, p := range projects {
@@ -407,8 +421,36 @@ func (s *Server) retainIn(p meta.Project, repo string, digests, refs map[string]
 			}
 		}
 		sort.Slice(gone, func(i, j int) bool { return gone[i].Pushed.Before(gone[j].Pushed) })
+		// The images that go with an index (meta.DB.DeleteArtifact): those
+		// with no tag of their own, which no other index lists.
+		listedBy := map[string][]string{}
+		for _, a := range arts {
+			for _, m := range a.Manifests {
+				listedBy[m.Digest] = append(listedBy[m.Digest], a.Digest)
+			}
+		}
+		followers := func(index meta.ArtifactInfo) []meta.ArtifactInfo {
+			var out []meta.ArtifactInfo
+			for _, m := range index.Manifests {
+				c, ok := byDigest[m.Digest]
+				if !ok || removed[c.Digest] || len(c.Tags) > 0 {
+					continue
+				}
+				elsewhere := false
+				for _, by := range listedBy[c.Digest] {
+					if by != index.Digest && !removed[by] {
+						elsewhere = true
+					}
+				}
+				if !elsewhere {
+					out = append(out, c)
+				}
+			}
+			return out
+		}
 		deletedIndex := false
 		for _, a := range gone {
+			with := followers(a)
 			if !dryRun {
 				err := s.cfg.DB.DeleteArtifact(repo, a.Digest, user)
 				if errors.Is(err, meta.ErrInUse) || errors.Is(err, meta.ErrImmutable) || errors.Is(err, meta.ErrNotFound) {
@@ -419,12 +461,15 @@ func (s *Server) retainIn(p meta.Project, repo string, digests, refs map[string]
 					return err
 				}
 			}
-			removed[a.Digest] = true
-			deletedIndex = deletedIndex || len(a.Manifests) > 0
-			rep.Deleted++
-			if len(rep.Removed) < 200 {
-				rep.Removed = append(rep.Removed, Removal{Repo: repo, Digest: a.Digest, Tags: a.Tags, Pushed: a.Pushed})
+			for _, x := range append([]meta.ArtifactInfo{a}, with...) {
+				removed[x.Digest] = true
+				seen[x.Digest] = true
+				rep.Deleted++
+				if len(rep.Removed) < 200 {
+					rep.Removed = append(rep.Removed, Removal{Repo: repo, Digest: x.Digest, Tags: x.Tags, Pushed: x.Pushed})
+				}
 			}
+			deletedIndex = deletedIndex || len(a.Manifests) > 0
 		}
 		if !deletedIndex {
 			return nil

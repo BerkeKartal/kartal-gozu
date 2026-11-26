@@ -1764,9 +1764,10 @@ func (d *DB) Artifacts(repo string) ([]ArtifactInfo, bool) {
 }
 
 // DeleteArtifact removes an artifact, the tags that point at it, and what
-// is about it (its signatures and SBOMs, and theirs), which means nothing
-// without it. An image that an index of the repository lists stays
-// (ErrInUse).
+// means nothing without it: what is about it (its signatures and SBOMs, and
+// theirs), and, of an index, its images that nothing else keeps (a tag of
+// their own, another index that lists them), as Harbor deletes them. An
+// image that an index of the repository lists stays (ErrInUse).
 func (d *DB) DeleteArtifact(repo, digest, user string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -1774,34 +1775,61 @@ func (d *DB) DeleteArtifact(repo, digest, user string) error {
 	if r == nil || r.Artifacts[digest] == nil {
 		return ErrNotFound
 	}
-	listed := map[string]string{} // an index's image: the index
+	listedBy := map[string][]string{} // an index's image: the indexes
 	for _, a := range r.Artifacts {
 		for _, m := range a.Manifests {
-			listed[m.Digest] = a.Digest
+			listedBy[m.Digest] = append(listedBy[m.Digest], a.Digest)
 		}
 	}
-	if index, ok := listed[digest]; ok {
-		return fmt.Errorf("%w: an index of the repository lists it, %s", ErrInUse, index)
+	if indexes := listedBy[digest]; len(indexes) > 0 {
+		sort.Strings(indexes)
+		return fmt.Errorf("%w: an index of the repository lists it, %s", ErrInUse, indexes[0])
 	}
 	if t := d.immutableTag(r, digest); t != "" {
 		return immutableError{repo, t}
 	}
+	tagged := map[string]bool{}
+	for _, dg := range r.Tags {
+		tagged[dg] = true
+	}
 	entries := []entry{{Op: "artifact-del", Repo: repo, Digest: digest}, d.event(user, "delete", ProjectOf(repo), repo, digest, "", "")}
 	gone := []string{digest}
 	seen := map[string]bool{digest: true}
-	for i := 0; i < len(gone); i++ {
-		about := []string{}
-		for _, a := range r.Artifacts {
-			if a.Subject == gone[i] && !seen[a.Digest] && listed[a.Digest] == "" && d.immutableTag(r, a.Digest) == "" {
-				about = append(about, a.Digest)
+	// keptElsewhere tells whether an index not going lists an image.
+	keptElsewhere := func(dg string) bool {
+		for _, by := range listedBy[dg] {
+			if !seen[by] {
+				return true
 			}
 		}
-		sort.Strings(about)
-		for _, dg := range about {
-			seen[dg] = true
-			gone = append(gone, dg)
-			entries = append(entries, entry{Op: "artifact-del", Repo: repo, Digest: dg},
-				d.event(user, "delete", ProjectOf(repo), repo, dg, "", "about "+gone[i]))
+		return false
+	}
+	for i := 0; i < len(gone); i++ {
+		type follower struct{ digest, why string }
+		var more []follower
+		for _, a := range r.Artifacts {
+			if a.Subject == gone[i] && !seen[a.Digest] && len(listedBy[a.Digest]) == 0 && d.immutableTag(r, a.Digest) == "" {
+				more = append(more, follower{a.Digest, "about " + gone[i]})
+			}
+		}
+		// The index going is seen already, so it keeps none of its images.
+		if idx := r.Artifacts[gone[i]]; idx != nil {
+			for _, m := range idx.Manifests {
+				c := m.Digest
+				if r.Artifacts[c] != nil && !seen[c] && !tagged[c] && d.immutableTag(r, c) == "" && !keptElsewhere(c) {
+					more = append(more, follower{c, "of the index " + gone[i]})
+				}
+			}
+		}
+		sort.Slice(more, func(a, b int) bool { return more[a].digest < more[b].digest })
+		for _, f := range more {
+			if seen[f.digest] {
+				continue
+			}
+			seen[f.digest] = true
+			gone = append(gone, f.digest)
+			entries = append(entries, entry{Op: "artifact-del", Repo: repo, Digest: f.digest},
+				d.event(user, "delete", ProjectOf(repo), repo, f.digest, "", f.why))
 		}
 	}
 	return d.commit(entries...)

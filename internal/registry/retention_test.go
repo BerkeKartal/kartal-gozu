@@ -157,8 +157,19 @@ func TestRetention(t *testing.T) {
 	if err != nil || rep.Picked != 5 || rep.Kept != 2 || rep.Protected != 3 || rep.Deleted != 0 || len(rep.Unknown) != 1 {
 		t.Errorf("a dry run: %+v %v", rep, err)
 	}
-	// Staging stops saying anything: it counts as it said last. Production
-	// no longer runs 1.1.
+	if strings.Join(rep.Never, ",") != "lab" {
+		t.Errorf("never said a word: %v", rep.Never)
+	}
+	// Lab never said what it runs: nothing goes, as it may run anything.
+	if rep, err := e.reg.Retention(context.Background(), "shop", false, "root"); err == nil || !strings.Contains(err.Error(), "lab never said") || rep.Deleted != 0 {
+		t.Fatalf("with a cluster that never said a word: %+v %v", rep, err)
+	}
+	// Once it did, it counts as it said last. Staging stops saying
+	// anything: it counts as it said last too. Production no longer runs 1.1.
+	src.clusters = []ClusterImages{{Name: "production", Known: true, Digests: []string{digests[1]}}, {Name: "staging"}, {Name: "lab", Known: true}}
+	if _, err := e.reg.Retention(context.Background(), "shop", true, "root"); err != nil {
+		t.Fatal(err)
+	}
 	src.clusters = []ClusterImages{{Name: "production", Known: true}, {Name: "staging"}, {Name: "lab"}}
 	rep, err = e.reg.Retention(context.Background(), "shop", false, "root")
 	if err != nil || rep.Deleted != 1 || rep.Removed[0].Digest != digests[1] || rep.Protected != 2 {
@@ -227,6 +238,41 @@ func TestRetentionOfAnIndex(t *testing.T) {
 	}
 	rep, err := e.reg.Retention(context.Background(), "shop", false, "root")
 	if err != nil || rep.Deleted != dry.Deleted {
+		t.Errorf("retention: %+v %v", rep, err)
+	}
+	if arts, _ := e.db.Artifacts("shop/web"); len(arts) != 1 || arts[0].Tags[0] != "2.0" {
+		t.Errorf("left: %+v", arts)
+	}
+}
+
+// A rule of tags alone, with no word of the untagged, frees what an old
+// multi-arch image took: its images go with its index.
+func TestRetentionOfAnIndexByItsTag(t *testing.T) {
+	e := newEnv(t)
+	e.reg.cfg.Running = &images{}
+	ci := e.token("ci", "repository:shop/web:pull,push,delete")
+	old := time.Now().Add(-48 * time.Hour)
+	e.db.SetClock(func() time.Time { return old })
+	amd, _ := e.pushImage("shop/web", "amd", ci, "amd64")
+	arm, _ := e.pushImage("shop/web", "arm", ci, "arm64")
+	e.db.Untag("shop/web", "amd", "ci")
+	e.db.Untag("shop/web", "arm", "ci")
+	index := []byte(`{"schemaVersion":2,"mediaType":"` + manifest.OCIIndex + `","manifests":[
+		{"mediaType":"` + manifest.OCIManifest + `","digest":"` + amd + `","size":1,"platform":{"architecture":"amd64","os":"linux"}},
+		{"mediaType":"` + manifest.OCIManifest + `","digest":"` + arm + `","size":1,"platform":{"architecture":"arm64","os":"linux"}}]}`)
+	if a := e.do("PUT", "/v2/shop/web/manifests/1.0", ci, index, "Content-Type", manifest.OCIIndex); a.code != 201 {
+		t.Fatalf("index: %d %s", a.code, a.body)
+	}
+	e.db.SetClock(time.Now)
+	e.pushImage("shop/web", "2.0", ci, "s390x")
+	tags := []meta.RetentionRule{{Tags: "**", Keep: KeepLatestPushed, Count: 1}}
+	e.db.UpdateProject("shop", meta.ProjectChange{Retention: &tags}, "root")
+	dry, err := e.reg.Retention(context.Background(), "shop", true, "root")
+	if err != nil || dry.Deleted != 3 {
+		t.Errorf("a dry run: %+v %v", dry, err)
+	}
+	rep, err := e.reg.Retention(context.Background(), "shop", false, "root")
+	if err != nil || rep.Deleted != 3 || len(rep.Removed) != 3 {
 		t.Errorf("retention: %+v %v", rep, err)
 	}
 	if arts, _ := e.db.Artifacts("shop/web"); len(arts) != 1 || arts[0].Tags[0] != "2.0" {

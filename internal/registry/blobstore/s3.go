@@ -350,7 +350,7 @@ func (s *S3) mark(digest string) {
 	s.recent[digest] = now
 	if len(s.recent) > 10000 {
 		for d, at := range s.recent {
-			if now.Sub(at) > 7*24*time.Hour {
+			if now.Sub(at) > 24*time.Hour {
 				delete(s.recent, d)
 			}
 		}

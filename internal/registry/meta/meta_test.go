@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -155,31 +156,59 @@ func TestArtifactsTagsAndReferrers(t *testing.T) {
 }
 
 // An image an index lists stays until the index goes.
-func TestIndexKeepsItsImages(t *testing.T) {
+// An index's images go with it, unless something else keeps them: a tag
+// of their own, another index that lists them.
+func TestAnIndexTakesItsImages(t *testing.T) {
 	d := open(t, t.TempDir())
 	defer d.Close()
 	d.CreateProject(Project{Name: "shop"}, "admin")
-	push(t, d, "shop/web", dM, "")
-	index := Artifact{Digest: dC, MediaType: manifest.OCIIndex, Kind: "index", Size: 200,
-		Manifests: []manifest.Descriptor{{MediaType: manifest.OCIManifest, Digest: dM, Size: 500}}}
+	alone, tagged, shared := dM, dS, "sha256:"+strings.Repeat("3", 64)
+	push(t, d, "shop/web", alone, "")
+	push(t, d, "shop/web", tagged, "solo")
+	push(t, d, "shop/web", shared, "")
+	list := func(digests ...string) []manifest.Descriptor {
+		var out []manifest.Descriptor
+		for _, dg := range digests {
+			out = append(out, manifest.Descriptor{MediaType: manifest.OCIManifest, Digest: dg, Size: 500})
+		}
+		return out
+	}
+	index := Artifact{Digest: dC, MediaType: manifest.OCIIndex, Kind: "index", Size: 200, Manifests: list(alone, tagged, shared)}
+	other := Artifact{Digest: "sha256:" + strings.Repeat("4", 64), MediaType: manifest.OCIIndex, Kind: "index", Size: 200, Manifests: list(shared)}
 	if err := d.PutArtifact("shop/web", index, "1.0", "ci"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.DeleteArtifact("shop/web", dM, "dev"); !errors.Is(err, ErrInUse) || !strings.Contains(err.Error(), dC) {
+	if err := d.PutArtifact("shop/web", other, "other", "ci"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteArtifact("shop/web", alone, "dev"); !errors.Is(err, ErrInUse) || !strings.Contains(err.Error(), dC) {
 		t.Errorf("deleting an index's image: %v", err)
 	}
 	if err := d.DeleteArtifact("shop/web", dC, "dev"); err != nil {
 		t.Fatal(err)
 	}
-	// The image stays, untagged, once its index is gone.
-	if err := d.DeleteArtifact("shop/web", dM, "dev"); err != nil {
-		t.Errorf("deleting the image after its index: %v", err)
+	left := func() string {
+		arts, _ := d.Artifacts("shop/web")
+		var out []string
+		for _, a := range arts {
+			out = append(out, a.Digest[7:8])
+		}
+		sort.Strings(out)
+		return strings.Join(out, "")
+	}
+	// The image alone went with it; the tagged one and the one another
+	// index lists stay.
+	if got := left(); got != "234" {
+		t.Errorf("left: %s", got)
+	}
+	if !hasEvent(d.Events(nil, 0), "delete", "of the index "+dC) {
+		t.Error("the image's deletion is not in the log")
 	}
 	// Replayed, the log says the same.
 	d.Close()
 	d = open(t, d.dir)
-	if arts, _ := d.Artifacts("shop/web"); len(arts) != 0 {
-		t.Errorf("after reopening: %+v", arts)
+	if got := left(); got != "234" {
+		t.Errorf("after reopening: %s", got)
 	}
 }
 
@@ -579,4 +608,13 @@ func TestScansAreKept(t *testing.T) {
 		}
 	}
 	d.Close()
+}
+
+func hasEvent(events []Event, action, detail string) bool {
+	for _, e := range events {
+		if e.Action == action && strings.Contains(e.Detail, detail) {
+			return true
+		}
+	}
+	return false
 }

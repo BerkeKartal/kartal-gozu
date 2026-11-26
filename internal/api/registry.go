@@ -278,9 +278,18 @@ func (s *Server) registryCall(r *http.Request, method, path string, query url.Va
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	// More than this is said so, rather than cut into JSON that cannot be
+	// read.
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryAnswer+1))
+	if err == nil && len(b) > maxRegistryAnswer {
+		return 0, nil, fmt.Errorf("the registry's answer to %s is larger than %d MiB", path, maxRegistryAnswer>>20)
+	}
 	return resp.StatusCode, b, err
 }
+
+// maxRegistryAnswer is the most of an answer of the registry the server
+// reads: a repository's artifacts, an SBOM.
+const maxRegistryAnswer = 64 << 20
 
 func (s *Server) registryHTTP() *http.Client {
 	if s.cfg.RegistryHTTP != nil {

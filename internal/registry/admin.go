@@ -540,8 +540,15 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 		schedules = append(schedules, s.scheduleView(sc))
 	}
 	jobs := s.cfg.DB.Jobs(limit)
+	// ?brief=true leaves the reports out: who looks for failures every
+	// minute (kartal-server) needs no more, and reports of a thousand jobs
+	// run to tens of MiB.
+	brief := r.URL.Query().Get("brief") == "true"
 	for i := range jobs {
 		jobs[i] = s.withProgress(jobs[i])
+		if brief {
+			jobs[i].Report = nil
+		}
 	}
 	adminJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "schedules": schedules, "zone": s.zone().String()})
 }

@@ -130,7 +130,7 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 	var jobs struct {
 		Jobs []meta.Job `json:"jobs"`
 	}
-	err = s.registryGet(ctx, "/admin/v1/jobs?limit=1000", &jobs)
+	err = s.registryGet(ctx, "/admin/v1/jobs?limit=1000&brief=true", &jobs)
 	var failed []alert.Alert
 	if err == nil {
 		// What counts is how each kind of job, of each project, last ended.

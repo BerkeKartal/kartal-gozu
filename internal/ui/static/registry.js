@@ -384,7 +384,8 @@ function repositoryPage(data, ui) {
   const addTag = a => tagDialog(ui, repo, a.digest);
   const del = async a => {
     const what = a.tags.length ? repo + ':' + a.tags.join(', ') : repo + '@' + shortDigest(a.digest);
-    if (!(await ask({ title: t('reg.deleteArtifact'), message: t('reg.deleteArtifactConfirm', what), confirm: t('reg.deleteArtifact'), danger: true }))) return;
+    const message = t('reg.deleteArtifactConfirm', what) + (a.kind === 'index' ? ' ' + t('reg.deleteIndexNote') : '');
+    if (!(await ask({ title: t('reg.deleteArtifact'), message, confirm: t('reg.deleteArtifact'), danger: true }))) return;
     act(ui, () => api('registry/artifact?repo=' + enc(repo) + '&digest=' + enc(a.digest), { method: 'DELETE' }), t('reg.artifactDeleted'));
   };
   const head = ui.panel(null, [
@@ -656,6 +657,7 @@ function jobDialog(ui, id, title) {
     body.replaceChildren(...[
       j.error ? h('p', { class: 'status-bad' }, j.error) : h('p', null, jobSummary(ui, j)),
       r.unknown && r.unknown.length ? h('p', { class: 'muted small-text' }, t('reg.retentionUnknown', r.unknown.join(', '))) : null,
+      r.never && r.never.length ? h('p', { class: 'status-warn small-text' }, t('reg.retentionNever', r.never.join(', '))) : null,
       removed.length ? h('table', { class: 'flat' },
         h('thead', null, h('tr', null, ['repository', 'artifact', 'tags', 'pushed'].map(k => h('th', null, t('reg.col.' + k))))),
         h('tbody', null, removed.map(x => h('tr', null, h('td', null, x.repo), h('td', null, ui.mono(shortDigest(x.digest))),
