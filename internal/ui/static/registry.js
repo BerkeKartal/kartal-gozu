@@ -3,7 +3,7 @@
 // helpers (ui) and the data it loaded with loadRegistry; nothing here keeps
 // state of its own.
 
-export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regjobs', 'regreplication', 'regsources', 'robots'];
+export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'robots'];
 
 const enc = encodeURIComponent;
 
@@ -57,6 +57,8 @@ export async function loadRegistry(view, rest, api, signal) {
     }
     case 'robots':
       return { info, robots: await api('registry/robots', { signal }) };
+    case 'regrunning':
+      return { info, running: await api('registry/running-vulnerabilities', { signal }) };
   }
   return { info };
 }
@@ -125,6 +127,7 @@ export function renderRegistry(view, data, ui) {
     case 'regsources': return sourcesPage(data, ui);
     case 'regreplication': return replicationPage(data, ui);
     case 'robots': return robotsPage(data, ui);
+    case 'regrunning': return runningPage(data, ui);
   }
   return null;
 }
@@ -689,7 +692,8 @@ function replicationPage(data, ui) {
     h('div', { class: 'what' }, h('div', { class: 'detail' }, t('reg.replHint')),
       sources.length ? null : h('div', { class: 'detail status-warn' }, t('reg.needSource'), ' ',
         h('a', { href: routeHash({ view: 'regsources', rest: [], ns: '' }) }, t('regsources')))),
-    h('div', { class: 'actions' }, sources.length ? button('+ ' + t('reg.newRule'), () => ruleDialog(ui, data)) : null)));
+    h('div', { class: 'actions' }, sources.length ? [button(t('reg.trivyTemplate'), () => trivyDialog(ui, data)),
+      button('+ ' + t('reg.newRule'), () => ruleDialog(ui, data))] : null)));
   const table = rows.length ? h('table', null,
     h('thead', null, h('tr', null, ['name', 'from', 'into', 'cron', 'next'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
     h('tbody', null, rows.map(r => {
@@ -1311,4 +1315,74 @@ function scannerPanel(ui, data) {
       kv('reg.scannerQueue', t('reg.scannerQueueText', v.queued || 0, st ? st.scanning : 0, st ? st.workers : 0)),
       kv('reg.scannerPulls', v.address ? ui.mono(v.address) : null)),
     h('div', { class: 'actions' }, button(t('reg.updateDB'), () => act(ui, () => api('registry/scanner/db', { method: 'POST' }), t('reg.dbUpdateStarted'))))), 'reg-events');
+}
+
+// ---------------------------------------------------------------- what runs
+
+// runningPage lists the registry's images that the clusters run, where the
+// user may look, the worst first: what Kartal Gözü knows that a registry
+// alone does not.
+function runningPage(data, ui) {
+  const { h, t, emptyState, routeHash } = ui;
+  const all = (data.running && data.running.images) || [];
+  const onlyBad = h('input', { type: 'checkbox', checked: true });
+  const words = ui.words();
+  const bad = r => r.scan && r.scan.summary && (r.scan.summary.critical || r.scan.summary.high || r.critical);
+  const tbody = h('tbody');
+  const count = h('span', { class: 'muted small-text' });
+  const draw = () => {
+    const rows = all.filter(r => (!onlyBad.checked || bad(r)) && ui.matches(words, [r.cluster, r.namespace, r.workload, r.repo, r.digest]));
+    count.textContent = t('reg.vulnCount', rows.length, all.length);
+    tbody.replaceChildren(...rows.map(r => h('tr', { class: r.critical ? 'problem' : null },
+      h('td', null, r.cluster), h('td', null, r.namespace), h('td', null, h('strong', null, r.workload)), h('td', null, r.pods),
+      h('td', null, h('a', { class: 'mono', href: routeHash({ view: 'regartifact', rest: [r.repo, r.digest], ns: '' }), title: r.digest },
+        r.repo + '@' + shortDigest(r.digest))),
+      h('td', null, sevBar(ui, r.scan) || h('span', { class: 'muted' }, '—')),
+      h('td', null, r.critical ? h('span', { class: 'status-bad' }, r.critical) : h('span', { class: 'muted' }, '0')))));
+  };
+  onlyBad.addEventListener('change', draw);
+  draw();
+  const head = ui.panel(null, h('div', { class: 'issue' }, h('div', { class: 'what' },
+    h('div', { class: 'detail' }, t('reg.runningHint')),
+    data.info && !data.info.scanner ? h('div', { class: 'detail status-warn' }, t('reg.noScannerRunning')) : null)));
+  if (!all.length) return [problem(ui, data.info), head, emptyState(t('reg.noRunning'))];
+  return [problem(ui, data.info), head,
+    h('div', { class: 'reg-filters' }, h('label', { class: 'check-item' }, onlyBad, ' ', t('reg.onlyVulnerable')), count),
+    h('table', null, h('thead', null, h('tr', null, ['cluster', 'namespace', 'workload', 'pods', 'image', 'vulns', 'unallowed'].map(k =>
+      h('th', { title: k === 'unallowed' ? t('reg.unallowedHelp') : null }, t('reg.col.' + k))))), tbody),
+    h('div', { class: 'more-note' }, t('reg.runningNote'))];
+}
+
+// trivyDialog makes the rules that copy Trivy's databases into a project,
+// for a scanner that cannot reach the internet: each night, the tags
+// Trivy reads.
+function trivyDialog(ui, data) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const source = h('select', null, (data.sources || []).map(x => h('option', { value: x.id }, x.name + ' (' + t('reg.kindSrc.' + x.kind) + ')')));
+  const projects = data.projects || [];
+  const project = h('select', null, projects.map(p => h('option', { value: p.name, selected: p.name === 'trivy' }, p.name)));
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      try {
+        for (const [repo, tag, name] of [['aquasecurity/trivy-db', '2', 'Trivy vulnerability DB'], ['aquasecurity/trivy-java-db', '1', 'Trivy Java DB']]) {
+          await api('registry/rules', { method: 'POST', body: { name, source: source.value, repositories: repo, tags: tag, project: project.value,
+            overwrite: true, concurrency: 1, cron: '0 4 * * *', enabled: true } });
+        }
+        close();
+        ui.toast(t('reg.trivyMade', project.value));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, t('reg.trivyTemplate')),
+  h('p', { class: 'muted' }, t('reg.trivyTemplateHelp')),
+  dialogField(t('reg.ruleSource'), source, t('reg.trivySourceHelp')),
+  dialogField(t('reg.ruleProject'), project, t('reg.trivyProjectHelp')),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary', disabled: !projects.length }, t('save'))));
+  const close = modal(form);
 }

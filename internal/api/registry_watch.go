@@ -16,7 +16,8 @@ import (
 
 // The image registry's problems become alerts, notified as any other: it
 // cannot be reached, it cannot save its metadata, a job of it failed, its
-// blobs are damaged, a project is near its quota.
+// blobs are damaged, a project is near its quota, an image that runs has
+// critical vulnerabilities.
 
 // registryWatchEvery is how often the server looks at the registry.
 const registryWatchEvery = time.Minute
@@ -61,6 +62,7 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 	const object = "kartal-registry"
 	var status struct {
 		Problem string `json:"problem"`
+		Scanner bool   `json:"scanner"`
 	}
 	if err := s.registryGet(ctx, "/admin/v1/status", &status); err != nil {
 		return []alert.Alert{{Kind: alert.RegistryUnreachable, Severity: "critical", Object: object, Detail: err.Error()}}
@@ -112,6 +114,10 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 				out = append(out, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Alarm})
 			}
 		}
+	}
+	// What runs with critical vulnerabilities, where images are scanned.
+	if status.Scanner {
+		out = append(out, s.vulnerableRunningAlerts(ctx)...)
 	}
 	return out
 }

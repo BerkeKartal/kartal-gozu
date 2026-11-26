@@ -770,7 +770,14 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request) {
 func alertVisible(u auth.User, a alert.Alert) bool {
 	switch {
 	case alert.IsRegistry(a.Kind):
-		return u.RegistryAdmin() || (a.Kind == alert.RegistryQuota && u.RoleInProject(a.Object) >= auth.Viewer)
+		switch a.Kind {
+		case alert.RegistryQuota:
+			return u.RegistryAdmin() || u.RoleInProject(a.Object) >= auth.Viewer
+		case alert.RegistryVulnerableRunning:
+			project, _, _ := strings.Cut(a.Object, "/")
+			return u.RegistryAdmin() || u.RoleInProject(project) >= auth.Viewer
+		}
+		return u.RegistryAdmin()
 	case a.Cluster == "":
 		return true
 	case a.Namespace != "":

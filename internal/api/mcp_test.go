@@ -200,8 +200,15 @@ func TestMCPToolsByRole(t *testing.T) {
 	if !operator["restart_workload"] || !operator["delete_pod"] || !operator["audit_log"] || operator["exec_in_pod"] || operator["edit_resource"] {
 		t.Errorf("operator's tools: %v", operator)
 	}
-	// The console and the YAML editor are an admin's, as in the UI.
-	if admin := names(adminTok); !admin["exec_in_pod"] || !admin["edit_resource"] || len(admin) != len(mcpTools) {
+	// The console and the YAML editor are an admin's, as in the UI. The
+	// registry's tools are not there: this server has no registry.
+	clusterTools := 0
+	for _, tl := range mcpTools {
+		if !tl.registry {
+			clusterTools++
+		}
+	}
+	if admin := names(adminTok); !admin["exec_in_pod"] || !admin["edit_resource"] || len(admin) != clusterTools || admin["list_registry_projects"] {
 		t.Errorf("admin's tools: %v", admin)
 	}
 	for _, tl := range []string{"exec_in_pod", "edit_resource"} {

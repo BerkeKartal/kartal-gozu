@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/auth"
+	"github.com/BerkeKartal/kartal-gozu/internal/registry"
 	"github.com/BerkeKartal/kartal-gozu/internal/registry/blobstore"
 )
 
@@ -21,6 +22,7 @@ func (s *Server) routeRegistryScans(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/registry/sbom", s.signedIn(s.registrySBOM))
 	mux.HandleFunc("GET /api/v1/registry/scanner", s.signedIn(s.registryScanner))
 	mux.HandleFunc("POST /api/v1/registry/scanner/db", s.signedIn(s.registryScannerDB))
+	mux.HandleFunc("GET /api/v1/registry/running-vulnerabilities", s.signedIn(s.registryRunningVulnerable))
 }
 
 func (s *Server) registryScan(w http.ResponseWriter, r *http.Request) {
@@ -39,21 +41,33 @@ func (s *Server) registryScan(w http.ResponseWriter, r *http.Request) {
 	s.relay(w, r, http.MethodPost, "/admin/v1/scan", nil, body)
 }
 
-// imageParams reads ?repo= and ?digest= for a viewer of the project.
+// imageParams reads ?repo= and ?digest= (or ?ref=, a tag) for a viewer of
+// the project.
 func (s *Server) imageParams(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 	repo, project, ok := repoParam(w, r, "repo")
 	if !ok {
 		return nil, false
 	}
-	digest := r.URL.Query().Get("digest")
-	if !blobstore.ValidDigest(digest) {
-		writeError(w, http.StatusBadRequest, "digest must be an image's digest, sha256:...")
+	q := r.URL.Query()
+	out := url.Values{"repo": {repo}}
+	switch {
+	case blobstore.ValidDigest(q.Get("digest")):
+		out.Set("digest", q.Get("digest"))
+	case q.Get("digest") == "" && (registry.ValidTag(q.Get("ref")) || blobstore.ValidDigest(q.Get("ref"))):
+		out.Set("ref", q.Get("ref"))
+	default:
+		writeError(w, http.StatusBadRequest, "digest must be an image's digest, sha256:..., or ref its tag")
 		return nil, false
 	}
 	if !s.mayIn(w, r, project, auth.Viewer) {
 		return nil, false
 	}
-	return url.Values{"repo": {repo}, "digest": {digest}}, true
+	for _, k := range []string{"severity", "fixable"} {
+		if v := q.Get(k); v != "" {
+			out.Set(k, v)
+		}
+	}
+	return out, true
 }
 
 func (s *Server) registryVulnerabilities(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +96,11 @@ func (s *Server) registrySBOM(w http.ResponseWriter, r *http.Request) {
 		w.Write(b)
 		return
 	}
-	name := path.Base(q.Get("repo")) + "-" + strings.TrimPrefix(q.Get("digest"), "sha256:")[:12] + ".cdx.json"
+	which := q.Get("ref")
+	if d := q.Get("digest"); d != "" {
+		which = strings.TrimPrefix(d, "sha256:")[:12]
+	}
+	name := path.Base(q.Get("repo")) + "-" + strings.TrimPrefix(which, "sha256:") + ".cdx.json"
 	w.Header().Set("Content-Type", "application/vnd.cyclonedx+json")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")

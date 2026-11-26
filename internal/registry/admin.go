@@ -63,6 +63,7 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("GET /admin/v1/sbom", s.sbom)
 	mux.HandleFunc("GET /admin/v1/scanner", s.scannerStatus)
 	mux.HandleFunc("POST /admin/v1/scanner/db", s.updateScannerDB)
+	mux.HandleFunc("POST /admin/v1/scans/lookup", s.lookupScans)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		tok := ""
@@ -648,11 +649,20 @@ type VulnerabilityView struct {
 	SBOM   bool            `json:"sbom"`
 }
 
-// scannedImage reads ?repo= and ?digest=, an image of that repository,
-// answering the request itself when it is not one.
+// scannedImage reads ?repo= and ?digest= (or ?ref=, a tag or a digest), an
+// image of that repository, answering the request itself when it is not
+// one.
 func (s *Server) scannedImage(w http.ResponseWriter, r *http.Request) (meta.Artifact, bool) {
 	q := r.URL.Query()
-	a, ok := s.cfg.DB.Artifact(q.Get("repo"), q.Get("digest"))
+	ref := q.Get("digest")
+	if ref == "" {
+		ref = q.Get("ref")
+	}
+	var a meta.Artifact
+	digest, ok := s.cfg.DB.Resolve(q.Get("repo"), ref)
+	if ok {
+		a, ok = s.cfg.DB.Artifact(q.Get("repo"), digest)
+	}
 	if !ok {
 		adminError(w, http.StatusNotFound, "no such artifact")
 		return a, false
@@ -675,6 +685,19 @@ func (s *Server) vulnerabilities(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		out.Report, out.SBOM = &res.Report, len(res.SBOM) > 0
+		// ?severity= keeps those of it and worse, ?fixable=true those with
+		// a fix: for who asks in words, not on a page.
+		q := r.URL.Query()
+		least := scanner.Rank(q.Get("severity"))
+		if least > 0 || q.Get("fixable") == "true" {
+			kept := []scanner.Vulnerability{}
+			for _, v := range res.Report.Vulnerabilities {
+				if scanner.Rank(v.Severity) >= least && (q.Get("fixable") != "true" || v.Fixed != "") {
+					kept = append(kept, v)
+				}
+			}
+			out.Report.Vulnerabilities = kept
+		}
 	case !errors.Is(err, os.ErrNotExist):
 		s.adminInternal(w, "reading a scan's report", err)
 		return

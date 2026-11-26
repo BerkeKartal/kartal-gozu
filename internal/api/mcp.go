@@ -47,6 +47,7 @@ Start with list_clusters, then list_objects with problems=true to find what need
 Lists come from each agent's latest snapshot, a few seconds old; get_resource, pod_logs, object_events and rollout_history ask the cluster live.
 Actions (restart, scale, rollback, deleting a pod, cordoning a node, running or suspending a CronJob) need the operator role where they act, and the cluster's agent must allow changes ("write" among its capabilities in list_clusters).
 Running a command in a container (exec_in_pod) and saving an object (edit_resource) need the admin role where they act, and the agent's "exec" or "edit" capability. Save with edit_resource only after a dry run the person has seen.
+With an image registry: list_registry_projects, list_artifacts and image_vulnerabilities show what it holds and what its scans found, and running_vulnerabilities which vulnerable images run where.
 Every action is written to the audit log with your user's name. Ask the person you work for before you change anything.`
 
 // viaKey marks the requests the MCP endpoint makes for its tools.
@@ -59,7 +60,9 @@ func via(r *http.Request) string {
 }
 
 func (s *Server) routeMCP(mux *http.ServeMux) {
-	mux.HandleFunc("POST "+mcpPath, s.require(auth.Viewer, s.mcp))
+	// Anyone with a role anywhere: each tool asks for the role it needs, in
+	// a cluster or in the image registry.
+	mux.HandleFunc("POST "+mcpPath, s.signedIn(s.mcp))
 	// No stream for the server's own messages, and no session to end.
 	other := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Allow", "POST")
@@ -172,9 +175,9 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 		rpcReply(w, http.StatusOK, m.ID, map[string]any{}, nil)
 	case "tools/list":
 		list := []map[string]any{}
-		for _, t := range mcpTools {
-			if u.ClusterRole() >= t.role {
-				list = append(list, t.describe())
+		for i := range mcpTools {
+			if s.toolFor(u, &mcpTools[i]) {
+				list = append(list, mcpTools[i].describe())
 			}
 		}
 		rpcReply(w, http.StatusOK, m.ID, map[string]any{"tools": list}, nil)
@@ -241,8 +244,10 @@ type toolArg struct {
 }
 
 type tool struct {
-	name, title, doc              string
-	role                          auth.Role
+	name, title, doc string
+	role             auth.Role
+	// registry says the role is one in the image registry.
+	registry                      bool
 	args                          []toolArg
 	readOnly, destructive, repeat bool
 	// call is the REST call the arguments make; an error is the caller's.
@@ -374,8 +379,14 @@ func (s *Server) callTool(r *http.Request, t *tool, raw map[string]any) toolResu
 	if err != nil {
 		return toolFailed(err.Error())
 	}
-	if has := userOf(r).ClusterRole(); has < t.role {
-		return toolFailed("this needs the " + t.role.String() + " role; you have " + has.String())
+	if u := userOf(r); !s.toolFor(u, t) {
+		if t.registry {
+			if s.cfg.RegistryURL == "" {
+				return toolFailed("this server has no image registry")
+			}
+			return toolFailed("this needs the " + t.role.String() + " role in the image registry; you have " + u.RegistryRole().String())
+		}
+		return toolFailed("this needs the " + t.role.String() + " role; you have " + u.ClusterRole().String())
 	}
 	method, target, body, err := t.call(a)
 	if err != nil {

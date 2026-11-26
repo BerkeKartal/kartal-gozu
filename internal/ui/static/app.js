@@ -78,7 +78,7 @@ const NAV = [
   { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
-  { items: ['registry', 'regjobs', 'regreplication', 'regsources', 'robots'] },
+  { items: ['registry', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'robots'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -639,6 +639,18 @@ const STRINGS = {
     'reg.scanOnPushHelp': 'Scan each image pushed or copied here for known vulnerabilities',
     'reg.scansOnPush': '🔍 Images pushed here are scanned for vulnerabilities.',
     'reg.action.scanner-db': 'scanner databases updated',
+    'reg.trivyTemplate': 'Mirror Trivy’s databases',
+    'reg.trivyTemplateHelp': 'For a scanner that cannot reach the internet: two rules copy Trivy’s vulnerability DB (aquasecurity/trivy-db:2) and Java DB (aquasecurity/trivy-java-db:1) here every night, overwriting the tag. Point the scanner’s KARTAL_SCANNER_DB_REPOSITORY and KARTAL_SCANNER_JAVA_DB_REPOSITORY at them.',
+    'reg.trivySourceHelp': 'A source of the Distribution API for the host ghcr.io, without a password: Trivy publishes them there.',
+    'reg.trivyProjectHelp': 'A public project, such as trivy, so that the scanner reads them without signing in.',
+    'reg.trivyMade': 'The rules are made; they copy into {0} every night at 04:00, or now with Run.',
+    regrunning: 'Vulnerable images that run', 'reg.col.cluster': 'Cluster', 'reg.col.namespace': 'Namespace', 'reg.col.workload': 'Workload',
+    'reg.col.pods': 'Pods', 'reg.col.image': 'Image', 'reg.col.unallowed': 'Critical, not allowed',
+    'reg.unallowedHelp': 'Its critical vulnerabilities that its project does not allow: each such image that runs is an alert.',
+    'reg.runningHint': 'The registry’s images that pods run, where you may look, with what their last scan found, the worst first.',
+    'reg.noScannerRunning': 'The registry has no vulnerability scanner, so no image here was scanned.',
+    'reg.noRunning': 'No pod you may see runs an image of the registry.', 'reg.onlyVulnerable': 'only those with critical or high vulnerabilities',
+    'reg.runningNote': 'A pod’s image is matched by the digest it was pulled by; by its tag only on this registry’s host, before it has one.',
     'reg.blockSeverity': 'Refuse pulls of images with vulnerabilities of', 'reg.blockNone': 'no severity: let every image be pulled',
     'reg.blockHelp': 'An image with a vulnerability of this severity or worse that the allowlist does not name cannot be pulled (images not scanned yet can). Careful: this stops the clusters pulling it too.',
     'reg.allowlist': 'Allowed vulnerabilities', 'reg.allowlistHelp': 'IDs that never refuse a pull, such as CVE-2026-1234, separated by commas or lines.',
@@ -1279,6 +1291,18 @@ const STRINGS = {
     'reg.scanOnPushHelp': 'Buraya push edilen ya da kopyalanan her imaj bilinen zafiyetler için taransın',
     'reg.scansOnPush': '🔍 Buraya push edilen imajlar zafiyetler için taranıyor.',
     'reg.action.scanner-db': 'tarayıcı veritabanları güncellendi',
+    'reg.trivyTemplate': 'Trivy veritabanlarını aynala',
+    'reg.trivyTemplateHelp': 'İnternete çıkamayan bir tarayıcı için: iki kural Trivy’nin zafiyet DB’sini (aquasecurity/trivy-db:2) ve Java DB’sini (aquasecurity/trivy-java-db:1) her gece buraya, etiketin üzerine yazarak kopyalar. Tarayıcının KARTAL_SCANNER_DB_REPOSITORY ve KARTAL_SCANNER_JAVA_DB_REPOSITORY ayarlarını bunlara yöneltin.',
+    'reg.trivySourceHelp': 'ghcr.io sunucusu için şifresiz bir Distribution API kaynağı; Trivy onları orada yayımlar.',
+    'reg.trivyProjectHelp': 'Herkese açık bir proje, örneğin trivy; tarayıcı onları giriş yapmadan okusun.',
+    'reg.trivyMade': 'Kurallar oluşturuldu; her gece 04:00’te {0} projesine kopyalarlar, ya da şimdi Çalıştır ile.',
+    regrunning: 'Çalışan zafiyetli imajlar', 'reg.col.cluster': 'Cluster', 'reg.col.namespace': 'Namespace', 'reg.col.workload': 'Workload',
+    'reg.col.pods': 'Pod', 'reg.col.image': 'İmaj', 'reg.col.unallowed': 'Kritik, izinsiz',
+    'reg.unallowedHelp': 'Projesinin izin vermediği kritik zafiyetleri: böyle her çalışan imaj bir uyarıdır.',
+    'reg.runningHint': 'Pod’ların çalıştırdığı, deponun imajları (görebildiğiniz yerlerde) ve son taramalarının bulduğu, en kötüsü önce.',
+    'reg.noScannerRunning': 'Deponun zafiyet tarayıcısı yok; buradaki imajların hiçbiri taranmadı.',
+    'reg.noRunning': 'Görebildiğiniz hiçbir pod deponun bir imajını çalıştırmıyor.', 'reg.onlyVulnerable': 'yalnızca kritik ya da yüksek zafiyeti olanlar',
+    'reg.runningNote': 'Bir pod’un imajı çekildiği digest’le eşleşir; etiketiyle yalnızca bu deponun adresindeyse ve henüz digest’i yoksa.',
     'reg.blockSeverity': 'Şu zafiyeti olan imajların pull’u reddedilsin', 'reg.blockNone': 'hiçbiri: her imaj pull edilebilsin',
     'reg.blockHelp': 'Bu önemde ya da daha ağır, izin listesinde olmayan bir zafiyeti olan imaj pull edilemez (henüz taranmamış imajlar edilebilir). Dikkat: cluster’lar da onu çekemez.',
     'reg.allowlist': 'İzin verilen zafiyetler', 'reg.allowlistHelp': 'Pull’u hiç engellemeyen ID’ler, örneğin CVE-2026-1234; virgül ya da satırla ayrılır.',
@@ -2845,6 +2869,7 @@ const NAV_ICONS = {
   regjobs: [[12, 12, 9], 'M12 7v5l3.5 2'],
   regsources: ['M4 12h11', 'M11 8l4 4-4 4', [3, 4, 18, 16, 2]],
   regreplication: ['M4 8h12l-3-3', 'M20 16H8l3 3', [18, 8, 2], [6, 16, 2]],
+  regrunning: ['M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z', 'M12 8v5', [12, 16, 1]],
 };
 
 function navIcon(id) {
@@ -2999,7 +3024,7 @@ function renderContent() {
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
-    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regjobs': case 'regreplication': case 'regsources': case 'robots':
+    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regrunning': case 'regjobs': case 'regreplication': case 'regsources': case 'robots':
       body = renderRegistry(state.view, state.data, regUI);
       break;
     case 'certificates':

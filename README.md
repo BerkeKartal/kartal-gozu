@@ -1126,12 +1126,20 @@ users, passwords, directory and roles the rest has.
   index (its images are not). It is off by default: turned on, it stops
   the clusters pulling such images too. A vulnerability is allowed, or no
   longer, from an image's page.
+- **What runs, and its vulnerabilities.** Kartal Gözü knows which of the
+  registry's images the clusters run, by the digest each container was
+  pulled by. *Vulnerable images that run* lists them by workload, with
+  what their last scan found, the worst first, where the user may look in
+  the clusters and of the projects they may see.
 - **Alerts.** The server looks at the registry every minute and tells of
   its problems as of any other, on the Alerts page and through the
   notification channels: it cannot be reached, it cannot save its
-  metadata, a job failed, the check found damaged or missing blobs, or a
-  project holds 90% of its quota or more. A project's alerts are for its
-  people, the others for the registry's admins.
+  metadata, a job failed, the check found damaged or missing blobs, a
+  project holds 90% of its quota or more, or an image that some workload
+  runs has a critical vulnerability its project does not allow (one alert
+  an image, saying where it runs; allowing the vulnerability, or a
+  silence, ends it). A project's alerts are for its people, the others for
+  the registry's admins.
 
 To install it, add a `registry-secret` key (`openssl rand -hex 24`) to the
 server's Secret, uncomment the `KARTAL_REGISTRY_*` variables in
@@ -1264,6 +1272,20 @@ Clients set up with JSON take the same address and header:
 | `restart_workload`, `scale_workload`, `rollback_deployment`, `delete_pod`, `cordon_node`, `run_cronjob`, `suspend_cronjob` | operator | The actions of the UI, where the token's user is an operator and the cluster's agent allows changes |
 | `exec_in_pod` | admin | Runs a command in a container with `sh -c` and returns its output and exit code, where the agent allows `exec` |
 | `edit_resource` | admin | Replaces an object with new YAML or JSON (not Secrets), as a dry run unless `dry_run` is false, where the agent allows `edit` |
+
+With an [image registry](#image-registry), these go by the user's role in
+its projects, not in the clusters; someone with a role in the registry
+alone gets these only:
+
+| Tool | Role in the registry | What it does |
+|---|---|---|
+| `list_registry_projects` | viewer | The projects: access, role, size, quota, scanning and the pull policy |
+| `list_artifacts` | viewer | A repository's artifacts with their tags and what their scans found, or a project's repositories |
+| `image_vulnerabilities` | viewer | An image's vulnerabilities, by tag or digest, optionally of a severity and worse, or only those with a fix |
+| `running_vulnerabilities` | viewer | The registry's images that run where the user may look, the most vulnerable first |
+| `scan_image` | operator | Has an image, or an index's images, scanned again |
+| `registry_jobs` | admin | The registry's jobs and schedules |
+| `run_registry_job` | admin | Starts garbage collection, the blobs' check, retention, a replication rule or a scan of every image; a project's admins run its retention |
 
 Answers longer than 100,000 bytes are cut, with a word on how to ask for
 less. The endpoint speaks the protocol's versions 2025-03-26, 2025-06-18 and

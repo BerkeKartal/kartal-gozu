@@ -540,6 +540,10 @@ const (
 	RegistryJobFailed   = "RegistryJobFailed"
 	RegistryDamaged     = "RegistryDamaged"
 	RegistryQuota       = "RegistryQuota"
+	// RegistryVulnerableRunning is an image of the registry that some
+	// workload runs, with critical vulnerabilities its project does not
+	// allow; its Object is repository@digest.
+	RegistryVulnerableRunning = "RegistryVulnerableRunning"
 )
 
 // IsRegistry tells whether an alert is the image registry's.
