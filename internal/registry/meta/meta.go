@@ -87,6 +87,24 @@ type RetentionRule struct {
 	Days  int    `json:"days,omitempty"`
 }
 
+// Source is a registry that replication copies from.
+type Source struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind is harbor, nexus or registry (any of the Distribution API).
+	Kind string `json:"kind"`
+	URL  string `json:"url"`
+	// Repository is the Docker repository of a Nexus.
+	Repository string `json:"repository,omitempty"`
+	Username   string `json:"username,omitempty"`
+	// Secret is the password or token, sealed: the registry alone opens it.
+	Secret   string    `json:"secret,omitempty"`
+	CA       string    `json:"ca,omitempty"`
+	Insecure bool      `json:"insecure,omitempty"`
+	Created  time.Time `json:"created"`
+	By       string    `json:"by,omitempty"`
+}
+
 // RunningImages are what a cluster said it runs, or may run: the digests
 // and, of this registry, the repositories with their tags or digests.
 type RunningImages struct {
@@ -324,6 +342,7 @@ type entry struct {
 	Job      *Job           `json:"job,omitempty"`
 	Schedule *Schedule      `json:"schedule,omitempty"`
 	Running  *RunningImages `json:"running,omitempty"`
+	Source   *Source        `json:"source,omitempty"`
 }
 
 type state struct {
@@ -333,6 +352,7 @@ type state struct {
 	Jobs      []Job                    `json:"jobs,omitempty"`
 	Schedules []Schedule               `json:"schedules,omitempty"`
 	Running   map[string]RunningImages `json:"running,omitempty"`
+	Sources   []Source                 `json:"sources,omitempty"`
 }
 
 // DB is the registry's metadata.
@@ -355,6 +375,7 @@ type DB struct {
 	schedules map[string]Schedule
 	// running are what each cluster last said it runs.
 	running map[string]RunningImages
+	sources map[string]Source
 	// pulled are the artifacts pulled since their counts were last written.
 	pulled map[[2]string]bool
 	// onEvent hears of each event as it is written.
@@ -376,7 +397,7 @@ func Open(dir string) (*DB, error) {
 		return nil, err
 	}
 	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{},
-		schedules: map[string]Schedule{}, running: map[string]RunningImages{}}
+		schedules: map[string]Schedule{}, running: map[string]RunningImages{}, sources: map[string]Source{}}
 	if b, err := os.ReadFile(d.path("snapshot.json")); err == nil {
 		var s state
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -396,6 +417,9 @@ func Open(dir string) (*DB, error) {
 		}
 		for name, ri := range s.Running {
 			d.running[name] = ri
+		}
+		for _, src := range s.Sources {
+			d.sources[src.ID] = src
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -554,6 +578,10 @@ func (d *DB) apply(e entry) {
 		d.schedules[e.Schedule.Kind] = *e.Schedule
 	case "running":
 		d.running[e.Name] = *e.Running
+	case "source":
+		d.sources[e.Source.ID] = *e.Source
+	case "source-del":
+		delete(d.sources, e.Name)
 	}
 }
 
@@ -614,6 +642,10 @@ func (d *DB) snapshot() error {
 		s.Schedules = append(s.Schedules, sc)
 	}
 	sort.Slice(s.Schedules, func(i, j int) bool { return s.Schedules[i].Kind < s.Schedules[j].Kind })
+	for _, src := range d.sources {
+		s.Sources = append(s.Sources, src)
+	}
+	sort.Slice(s.Sources, func(i, j int) bool { return s.Sources[i].ID < s.Sources[j].ID })
 	for _, p := range d.projects {
 		s.Projects = append(s.Projects, p)
 	}
@@ -1113,6 +1145,55 @@ func (d *DB) Running() map[string]RunningImages {
 		out[name] = ri
 	}
 	return out
+}
+
+// ---------------------------------------------------------------- sources
+
+// Sources are the registries to copy from, by name.
+func (d *DB) Sources() []Source {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]Source, 0, len(d.sources))
+	for _, src := range d.sources {
+		out = append(out, src)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out
+}
+
+// Source is one source.
+func (d *DB) Source(id string) (Source, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	src, ok := d.sources[id]
+	return src, ok
+}
+
+// PutSource adds a source or changes one; names are not shared.
+func (d *DB) PutSource(src Source, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for id, other := range d.sources {
+		if id != src.ID && strings.EqualFold(other.Name, src.Name) {
+			return fmt.Errorf("%w: a source named %s", ErrExists, other.Name)
+		}
+	}
+	action := "source-add"
+	if _, ok := d.sources[src.ID]; ok {
+		action = "source-change"
+	}
+	return d.commit(entry{Op: "source", Source: &src}, d.event(user, action, "", "", "", "", src.Name+" ("+src.URL+")"))
+}
+
+// DeleteSource removes a source.
+func (d *DB) DeleteSource(id, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	src, ok := d.sources[id]
+	if !ok {
+		return ErrNotFound
+	}
+	return d.commit(entry{Op: "source-del", Name: id}, d.event(user, "source-delete", "", "", "", "", src.Name))
 }
 
 // MarkScheduled notes that a schedule started its job.

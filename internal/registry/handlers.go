@@ -18,15 +18,11 @@ import (
 // denied answers a change that its project's rules refuse: an immutable
 // tag, or the quota. It tells whether it did.
 func denied(w http.ResponseWriter, err error) bool {
-	switch {
-	case errors.Is(err, meta.ErrImmutable):
-		writeError(w, errorf(http.StatusConflict, "DENIED", "%s", err))
-	case errors.Is(err, meta.ErrQuota):
-		writeError(w, errorf(http.StatusForbidden, "DENIED", "%s", err))
-	default:
-		return false
+	if e := deniedError(err); e != nil {
+		writeError(w, e)
+		return true
 	}
-	return true
+	return false
 }
 
 func noProject(name string) *apiError {
@@ -400,49 +396,72 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 }
 
 func (s *Server) putManifest(w http.ResponseWriter, r *http.Request, g *grant, t target) {
-	byDigest := strings.HasPrefix(t.ref, "sha256:")
-	if !byDigest && !ValidTag(t.ref) {
-		writeError(w, errorf(http.StatusBadRequest, "MANIFEST_INVALID", "%q is not a tag: letters, digits, _ . -, at most 128", t.ref))
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, manifest.MaxSize+1))
 	if err != nil {
 		writeError(w, errorf(http.StatusBadRequest, "MANIFEST_INVALID", "the manifest could not be read"))
 		return
 	}
-	if len(body) > manifest.MaxSize {
-		writeError(w, errorf(http.StatusRequestEntityTooLarge, "SIZE_INVALID", "a manifest may be at most %d bytes", manifest.MaxSize))
+	digest, m, e := s.storeManifest(t.name, t.ref, r.Header.Get("Content-Type"), body, subject(g))
+	if e != nil {
+		writeError(w, e)
 		return
+	}
+	h := w.Header()
+	h.Set("Location", "/v2/"+t.name+"/manifests/"+digest)
+	h.Set("Docker-Content-Digest", digest)
+	if m.Subject != nil {
+		h.Set("OCI-Subject", m.Subject.Digest)
+	}
+	h.Set("Content-Length", "0")
+	w.WriteHeader(http.StatusCreated)
+}
+
+// deniedError is a change that its project's rules refuse, or nil.
+func deniedError(err error) *apiError {
+	switch {
+	case errors.Is(err, meta.ErrImmutable):
+		return errorf(http.StatusConflict, "DENIED", "%s", err)
+	case errors.Is(err, meta.ErrQuota):
+		return errorf(http.StatusForbidden, "DENIED", "%s", err)
+	}
+	return nil
+}
+
+// storeManifest checks a manifest for a repository, under ref (a tag, or
+// its digest), and keeps it: everything it refers to must be there. A push
+// and replication keep manifests alike.
+func (s *Server) storeManifest(repo, ref, contentType string, body []byte, user string) (string, *manifest.Manifest, *apiError) {
+	byDigest := strings.HasPrefix(ref, "sha256:")
+	if !byDigest && !ValidTag(ref) {
+		return "", nil, errorf(http.StatusBadRequest, "MANIFEST_INVALID", "%q is not a tag: letters, digits, _ . -, at most 128", ref)
+	}
+	if len(body) > manifest.MaxSize {
+		return "", nil, errorf(http.StatusRequestEntityTooLarge, "SIZE_INVALID", "a manifest may be at most %d bytes", manifest.MaxSize)
 	}
 	digest := blobstore.Digest(body)
-	if byDigest && t.ref != digest {
-		writeError(w, errorf(http.StatusBadRequest, "DIGEST_INVALID", "the manifest's digest is %s, not %s", digest, t.ref))
-		return
+	if byDigest && ref != digest {
+		return "", nil, errorf(http.StatusBadRequest, "DIGEST_INVALID", "the manifest's digest is %s, not %s", digest, ref)
 	}
-	m, err := manifest.Parse(r.Header.Get("Content-Type"), body)
+	m, err := manifest.Parse(contentType, body)
 	if err != nil {
-		writeError(w, errorf(http.StatusBadRequest, "MANIFEST_INVALID", "%s", err.Error()))
-		return
+		return "", nil, errorf(http.StatusBadRequest, "MANIFEST_INVALID", "%s", err.Error())
 	}
-	if _, ok := s.cfg.DB.Project(meta.ProjectOf(t.name)); !ok {
-		writeError(w, noProject(t.name))
-		return
+	if _, ok := s.cfg.DB.Project(meta.ProjectOf(repo)); !ok {
+		return "", nil, noProject(repo)
 	}
 	// Everything it refers to must be in this repository already.
-	for _, ref := range m.References() {
-		if _, ok := s.cfg.DB.Blob(t.name, ref.Digest); !ok {
-			e := errorf(http.StatusBadRequest, "MANIFEST_BLOB_UNKNOWN", "blob %s is not in %s; push it first", ref.Digest, t.name)
-			e.detail = map[string]string{"digest": ref.Digest}
-			writeError(w, e)
-			return
+	for _, d := range m.References() {
+		if _, ok := s.cfg.DB.Blob(repo, d.Digest); !ok {
+			e := errorf(http.StatusBadRequest, "MANIFEST_BLOB_UNKNOWN", "blob %s is not in %s; push it first", d.Digest, repo)
+			e.detail = map[string]string{"digest": d.Digest}
+			return "", nil, e
 		}
 	}
 	for _, child := range m.Manifests {
-		if _, ok := s.cfg.DB.Artifact(t.name, child.Digest); !ok {
-			e := errorf(http.StatusBadRequest, "MANIFEST_BLOB_UNKNOWN", "manifest %s is not in %s; push it first", child.Digest, t.name)
+		if _, ok := s.cfg.DB.Artifact(repo, child.Digest); !ok {
+			e := errorf(http.StatusBadRequest, "MANIFEST_BLOB_UNKNOWN", "manifest %s is not in %s; push it first", child.Digest, repo)
 			e.detail = map[string]string{"digest": child.Digest}
-			writeError(w, e)
-			return
+			return "", nil, e
 		}
 	}
 	a := meta.Artifact{Digest: digest, MediaType: m.MediaType, ArtifactType: m.ArtifactType, Kind: m.Kind(), Size: int64(len(body)),
@@ -460,30 +479,22 @@ func (s *Server) putManifest(w http.ResponseWriter, r *http.Request, g *grant, t
 		}
 	}
 	if err := s.cfg.Store.Put(digest, body); err != nil {
-		s.internal(w, "storing a manifest", err)
-		return
+		s.cfg.Log.Error("registry: storing a manifest", "err", err)
+		return "", nil, errorf(http.StatusInternalServerError, "UNKNOWN", "storing a manifest failed")
 	}
 	tag := ""
 	if !byDigest {
-		tag = t.ref
+		tag = ref
 	}
-	if err := s.cfg.DB.PutArtifact(t.name, a, tag, subject(g)); errors.Is(err, meta.ErrNoProject) {
-		writeError(w, noProject(t.name))
-		return
-	} else if denied(w, err) {
-		return
+	if err := s.cfg.DB.PutArtifact(repo, a, tag, user); errors.Is(err, meta.ErrNoProject) {
+		return "", nil, noProject(repo)
+	} else if e := deniedError(err); e != nil {
+		return "", nil, e
 	} else if err != nil {
-		s.internal(w, "recording a manifest", err)
-		return
+		s.cfg.Log.Error("registry: recording a manifest", "err", err)
+		return "", nil, errorf(http.StatusInternalServerError, "UNKNOWN", "recording a manifest failed")
 	}
-	h := w.Header()
-	h.Set("Location", "/v2/"+t.name+"/manifests/"+digest)
-	h.Set("Docker-Content-Digest", digest)
-	if m.Subject != nil {
-		h.Set("OCI-Subject", m.Subject.Digest)
-	}
-	h.Set("Content-Length", "0")
-	w.WriteHeader(http.StatusCreated)
+	return digest, m, nil
 }
 
 // readConfig reads an image's config from the store, or nil.

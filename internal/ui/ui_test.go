@@ -47,6 +47,11 @@ func TestNothingComesFromElsewhere(t *testing.T) {
 	for _, example := range []string{"http://prometheus-server.monitoring.svc:9090", "https://elastic.example.org:9200"} {
 		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
 	}
+	// Examples of the image registry's sources' addresses, likewise.
+	for _, example := range []string{"https://harbor.example.org", "https://nexus.example.org"} {
+		files["app.js"] = strings.ReplaceAll(files["app.js"], example, "")
+		files["registry.js"] = strings.ReplaceAll(files["registry.js"], example, "")
+	}
 	// What versions.js asks, only where the server lets the page reach it
 	// (Page), and the links to what it found.
 	for _, o := range append(LookupOrigins, "https://github.com/", "https://osv.dev/vulnerability/") {

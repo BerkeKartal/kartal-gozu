@@ -78,7 +78,7 @@ const NAV = [
   { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
-  { items: ['registry', 'regjobs', 'robots'] },
+  { items: ['registry', 'regjobs', 'regsources', 'robots'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -588,6 +588,18 @@ const STRINGS = {
     'reg.quota': 'Quota (GiB)', 'reg.quotaShort': 'Quota', 'reg.quotaUse': '{0} of {1} ({2}%)',
     'reg.quotaHelp': 'How much the project may hold, each layer counted once; empty for no limit. The registry’s admins set it.',
     regjobs: 'Jobs', 'reg.job.gc': 'Garbage collection', 'reg.job.verify': 'Blob check',
+    regsources: 'Sources', 'reg.newSource': 'New source', 'reg.noSources': 'No sources yet.',
+    'reg.sourcesHint': 'Registries to copy images from: Harbor, Nexus, or any registry of the Distribution API (Docker Hub, GitLab, another of these). Their passwords are sealed, and never shown again.',
+    'reg.col.name': 'Name', 'reg.col.url': 'Address', 'reg.col.username': 'User',
+    'reg.kindSrc.harbor': 'Harbor', 'reg.kindSrc.nexus': 'Nexus', 'reg.kindSrc.registry': 'Docker registry (v2)', 'reg.sourceKind': 'Kind',
+    'reg.sourceURLHelp': 'Harbor’s and other registries’ host, such as https://harbor.example.org; for Nexus, its own address, such as https://nexus.example.org.',
+    'reg.sourceRepo': 'Docker repository', 'reg.sourceRepoHelp': 'The Nexus repository with the images; its Docker API is read below /repository/<name>/ (path based routing).',
+    'reg.sourceUser': 'User name', 'reg.sourcePass': 'Password or token', 'reg.sourcePassKeep': 'unchanged',
+    'reg.sourceCA': 'CA certificate (PEM)', 'reg.sourceCAHelp': 'When its certificate is from a private authority.',
+    'reg.sourceInsecure': 'Skip checking its certificate (testing only)', 'reg.testSource': 'Test', 'reg.testing': 'Testing…',
+    'reg.testOK': 'It answers ({0} s){1}', 'reg.testProjects': ', {0} projects', 'reg.sourceSaved': 'Source saved.',
+    'reg.deleteSource': 'Delete', 'reg.deleteSourceConfirm': 'Delete the source {0}?', 'reg.sourceDeleted': 'Source deleted.',
+    'reg.action.source-add': 'source added', 'reg.action.source-change': 'source changed', 'reg.action.source-delete': 'source deleted',
     'reg.retention': 'Retention', 'reg.job.retention': 'Retention', 'reg.retentionAllDry': 'Retention: dry run',
     'reg.retentionHint': 'Each rule picks artifacts and keeps some of them; what a rule picks and none keeps is deleted when retention runs (on its schedule, on the Jobs page). What runs in a cluster, and what has an immutable tag, stays.',
     'reg.noRetention': 'No rules: retention deletes nothing here.', 'reg.editRetention': 'Edit rules', 'reg.retentionDry': 'Dry run',
@@ -1155,6 +1167,18 @@ const STRINGS = {
     'reg.quota': 'Kota (GiB)', 'reg.quotaShort': 'Kota', 'reg.quotaUse': '{0} / {1} (%{2})',
     'reg.quotaHelp': 'Projenin tutabileceği alan, her katman bir kez sayılır; boşsa sınır yok. İmaj deposunun yöneticileri belirler.',
     regjobs: 'Görevler', 'reg.job.gc': 'Çöp toplama', 'reg.job.verify': 'Blob denetimi',
+    regsources: 'Kaynaklar', 'reg.newSource': 'Yeni kaynak', 'reg.noSources': 'Henüz kaynak yok.',
+    'reg.sourcesHint': 'İmajların kopyalanacağı registry’ler: Harbor, Nexus ya da Distribution API’li herhangi bir registry (Docker Hub, GitLab, bunlardan bir başkası). Şifreleri mühürlenerek saklanır ve bir daha gösterilmez.',
+    'reg.col.name': 'Ad', 'reg.col.url': 'Adres', 'reg.col.username': 'Kullanıcı',
+    'reg.kindSrc.harbor': 'Harbor', 'reg.kindSrc.nexus': 'Nexus', 'reg.kindSrc.registry': 'Docker registry (v2)', 'reg.sourceKind': 'Tür',
+    'reg.sourceURLHelp': 'Harbor’ın ve diğer registry’lerin adresi, örneğin https://harbor.example.org; Nexus için kendi adresi, örneğin https://nexus.example.org.',
+    'reg.sourceRepo': 'Docker reposu', 'reg.sourceRepoHelp': 'İmajların durduğu Nexus reposu; Docker API’si /repository/<ad>/ altından okunur (path based routing).',
+    'reg.sourceUser': 'Kullanıcı adı', 'reg.sourcePass': 'Şifre ya da token', 'reg.sourcePassKeep': 'değişmedi',
+    'reg.sourceCA': 'CA sertifikası (PEM)', 'reg.sourceCAHelp': 'Sertifikası kurum içi bir CA’dan ise.',
+    'reg.sourceInsecure': 'Sertifikasını denetleme (yalnızca test için)', 'reg.testSource': 'Test et', 'reg.testing': 'Deneniyor…',
+    'reg.testOK': 'Cevap veriyor ({0} sn){1}', 'reg.testProjects': ', {0} proje', 'reg.sourceSaved': 'Kaynak kaydedildi.',
+    'reg.deleteSource': 'Sil', 'reg.deleteSourceConfirm': '{0} kaynağı silinsin mi?', 'reg.sourceDeleted': 'Kaynak silindi.',
+    'reg.action.source-add': 'kaynak eklendi', 'reg.action.source-change': 'kaynak değişti', 'reg.action.source-delete': 'kaynak silindi',
     'reg.retention': 'Saklama', 'reg.job.retention': 'Saklama', 'reg.retentionAllDry': 'Saklama: deneme',
     'reg.retentionHint': 'Her kural bazı artifact’leri seçer ve bir kısmını tutar; bir kuralın seçip hiçbirinin tutmadığı, saklama çalışınca silinir (zamanlamasıyla, Görevler sayfasında). Bir kümede çalışan ve değişmez tag’i olan kalır.',
     'reg.noRetention': 'Kural yok: saklama burada bir şey silmez.', 'reg.editRetention': 'Kuralları düzenle', 'reg.retentionDry': 'Deneme',
@@ -2440,7 +2464,7 @@ function viewAllowed(id) {
   const me = state.me;
   if (spaceOf(id) === 'registry') {
     // The registry's projects, and its robot accounts for its admins.
-    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && ((id !== 'robots' && id !== 'regjobs') || !!me.registryAdmin);
+    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['robots', 'regjobs', 'regsources'].includes(id) || !!me.registryAdmin);
   }
   if (me && me.role === 'none') return false;
   return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
@@ -2697,6 +2721,7 @@ const NAV_ICONS = {
   registry: ['M12 3l8 4v10l-8 4-8-4V7z', 'M4 7l8 4 8-4', 'M12 11v10', 'M8 5l8 4'],
   robots: [[5, 8, 14, 11, 3], 'M12 4v4', [12, 3.5, 1], [9.5, 13, 1], [14.5, 13, 1], 'M10 16.5h4'],
   regjobs: [[12, 12, 9], 'M12 7v5l3.5 2'],
+  regsources: ['M4 12h11', 'M11 8l4 4-4 4', [3, 4, 18, 16, 2]],
 };
 
 function navIcon(id) {
@@ -2851,7 +2876,7 @@ function renderContent() {
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
-    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regjobs': case 'robots':
+    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regjobs': case 'regsources': case 'robots':
       body = renderRegistry(state.view, state.data, regUI);
       break;
     case 'certificates':

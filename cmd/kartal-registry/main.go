@@ -76,9 +76,18 @@ func run(log *slog.Logger) error {
 	db.SetOnEvent(events.Hand)
 	go events.Run(ctx)
 	// The server says who signs in, and what runs in the clusters.
+	// The sources' passwords are sealed with a key of their own, or else
+	// one made of the shared secret.
+	sourcesKey, err := config.Secret("KARTAL_REGISTRY_SOURCES_KEY")
+	if err != nil {
+		return err
+	}
+	if sourcesKey == "" {
+		sourcesKey = secret
+	}
 	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
 	reg := registry.New(registry.Config{
-		Store: store, DB: db, Log: log, Zone: zone, Auth: server, Running: server,
+		Store: store, DB: db, Log: log, Zone: zone, Auth: server, Running: server, SourcesKey: registry.SourcesKey(sourcesKey),
 		PublicURL: config.String("KARTAL_REGISTRY_PUBLIC_URL", ""),
 	})
 	// Garbage collection and the blobs' checks, on their schedules.

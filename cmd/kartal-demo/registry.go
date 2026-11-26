@@ -69,7 +69,8 @@ func demoRegistry(ctx context.Context, dir, serverURL, secret string, log *slog.
 	// early.
 	ctx, cancel := context.WithCancel(ctx)
 	server := &registry.ServerAuth{URL: serverURL, Secret: secret}
-	reg := registry.New(registry.Config{Store: store, DB: db, Auth: server, Running: server, PublicURL: "http://" + public, Log: log})
+	reg := registry.New(registry.Config{Store: store, DB: db, Auth: server, Running: server, SourcesKey: registry.SourcesKey(secret),
+		PublicURL: "http://" + public, Log: log})
 	// What happens in it goes to the server's audit log.
 	events := registry.NewForwarder(serverURL, secret, log)
 	db.SetOnEvent(events.Hand)

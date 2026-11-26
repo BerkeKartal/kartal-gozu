@@ -68,7 +68,7 @@ func newRegEnv(t *testing.T) *regEnv {
 	}
 	accts := accounts.New(keeper, nil)
 	e := &regEnv{t: t, st: store.New("demo", "lab")}
-	reg := registry.New(registry.Config{Store: blobs, DB: db, Log: log})
+	reg := registry.New(registry.Config{Store: blobs, DB: db, Log: log, SourcesKey: registry.SourcesKey(regSecret)})
 	adm := httptest.NewServer(reg.Admin(regSecret))
 	t.Cleanup(adm.Close)
 	srv := New(Config{
@@ -447,5 +447,36 @@ func TestRegistryAlerts(t *testing.T) {
 	m.ObserveRegistry(nil, time.Now())
 	if n := m.ActiveCount("", nil); n != 0 {
 		t.Errorf("all well again: %d alerts", n)
+	}
+}
+
+// The sources replication copies from are the registry's admins'; their
+// passwords pass through to the registry, never back.
+func TestRegistrySources(t *testing.T) {
+	e := newRegEnv(t)
+	if code, _ := e.call("GET", "/api/v1/registry/sources", regLeadTok, ""); code != 403 {
+		t.Errorf("a project's admin lists the sources: %d", code)
+	}
+	body := `{"name":"Itself","kind":"registry","url":"` + e.public.URL + `","username":"boss","password":"` + bossTok + `"}`
+	code, b := e.call("POST", "/api/v1/registry/sources", bossTok, body)
+	var src struct {
+		ID        string
+		HasSecret bool
+	}
+	if json.Unmarshal(b, &src); code != 201 || !src.HasSecret || strings.Contains(string(b), bossTok) {
+		t.Fatalf("add: %d %s", code, b)
+	}
+	code, b = e.call("POST", "/api/v1/registry/sources/test", bossTok, `{"id":"`+src.ID+`","name":"Itself","kind":"registry","url":"`+e.public.URL+`","username":"boss"}`)
+	if code != 200 || !strings.Contains(string(b), `"ok":true`) {
+		t.Errorf("a test: %d %s", code, b)
+	}
+	if code, b := e.call("GET", "/api/v1/registry/sources/"+src.ID+"/projects", bossTok, ""); code != 200 {
+		t.Errorf("its projects: %d %s", code, b)
+	}
+	if code, _ := e.call("POST", "/api/v1/registry/sources", bossTok, `not json`); code != 400 {
+		t.Errorf("a body that is not JSON: %d", code)
+	}
+	if code, _ := e.call("DELETE", "/api/v1/registry/sources/"+src.ID, bossTok, ""); code != 204 {
+		t.Errorf("delete: %d", code)
 	}
 }

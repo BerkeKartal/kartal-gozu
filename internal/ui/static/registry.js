@@ -3,7 +3,7 @@
 // helpers (ui) and the data it loaded with loadRegistry; nothing here keeps
 // state of its own.
 
-export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regjobs', 'robots'];
+export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regjobs', 'regsources', 'robots'];
 
 const enc = encodeURIComponent;
 
@@ -42,6 +42,8 @@ export async function loadRegistry(view, rest, api, signal) {
     }
     case 'regjobs':
       return { info, jobs: await api('registry/jobs?limit=100', { signal }) };
+    case 'regsources':
+      return { info, sources: await api('registry/sources', { signal }) };
     case 'robots':
       return { info, robots: await api('registry/robots', { signal }) };
   }
@@ -109,6 +111,7 @@ export function renderRegistry(view, data, ui) {
     case 'regrepo': return repositoryPage(data, ui);
     case 'regartifact': return artifactPage(data, ui);
     case 'regjobs': return jobsPage(data, ui);
+    case 'regsources': return sourcesPage(data, ui);
     case 'robots': return robotsPage(data, ui);
   }
   return null;
@@ -682,6 +685,103 @@ function scheduleDialog(ui, sc, zone) {
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
   const close = modal(form);
   expr.focus();
+}
+
+// ---------------------------------------------------------------- sources
+
+const SOURCE_KINDS = ['harbor', 'nexus', 'registry'];
+
+function sourcesPage(data, ui) {
+  const { h, t, button, age, emptyState, ask, api, mono } = ui;
+  const all = data.sources || [];
+  const words = ui.words();
+  const rows = all.filter(x => ui.matches(words, [x.name, x.kind, x.url, x.repository, x.username]));
+  const head = ui.panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' }, h('div', { class: 'detail' }, t('reg.sourcesHint'))),
+    h('div', { class: 'actions' }, button('+ ' + t('reg.newSource'), () => sourceDialog(ui)))));
+  if (!rows.length) return [problem(ui, data.info), head, emptyState(t(all.length ? 'noMatch' : 'reg.noSources'))];
+  return [problem(ui, data.info), head,
+    h('table', null,
+      h('thead', null, h('tr', null, ['name', 'kind', 'url', 'username', 'created'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
+      h('tbody', null, rows.map(x => h('tr', null,
+        h('td', null, h('strong', null, x.name)),
+        h('td', null, t('reg.kindSrc.' + x.kind)),
+        h('td', null, mono(x.url), x.repository ? h('div', { class: 'muted small-text' }, t('reg.sourceRepo') + ': ' + x.repository) : null,
+          x.insecure ? h('div', { class: 'status-warn small-text' }, t('reg.sourceInsecure')) : null),
+        h('td', null, x.username || h('span', { class: 'muted' }, '—')),
+        h('td', null, age(x.created), x.by ? h('div', { class: 'muted small-text' }, x.by) : null),
+        h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
+          button(t('edit'), () => sourceDialog(ui, x)),
+          button(t('reg.deleteSource'), async () => {
+            if (!(await ask({ title: t('reg.deleteSource'), message: t('reg.deleteSourceConfirm', x.name), confirm: t('reg.deleteSource'), danger: true }))) return;
+            act(ui, () => api('registry/sources/' + enc(x.id), { method: 'DELETE' }), t('reg.sourceDeleted'));
+          }, 'danger'))))))),
+  ];
+}
+
+function sourceDialog(ui, src) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const editing = !!src;
+  const name = h('input', { type: 'text', required: true, value: editing ? src.name : '', placeholder: 'Harbor' });
+  const kind = h('select', null, SOURCE_KINDS.map(k => h('option', { value: k, selected: editing ? src.kind === k : k === 'harbor' }, t('reg.kindSrc.' + k))));
+  const url = h('input', { type: 'url', required: true, class: 'mono', value: editing ? src.url : '', placeholder: 'https://harbor.example.org' });
+  const repo = h('input', { type: 'text', class: 'mono', value: editing ? src.repository || '' : '', placeholder: 'docker-hosted' });
+  const user = h('input', { type: 'text', autocomplete: 'off', value: editing ? src.username || '' : '' });
+  const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: editing && src.hasSecret ? t('reg.sourcePassKeep') : '' });
+  const ca = h('textarea', { rows: '3', class: 'mono', placeholder: '-----BEGIN CERTIFICATE-----' });
+  ca.value = editing ? src.ca || '' : '';
+  const insecure = h('input', { type: 'checkbox', checked: editing && src.insecure });
+  const repoField = dialogField(t('reg.sourceRepo'), repo, t('reg.sourceRepoHelp'));
+  const sync = () => { repoField.hidden = kind.value !== 'nexus'; };
+  kind.addEventListener('change', sync);
+  sync();
+  const note = formNote();
+  // A password left empty when editing stays as it was.
+  const body = () => {
+    const b = { name: name.value.trim(), kind: kind.value, url: url.value.trim(), repository: repo.value.trim(), username: user.value.trim(),
+      ca: ca.value.trim(), insecure: insecure.checked };
+    if (!editing || pass.value) b.password = pass.value;
+    return b;
+  };
+  const test = async () => {
+    note.say(t('reg.testing'));
+    try {
+      const b = body();
+      if (editing) b.id = src.id;
+      const r = await api('registry/sources/test', { method: 'POST', body: b });
+      if (r.ok) note.say('✓ ' + t('reg.testOK', r.seconds.toFixed(1), r.projects && r.projects.length ? t('reg.testProjects', r.projects.length) : ''), 'ok');
+      else note.say(r.error, 'bad');
+    } catch (e) {
+      note.say(e.message, 'bad');
+    }
+  };
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      try {
+        await api('registry/sources' + (editing ? '/' + enc(src.id) : ''), { method: editing ? 'PUT' : 'POST', body: body() });
+        close();
+        ui.toast(t('reg.sourceSaved'));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, editing ? src.name : t('reg.newSource')),
+  dialogField(t('reg.col.name'), name),
+  dialogField(t('reg.sourceKind'), kind),
+  dialogField(t('reg.col.url'), url, t('reg.sourceURLHelp')),
+  repoField,
+  dialogField(t('reg.sourceUser'), user),
+  dialogField(t('reg.sourcePass'), pass),
+  dialogField(t('reg.sourceCA'), ca, t('reg.sourceCAHelp')),
+  h('label', { class: 'check-item' }, insecure, ' ', t('reg.sourceInsecure')),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('reg.testSource'), test), button(t('cancel'), () => close()),
+    h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  name.focus();
 }
 
 // ---------------------------------------------------------------- robot accounts

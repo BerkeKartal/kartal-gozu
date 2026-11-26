@@ -51,6 +51,12 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/registry/jobs", s.signedIn(s.registryStartJob))
 	mux.HandleFunc("GET /api/v1/registry/jobs/{id}", s.signedIn(s.registryJob))
 	mux.HandleFunc("PUT /api/v1/registry/schedules/{kind}", s.signedIn(s.registrySetSchedule))
+	mux.HandleFunc("GET /api/v1/registry/sources", s.signedIn(s.registrySources))
+	mux.HandleFunc("POST /api/v1/registry/sources", s.signedIn(s.registrySources))
+	mux.HandleFunc("POST /api/v1/registry/sources/test", s.signedIn(s.registrySources))
+	mux.HandleFunc("PUT /api/v1/registry/sources/{id}", s.signedIn(s.registrySources))
+	mux.HandleFunc("DELETE /api/v1/registry/sources/{id}", s.signedIn(s.registrySources))
+	mux.HandleFunc("GET /api/v1/registry/sources/{id}/projects", s.signedIn(s.registrySources))
 	mux.HandleFunc("GET /api/v1/registry/robots", s.signedIn(s.robotList))
 	mux.HandleFunc("POST /api/v1/registry/robots", s.signedIn(s.robotAdd))
 	mux.HandleFunc("PUT /api/v1/registry/robots/{name}", s.signedIn(s.robotUpdate))
@@ -598,6 +604,37 @@ func (s *Server) registrySetSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relay(w, r, http.MethodPut, "/admin/v1/schedules/"+url.PathEscape(r.PathValue("kind")), nil, body)
+}
+
+// ---------------------------------------------------------------- sources
+
+// registrySources hands the registry's admins' calls about the sources
+// replication copies from to the registry, as they came: their passwords
+// go to it alone, which seals them.
+func (s *Server) registrySources(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	var body any
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		var raw json.RawMessage
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&raw); err != nil {
+			writeError(w, http.StatusBadRequest, "the body must be a source, as JSON")
+			return
+		}
+		body = raw
+	}
+	path := "/admin/v1/sources"
+	if id := r.PathValue("id"); id != "" {
+		path += "/" + url.PathEscape(id)
+	}
+	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/sources/test"):
+		path += "/test"
+	case strings.HasSuffix(r.URL.Path, "/projects"):
+		path += "/projects"
+	}
+	s.relay(w, r, r.Method, path, nil, body)
 }
 
 // ---------------------------------------------------------------- robot accounts

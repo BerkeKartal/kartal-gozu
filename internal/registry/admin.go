@@ -43,6 +43,12 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("POST /admin/v1/jobs", s.startJob)
 	mux.HandleFunc("GET /admin/v1/jobs/{id}", s.getJob)
 	mux.HandleFunc("PUT /admin/v1/schedules/{kind}", s.putSchedule)
+	mux.HandleFunc("GET /admin/v1/sources", s.listSources)
+	mux.HandleFunc("POST /admin/v1/sources", s.createSource)
+	mux.HandleFunc("POST /admin/v1/sources/test", s.testSource)
+	mux.HandleFunc("PUT /admin/v1/sources/{id}", s.updateSource)
+	mux.HandleFunc("DELETE /admin/v1/sources/{id}", s.deleteSource)
+	mux.HandleFunc("GET /admin/v1/sources/{id}/projects", s.sourceProjects)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		tok := ""

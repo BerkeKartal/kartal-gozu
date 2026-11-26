@@ -78,7 +78,12 @@ type Config struct {
 	// Running tells what the clusters run, which retention keeps; without
 	// it retention deletes nothing.
 	Running ImageSource
-	Log     *slog.Logger
+	// SourcesKey seals the passwords of the sources replication copies
+	// from (SourcesKey makes one); without it there are no sources.
+	SourcesKey []byte
+	// RemoteHTTP replaces the sources' clients, for tests.
+	RemoteHTTP *http.Client
+	Log        *slog.Logger
 }
 
 // Server is a registry.
