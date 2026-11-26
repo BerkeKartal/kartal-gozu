@@ -341,6 +341,14 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request, g *grant, t ta
 			return
 		}
 		a, _ := s.cfg.DB.Artifact(t.name, digest)
+		// The project's policy may refuse an image with vulnerabilities;
+		// the scanner pulls them all.
+		if r.Method == http.MethodGet && (g == nil || !g.scanner) {
+			if e := s.pullPolicy(t.name, a); e != nil {
+				writeError(w, e)
+				return
+			}
+		}
 		f, size, err := s.cfg.Store.Open(digest)
 		if err != nil {
 			writeError(w, errorf(http.StatusNotFound, "MANIFEST_UNKNOWN", "the manifest %s is gone from the store", digest))

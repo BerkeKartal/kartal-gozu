@@ -131,6 +131,7 @@ type projectInput struct {
 	Description string   `json:"description"`
 	Immutable   []string `json:"immutable"`
 	Quota       int64    `json:"quota"`
+	ScanOnPush  bool     `json:"scanOnPush"`
 }
 
 // projectRules checks a project's immutable tags and quota, answering the
@@ -192,7 +193,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		in.Immutable = nil
 	}
 	err := s.cfg.DB.CreateProject(meta.Project{Name: in.Name, Public: in.Public, Description: in.Description, Immutable: in.Immutable,
-		Quota: in.Quota}, actor(r))
+		Quota: in.Quota, ScanOnPush: in.ScanOnPush}, actor(r))
 	if errors.Is(err, meta.ErrExists) {
 		adminError(w, http.StatusConflict, "a project of that name exists")
 		return
@@ -250,6 +251,10 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		retention = *in.Retention
 	}
 	if !projectRules(w, immutable, quota, retention) {
+		return
+	}
+	if err := scanPolicy(in.BlockSeverity, in.Allowlist); err != nil {
+		adminError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	p, err := s.cfg.DB.UpdateProject(r.PathValue("name"), in, actor(r))
@@ -337,10 +342,11 @@ func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
 			refs[a.Subject]++
 		}
 	}
+	project, _ := s.cfg.DB.Project(meta.ProjectOf(name))
 	out := make([]ArtifactSummary, 0, len(arts))
 	for _, a := range arts {
 		out = append(out, ArtifactSummary{ArtifactInfo: a, Total: total(a.Artifact, byDigest), Referrers: refs[a.Digest],
-			Scan: s.scanView(a.Artifact, byDigest)})
+			Scan: s.withPolicy(s.scanView(a.Artifact, byDigest), project, a.Artifact, byDigest)})
 	}
 	var info meta.RepoInfo
 	for _, ri := range s.cfg.DB.Repositories(meta.ProjectOf(name)) {
@@ -402,8 +408,9 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	if referrers == nil {
 		referrers = []meta.Artifact{}
 	}
+	project, _ := s.cfg.DB.Project(meta.ProjectOf(repo))
 	d := ArtifactDetail{ArtifactSummary: ArtifactSummary{ArtifactInfo: info, Total: total(info.Artifact, byDigest), Referrers: len(referrers),
-		Scan: s.scanView(info.Artifact, byDigest)}, ReferrerList: referrers}
+		Scan: s.withPolicy(s.scanView(info.Artifact, byDigest), project, info.Artifact, byDigest)}, ReferrerList: referrers}
 	if f, _, err := s.cfg.Store.Open(digest); err == nil {
 		b, err := io.ReadAll(io.LimitReader(f, manifest.MaxSize))
 		f.Close()
@@ -417,7 +424,7 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	for _, m := range info.Manifests {
 		if child, ok := byDigest[m.Digest]; ok {
 			d.Children = append(d.Children, ArtifactSummary{ArtifactInfo: meta.ArtifactInfo{Artifact: child, Tags: []string{}}, Total: total(child, nil),
-				Scan: s.scanView(child, byDigest)})
+				Scan: s.withPolicy(s.scanView(child, byDigest), project, child, byDigest)})
 		}
 	}
 	adminJSON(w, http.StatusOK, d)
@@ -622,6 +629,14 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request) {
 	default:
 		adminJSON(w, http.StatusAccepted, map[string]any{"images": images})
 	}
+}
+
+// withPolicy adds to a scan's view what the project's policy says of it.
+func (s *Server) withPolicy(v *ScanView, p meta.Project, a meta.Artifact, byDigest map[string]meta.Artifact) *ScanView {
+	if v != nil {
+		v.Blocked = s.blocked(p, a, byDigest)
+	}
+	return v
 }
 
 // VulnerabilityView is an image's last scan with its report.

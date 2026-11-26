@@ -1118,6 +1118,14 @@ users, passwords, directory and roles the rest has.
   The scanner pulls each image with a password made for that scan, which
   pulls that one repository and ends with the scan; its pulls are not
   counted as people's, which retention goes by.
+- **Refusing vulnerable images.** A project's admins may have pulls
+  refused of images with a vulnerability of some severity or worse
+  (critical, high, medium or low), but for those its allowlist names, as
+  the image's last scan found them: docker and the clusters get 412 and
+  why. An image not scanned yet is let through, and so is pulling an
+  index (its images are not). It is off by default: turned on, it stops
+  the clusters pulling such images too. A vulnerability is allowed, or no
+  longer, from an image's page.
 - **Alerts.** The server looks at the registry every minute and tells of
   its problems as of any other, on the Alerts page and through the
   notification channels: it cannot be reached, it cannot save its

@@ -347,6 +347,7 @@ func (s *Server) scanOne(ctx context.Context, digest string) {
 		fail(fmt.Errorf("keeping the report: %w", err))
 		return
 	}
+	s.forgetVulns(digest)
 	end := s.now().UTC()
 	sum := scanner.Summarize(res.Report.Vulnerabilities)
 	sc.Status, sc.Error, sc.Scanned, sc.Summary = meta.ScanDone, "", &end, &sum
@@ -358,6 +359,7 @@ func (s *Server) scanOne(ctx context.Context, digest string) {
 
 // dropScan forgets an image's scan and its report.
 func (s *Server) dropScan(digest string) {
+	s.forgetVulns(digest)
 	if err := s.cfg.DB.DeleteScan(digest); err != nil {
 		s.cfg.Log.Warn("registry: forgetting a scan", "digest", digest, "err", err)
 	}
@@ -471,6 +473,8 @@ type ScanView struct {
 	// Images are an index's images here, Done how many have a result.
 	Images int `json:"images,omitempty"`
 	Done   int `json:"done,omitempty"`
+	// Blocked counts the vulnerabilities its project refuses pulls for.
+	Blocked int `json:"blocked,omitempty"`
 }
 
 func viewOf(sc meta.Scan, ok bool) ScanView {

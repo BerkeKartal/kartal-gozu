@@ -133,4 +133,21 @@ func TestRegistryScansThroughTheServer(t *testing.T) {
 		!strings.Contains(string(b), `"scanOnPush":true`) {
 		t.Errorf("scan on push: %d %s", code, b)
 	}
+	// So with refusing pulls of vulnerable images, and allowing some.
+	policy := `{"blockSeverity":"critical","allowlist":["CVE-2026-1001"]}`
+	if code, _ := e.call("PUT", "/api/v1/registry/projects/team-a", regTeamTok, policy); code != 403 {
+		t.Errorf("an operator set the policy: %d", code)
+	}
+	if code, b := e.call("PUT", "/api/v1/registry/projects/team-a", regLeadTok, policy); code != 200 ||
+		!strings.Contains(string(b), `"blockSeverity":"CRITICAL"`) || !strings.Contains(string(b), `"allowlist":["CVE-2026-1001"]`) {
+		t.Errorf("policy: %d %s", code, b)
+	}
+	// The critical one is not allowed: the image is no longer pulled.
+	resp = e.v2("GET", "/v2/team-a/web/manifests/1.0", tok, nil, "")
+	if resp.StatusCode != http.StatusPreconditionFailed {
+		t.Errorf("a refused pull: %d", resp.StatusCode)
+	}
+	if _, b := e.call("GET", "/api/v1/registry/repository?name=team-a/web", regViewTok, ""); !strings.Contains(string(b), `"blocked":1`) {
+		t.Errorf("the repository's view: %s", b)
+	}
 }

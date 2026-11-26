@@ -406,8 +406,9 @@ func (s *Server) registryCreateProject(w http.ResponseWriter, r *http.Request) {
 		Description string   `json:"description"`
 		Immutable   []string `json:"immutable"`
 		Quota       int64    `json:"quota"`
+		ScanOnPush  bool     `json:"scanOnPush"`
 	}
-	if !readJSON(w, r, &body, `{"name", "public", "description", "immutable": ["v*"], "quota": bytes}`) {
+	if !readJSON(w, r, &body, `{"name", "public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush"}`) {
 		return
 	}
 	s.relay(w, r, http.MethodPost, "/admin/v1/projects", nil, body)
@@ -444,7 +445,7 @@ func (s *Server) registryUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// A field left out stays as it is.
 	var body meta.ProjectChange
-	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush"}`) {
+	if !readJSON(w, r, &body, `{"public", "description", "immutable": ["v*"], "quota": bytes, "scanOnPush", "blockSeverity": "HIGH", "allowlist": ["CVE-..."]}`) {
 		return
 	}
 	// A project's admins set its rules; its room is the registry's admins'

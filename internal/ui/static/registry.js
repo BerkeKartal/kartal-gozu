@@ -214,6 +214,10 @@ function projectDialog(ui, project, info) {
   // Scanning on push is there when the registry has a scanner.
   const scans = !!(info && info.scanner);
   const scanOnPush = h('input', { type: 'checkbox', checked: editing && !!project.scanOnPush });
+  const block = h('select', null, ['', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(k => h('option', { value: k, selected: editing && (project.blockSeverity || '') === k },
+    k ? t('reg.sevAtLeast', t('reg.sev.' + k.toLowerCase())) : t('reg.blockNone'))));
+  const allowlist = h('textarea', { class: 'mono', rows: '3', placeholder: 'CVE-2026-1234, GHSA-xxxx-xxxx-xxxx' });
+  allowlist.value = editing ? (project.allowlist || []).join('\n') : '';
   const note = formNote();
   const form = h('form', {
     class: 'dialog',
@@ -222,6 +226,10 @@ function projectDialog(ui, project, info) {
       const body = { public: pub.checked, description: desc.value, immutable: rules.value.split(/[\s,]+/).filter(Boolean) };
       if (admin) body.quota = quota.value ? Math.round(Number(quota.value) * GIB) : 0;
       if (scans) body.scanOnPush = scanOnPush.checked;
+      if (scans && editing) {
+        body.blockSeverity = block.value;
+        body.allowlist = allowlist.value.split(/[\s,]+/).filter(Boolean);
+      }
       try {
         if (editing) {
           await api('registry/projects/' + enc(project.name), { method: 'PUT', body });
@@ -246,6 +254,8 @@ function projectDialog(ui, project, info) {
   dialogField(t('reg.immutable'), rules, t('reg.immutableHelp')),
   dialogField(t('reg.quota'), quota, t('reg.quotaHelp')),
   scans ? h('label', { class: 'check-item' }, scanOnPush, ' ', t('reg.scanOnPushHelp')) : null,
+  scans && editing ? dialogField(t('reg.blockSeverity'), block, t('reg.blockHelp')) : null,
+  scans && editing ? dialogField(t('reg.allowlist'), allowlist, t('reg.allowlistHelp')) : null,
   note,
   h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
   const close = modal(form);
@@ -289,7 +299,9 @@ function projectPage(data, ui) {
             h('span', { style: { width: Math.min(100, p.size / p.quota * 100) + '%' } }))) : null,
         p.immutable && p.immutable.length ? h('div', { class: 'detail' }, h('span', { class: 'muted' }, t('reg.immutable') + ': '),
           p.immutable.map(x => h('span', { class: 'label-chip reg-tag' }, '🔒 ', x))) : null,
-        p.scanOnPush && data.info && data.info.scanner ? h('div', { class: 'detail muted' }, t('reg.scansOnPush')) : null),
+        p.scanOnPush && data.info && data.info.scanner ? h('div', { class: 'detail muted' }, t('reg.scansOnPush')) : null,
+        p.blockSeverity ? h('div', { class: 'detail status-warn' }, t('reg.blocksPulls', t('reg.sev.' + p.blockSeverity.toLowerCase())),
+          p.allowlist && p.allowlist.length ? ' ' + t('reg.allowedCount', p.allowlist.length) : '') : null),
       h('div', { class: 'actions' }, actions)),
     h('div', { class: 'reg-commands' },
       command(ui, 'docker login ' + reg),
@@ -1198,6 +1210,7 @@ export function sevBar(ui, scan) {
     parts.push(h('span', { class: 'muted small-text' }, t('reg.scan.none')));
   }
   if (scan.images && scan.done < scan.images) parts.push(h('span', { class: 'muted small-text' }, t('reg.scan.ofImages', scan.done, scan.images)));
+  if (scan.blocked) parts.push(h('span', { title: t('reg.blockedHelp', scan.blocked) }, ui.pill('⛔ ' + t('reg.blocked'), 'bad')));
   return h('span', { class: 'reg-sevbar' }, parts);
 }
 
@@ -1225,6 +1238,15 @@ function vulnPanel(ui, data) {
     return ui.panel(t('reg.vulns'), h('p', { class: sc.status === 'failed' ? 'status-bad' : 'muted' }, why));
   }
   const vulns = rep.vulnerabilities || [];
+  const project = data.project || {};
+  const allowed = new Set((project.allowlist || []).map(x => x.toUpperCase()));
+  const mayAllow = role(data) >= RANK.admin && !!(data.info && data.info.scanner);
+  // allow puts a vulnerability on the project's allowlist, or takes it off.
+  const allow = (id, on) => act(ui, async () => {
+    const list = (project.allowlist || []).filter(x => x.toUpperCase() !== id.toUpperCase());
+    if (on) list.push(id);
+    await ui.api('registry/projects/' + enc(project.name), { method: 'PUT', body: { allowlist: list } });
+  }, t(on ? 'reg.allowedNow' : 'reg.disallowedNow', id));
   const sev = h('select', { 'aria-label': t('reg.col.severity') }, h('option', { value: '' }, t('reg.sevAll')),
     SEVERITIES.slice(0, 4).map(k => h('option', { value: k }, t('reg.sevAtLeast', t('reg.sev.' + k)))));
   const fixable = h('input', { type: 'checkbox' });
@@ -1242,12 +1264,15 @@ function vulnPanel(ui, data) {
       const s = String(x.severity || 'unknown').toLowerCase();
       return h('tr', null,
         h('td', null, h('span', { class: 'reg-sev reg-sev-' + s }, t('reg.sev.' + s)), x.score ? h('div', { class: 'muted small-text' }, x.score.toFixed(1)) : null),
-        h('td', null, x.url && /^https:\/\//.test(x.url) ? h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer', class: 'mono' }, x.id) : mono(x.id)),
+        h('td', null, x.url && /^https:\/\//.test(x.url) ? h('a', { href: x.url, target: '_blank', rel: 'noopener noreferrer', class: 'mono' }, x.id) : mono(x.id),
+          allowed.has(String(x.id).toUpperCase()) ? h('div', null, ui.pill(t('reg.allowedChip'), 'ok')) : null),
         h('td', null, h('strong', null, x.package), x.target ? h('div', { class: 'muted small-text' }, x.target) : null),
         h('td', null, mono(x.installed || '')),
         h('td', null, x.fixed ? mono(x.fixed) : h('span', { class: 'muted' }, t('reg.noFix'))),
-        h('td', { class: 'reg-step' }, x.title || ''));
-    }), ...(rows.length > shown ? [h('tr', null, h('td', { colspan: 6, class: 'muted' }, t('reg.vulnMore', rows.length - shown)))] : []));
+        h('td', { class: 'reg-step' }, x.title || ''),
+        mayAllow ? h('td', { class: 'actions-cell' }, allowed.has(String(x.id).toUpperCase())
+          ? ui.button(t('reg.disallow'), () => allow(x.id, false)) : ui.button(t('reg.allow'), () => allow(x.id, true))) : null);
+    }), ...(rows.length > shown ? [h('tr', null, h('td', { colspan: mayAllow ? 7 : 6, class: 'muted' }, t('reg.vulnMore', rows.length - shown)))] : []));
   };
   [sev, fixable].forEach(el => el.addEventListener('change', draw));
   q.addEventListener('input', draw);
@@ -1258,8 +1283,10 @@ function vulnPanel(ui, data) {
     h('div', { class: 'reg-filters' }, h('span', { class: 'muted small-text' }, about), sbom),
     sc.status === 'failed' ? h('div', { class: 'status-bad small-text' }, t('reg.lastScanFailed', sc.error || '')) : null,
     sc.status === 'queued' || sc.status === 'scanning' ? h('div', { class: 'status-warn small-text' }, t('reg.scanWaiting')) : null,
+    data.artifact.scan && data.artifact.scan.blocked ? h('div', { class: 'status-bad' }, '⛔ ', t('reg.blockedHelp', data.artifact.scan.blocked)) : null,
     vulns.length ? [h('div', { class: 'reg-filters' }, sev, h('label', { class: 'check-item' }, fixable, ' ', t('reg.fixableOnly')), q, count),
-      h('table', { class: 'flat' }, h('thead', null, h('tr', null, ['severity', 'vuln', 'package', 'installed', 'fixed', 'title'].map(k => h('th', null, t('reg.col.' + k))))), tbody)]
+      h('table', { class: 'flat' }, h('thead', null, h('tr', null, ['severity', 'vuln', 'package', 'installed', 'fixed', 'title'].map(k => h('th', null, t('reg.col.' + k))),
+        mayAllow ? h('th') : null)), tbody)]
       : h('p', { class: 'status-ok' }, t('reg.noVulns'))));
 }
 

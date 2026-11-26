@@ -70,6 +70,22 @@ type Project struct {
 	// ScanOnPush scans each image pushed (or copied) into the project for
 	// known vulnerabilities, when the registry has a scanner.
 	ScanOnPush bool `json:"scanOnPush,omitempty"`
+	// BlockSeverity refuses pulls of an image with a vulnerability of that
+	// severity or worse (CRITICAL, HIGH, MEDIUM, LOW) that Allowlist does
+	// not name; empty lets every image be pulled. An image not scanned yet
+	// is let through.
+	BlockSeverity string   `json:"blockSeverity,omitempty"`
+	Allowlist     []string `json:"allowlist,omitempty"`
+}
+
+// Allows tells whether a project's allowlist names a vulnerability.
+func (p Project) Allows(id string) bool {
+	for _, a := range p.Allowlist {
+		if strings.EqualFold(a, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // Scan is what is known of an image's vulnerabilities: what its last scan
@@ -939,6 +955,10 @@ type ProjectChange struct {
 	Quota       *int64           `json:"quota"`
 	Retention   *[]RetentionRule `json:"retention"`
 	ScanOnPush  *bool            `json:"scanOnPush"`
+	// BlockSeverity is "" for no policy; Allowlist the vulnerabilities let
+	// through.
+	BlockSeverity *string   `json:"blockSeverity"`
+	Allowlist     *[]string `json:"allowlist"`
 }
 
 // UpdateProject changes a project: whether it is public, its description,
@@ -994,10 +1014,54 @@ func (d *DB) UpdateProject(name string, ch ProjectChange, user string) (Project,
 			said = append(said, "no scan on push")
 		}
 	}
+	if ch.BlockSeverity != nil && *ch.BlockSeverity != p.BlockSeverity {
+		p.BlockSeverity = *ch.BlockSeverity
+		if p.BlockSeverity == "" {
+			said = append(said, "no pulls refused for vulnerabilities")
+		} else {
+			said = append(said, "pulls refused for "+strings.ToLower(p.BlockSeverity)+" vulnerabilities or worse")
+		}
+	}
+	if ch.Allowlist != nil && strings.Join(*ch.Allowlist, ",") != strings.Join(p.Allowlist, ",") {
+		added, removed := listChange(p.Allowlist, *ch.Allowlist)
+		p.Allowlist = append([]string(nil), *ch.Allowlist...)
+		if len(p.Allowlist) == 0 {
+			p.Allowlist = nil
+		}
+		if len(added) > 0 {
+			said = append(said, "allowed "+strings.Join(added, ", "))
+		}
+		if len(removed) > 0 {
+			said = append(said, "no longer allowed "+strings.Join(removed, ", "))
+		}
+	}
 	if err := d.commit(entry{Op: "project", Project: &p}, d.event(user, "project-update", name, "", "", "", strings.Join(said, "; "))); err != nil {
 		return Project{}, err
 	}
 	return p, nil
+}
+
+// listChange is what was added to a list and what was taken from it.
+func listChange(before, after []string) (added, removed []string) {
+	in := func(list []string, x string) bool {
+		for _, y := range list {
+			if strings.EqualFold(x, y) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, x := range after {
+		if !in(before, x) {
+			added = append(added, x)
+		}
+	}
+	for _, x := range before {
+		if !in(after, x) {
+			removed = append(removed, x)
+		}
+	}
+	return added, removed
 }
 
 // DeleteProject removes a project that has no repositories left.

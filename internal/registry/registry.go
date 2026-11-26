@@ -112,6 +112,10 @@ type Server struct {
 	scanQueue   []queued
 	scanPending map[string]bool
 	scanWake    chan struct{}
+	// vulnCache keeps, by digest, what the pull policy needs of images'
+	// reports.
+	vulnMu    sync.Mutex
+	vulnCache map[string][]vulnRef
 
 	// gcMu lets one garbage collection run at a time.
 	gcMu sync.Mutex
@@ -156,7 +160,7 @@ func New(cfg Config) *Server {
 	}
 	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{},
 		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, replicating: make(chan struct{}, maxReplications), jobProgress: map[string]meta.JobProgress{},
-		tickets: map[string]ticket{}, scanPending: map[string]bool{}, scanWake: make(chan struct{}, 1)}
+		tickets: map[string]ticket{}, scanPending: map[string]bool{}, scanWake: make(chan struct{}, 1), vulnCache: map[string][]vulnRef{}}
 }
 
 // maxReplications is how many replications run at once.
