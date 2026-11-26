@@ -49,6 +49,11 @@ func (s *Server) Admin(secret string) http.Handler {
 	mux.HandleFunc("PUT /admin/v1/sources/{id}", s.updateSource)
 	mux.HandleFunc("DELETE /admin/v1/sources/{id}", s.deleteSource)
 	mux.HandleFunc("GET /admin/v1/sources/{id}/projects", s.sourceProjects)
+	mux.HandleFunc("GET /admin/v1/rules", s.listRules)
+	mux.HandleFunc("POST /admin/v1/rules", s.createRule)
+	mux.HandleFunc("PUT /admin/v1/rules/{id}", s.updateRule)
+	mux.HandleFunc("DELETE /admin/v1/rules/{id}", s.deleteRule)
+	mux.HandleFunc("DELETE /admin/v1/jobs/{id}", s.cancelJob)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		tok := ""
@@ -499,7 +504,11 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	for _, sc := range s.cfg.DB.Schedules() {
 		schedules = append(schedules, s.scheduleView(sc))
 	}
-	adminJSON(w, http.StatusOK, map[string]any{"jobs": s.cfg.DB.Jobs(limit), "schedules": schedules, "zone": s.zone().String()})
+	jobs := s.cfg.DB.Jobs(limit)
+	for i := range jobs {
+		jobs[i] = s.withProgress(jobs[i])
+	}
+	adminJSON(w, http.StatusOK, map[string]any{"jobs": jobs, "schedules": schedules, "zone": s.zone().String()})
 }
 
 func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
@@ -507,11 +516,18 @@ func (s *Server) startJob(w http.ResponseWriter, r *http.Request) {
 		Kind    string `json:"kind"`
 		DryRun  bool   `json:"dryRun"`
 		Project string `json:"project"`
+		Rule    string `json:"rule"`
 	}
 	if !readBody(w, r, &in) {
 		return
 	}
-	j, err := s.StartJob(in.Kind, in.DryRun, in.Project, actor(r))
+	var j meta.Job
+	var err error
+	if in.Kind == JobReplication {
+		j, err = s.StartReplication(in.Rule, in.DryRun, actor(r))
+	} else {
+		j, err = s.StartJob(in.Kind, in.DryRun, in.Project, actor(r))
+	}
 	switch {
 	case errors.Is(err, ErrRunning):
 		adminError(w, http.StatusConflict, err.Error())
@@ -530,7 +546,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusNotFound, "no such job")
 		return
 	}
-	adminJSON(w, http.StatusOK, j)
+	adminJSON(w, http.StatusOK, s.withProgress(j))
 }
 
 func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {

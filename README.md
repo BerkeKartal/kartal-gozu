@@ -1084,6 +1084,22 @@ users, passwords, directory and roles the rest has.
   03:00, and the check on Sundays at 04:00, to begin with), or when an
   admin starts them on the Jobs page, which also has dry runs and keeps
   what each job did.
+- **Replication.** *Sources* are the registries images are copied from:
+  Harbor, Nexus (its Docker API below `/repository/<name>/`), or any of the
+  Distribution API (Docker Hub, GitLab, another of these), with a user
+  name and a password or token, a CA of their own if need be. The
+  password is sealed with AES-GCM and never shown again. A *rule* copies
+  what it picks of a source, repositories and tags by pattern (and those
+  pushed within some days, where the source tells), into a project, by
+  hand or on a schedule of its own. What is here already is left; the
+  rest is copied from the bottom up, an index's images, then the blobs,
+  each digest checked, and the tags last, so that a stopped run goes on
+  where it stopped. Blobs the registry has are linked, not pulled again.
+  A rule may keep some platforms of a multi-arch image, copy the
+  signatures and SBOMs, move tags here that point elsewhere (never an
+  immutable one), and limit how many images it copies at once and its
+  bandwidth. A dry run lists what would be copied; a run shows its
+  progress and can be stopped.
 - **Alerts.** The server looks at the registry every minute and tells of
   its problems as of any other, on the Alerts page and through the
   notification channels: it cannot be reached, it cannot save its
@@ -1116,6 +1132,7 @@ limiting a request's size or cutting a long upload. The images go on a
 | `KARTAL_REGISTRY_LISTEN` | `:5000` | docker's API and the sign-in |
 | `KARTAL_REGISTRY_ADMIN_LISTEN` | `:5001` | The admin API, for the server only |
 | `KARTAL_REGISTRY_TIMEZONE` | `Europe/Istanbul` | The time zone the jobs' schedules are read in |
+| `KARTAL_REGISTRY_SOURCES_KEY` / `_FILE` | *(made of the shared secret)* | What the sources' passwords are sealed with; changing it means typing them again |
 | `KARTAL_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## MCP: AI assistants and agents

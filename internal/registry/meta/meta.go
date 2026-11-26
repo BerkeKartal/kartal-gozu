@@ -105,6 +105,43 @@ type Source struct {
 	By       string    `json:"by,omitempty"`
 }
 
+// ReplicationRule copies images from a source into a project.
+type ReplicationRule struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	// Repositories is a pattern of the source's repositories, whole names
+	// (team-a/web, team-a/*, team-a/**, or ** for all); Tags one of their
+	// tags (** or empty for all); Within the days they were pushed in, where
+	// the source tells (0 for any time).
+	Repositories string `json:"repositories"`
+	Tags         string `json:"tags,omitempty"`
+	Within       int    `json:"within,omitempty"`
+	// Project is where they go, each named as at the source without its
+	// first part (library/nginx is <project>/nginx), or with all of it
+	// (KeepPath).
+	Project  string `json:"project"`
+	KeepPath bool   `json:"keepPath,omitempty"`
+	// Overwrite moves a tag here that points elsewhere; Referrers copies
+	// the signatures and SBOMs about what it copies; Platforms keeps of a
+	// multi-arch image these (os/arch, os/arch/variant), all when none.
+	Overwrite bool     `json:"overwrite,omitempty"`
+	Referrers bool     `json:"referrers,omitempty"`
+	Platforms []string `json:"platforms,omitempty"`
+	// Concurrency is how many images it copies at once; BandwidthKiB how
+	// many KiB a second it may pull (0 for no limit).
+	Concurrency  int `json:"concurrency,omitempty"`
+	BandwidthKiB int `json:"bandwidthKiB,omitempty"`
+	// Cron runs it on a schedule when Enabled; Since is when that was set,
+	// Last when it last started a run.
+	Cron    string     `json:"cron,omitempty"`
+	Enabled bool       `json:"enabled"`
+	Since   time.Time  `json:"since"`
+	Last    *time.Time `json:"last,omitempty"`
+	Created time.Time  `json:"created"`
+	By      string     `json:"by,omitempty"`
+}
+
 // RunningImages are what a cluster said it runs, or may run: the digests
 // and, of this registry, the repositories with their tags or digests.
 type RunningImages struct {
@@ -285,17 +322,30 @@ type Job struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	DryRun bool   `json:"dryRun,omitempty"`
-	// Project is the one project a job is about, if one.
-	Project  string     `json:"project,omitempty"`
-	By       string     `json:"by"`
-	Started  time.Time  `json:"started"`
-	Finished *time.Time `json:"finished,omitempty"`
-	Status   string     `json:"status"`
-	Summary  string     `json:"summary,omitempty"`
+	// Project is the one project a job is about, if one; Rule the
+	// replication rule it runs, and RuleName the rule's name then.
+	Project  string `json:"project,omitempty"`
+	Rule     string `json:"rule,omitempty"`
+	RuleName string `json:"ruleName,omitempty"`
+	// Progress is how far a running job got; it is not kept.
+	Progress *JobProgress `json:"progress,omitempty"`
+	By       string       `json:"by"`
+	Started  time.Time    `json:"started"`
+	Finished *time.Time   `json:"finished,omitempty"`
+	Status   string       `json:"status"`
+	Summary  string       `json:"summary,omitempty"`
 	// Error is why it failed; Alarm what it found wrong, though it ran.
 	Error  string          `json:"error,omitempty"`
 	Alarm  string          `json:"alarm,omitempty"`
 	Report json.RawMessage `json:"report,omitempty"`
+}
+
+// JobProgress is how far a job got: of what it has to do, what is done,
+// and the bytes it moved.
+type JobProgress struct {
+	Done  int   `json:"done"`
+	Total int   `json:"total"`
+	Bytes int64 `json:"bytes"`
 }
 
 // A job's states.
@@ -328,21 +378,22 @@ const snapshotEvery = 1000
 
 // entry is one line of the log.
 type entry struct {
-	Op       string         `json:"op"`
-	Project  *Project       `json:"project,omitempty"`
-	Name     string         `json:"name,omitempty"`
-	Repo     string         `json:"repo,omitempty"`
-	Digest   string         `json:"digest,omitempty"`
-	Size     int64          `json:"size,omitempty"`
-	Tag      string         `json:"tag,omitempty"`
-	Artifact *Artifact      `json:"artifact,omitempty"`
-	Pulls    int64          `json:"pulls,omitempty"`
-	At       *time.Time     `json:"at,omitempty"`
-	Event    *Event         `json:"event,omitempty"`
-	Job      *Job           `json:"job,omitempty"`
-	Schedule *Schedule      `json:"schedule,omitempty"`
-	Running  *RunningImages `json:"running,omitempty"`
-	Source   *Source        `json:"source,omitempty"`
+	Op       string           `json:"op"`
+	Project  *Project         `json:"project,omitempty"`
+	Name     string           `json:"name,omitempty"`
+	Repo     string           `json:"repo,omitempty"`
+	Digest   string           `json:"digest,omitempty"`
+	Size     int64            `json:"size,omitempty"`
+	Tag      string           `json:"tag,omitempty"`
+	Artifact *Artifact        `json:"artifact,omitempty"`
+	Pulls    int64            `json:"pulls,omitempty"`
+	At       *time.Time       `json:"at,omitempty"`
+	Event    *Event           `json:"event,omitempty"`
+	Job      *Job             `json:"job,omitempty"`
+	Schedule *Schedule        `json:"schedule,omitempty"`
+	Running  *RunningImages   `json:"running,omitempty"`
+	Source   *Source          `json:"source,omitempty"`
+	Rule     *ReplicationRule `json:"rule,omitempty"`
 }
 
 type state struct {
@@ -353,6 +404,7 @@ type state struct {
 	Schedules []Schedule               `json:"schedules,omitempty"`
 	Running   map[string]RunningImages `json:"running,omitempty"`
 	Sources   []Source                 `json:"sources,omitempty"`
+	Rules     []ReplicationRule        `json:"rules,omitempty"`
 }
 
 // DB is the registry's metadata.
@@ -376,6 +428,7 @@ type DB struct {
 	// running are what each cluster last said it runs.
 	running map[string]RunningImages
 	sources map[string]Source
+	rules   map[string]ReplicationRule
 	// pulled are the artifacts pulled since their counts were last written.
 	pulled map[[2]string]bool
 	// onEvent hears of each event as it is written.
@@ -397,7 +450,8 @@ func Open(dir string) (*DB, error) {
 		return nil, err
 	}
 	d := &DB{dir: dir, now: time.Now, projects: map[string]*Project{}, repos: map[string]*Repository{}, pulled: map[[2]string]bool{},
-		schedules: map[string]Schedule{}, running: map[string]RunningImages{}, sources: map[string]Source{}}
+		schedules: map[string]Schedule{}, running: map[string]RunningImages{}, sources: map[string]Source{},
+		rules: map[string]ReplicationRule{}}
 	if b, err := os.ReadFile(d.path("snapshot.json")); err == nil {
 		var s state
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -420,6 +474,9 @@ func Open(dir string) (*DB, error) {
 		}
 		for _, src := range s.Sources {
 			d.sources[src.ID] = src
+		}
+		for _, r := range s.Rules {
+			d.rules[r.ID] = r
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -582,6 +639,10 @@ func (d *DB) apply(e entry) {
 		d.sources[e.Source.ID] = *e.Source
 	case "source-del":
 		delete(d.sources, e.Name)
+	case "rule":
+		d.rules[e.Rule.ID] = *e.Rule
+	case "rule-del":
+		delete(d.rules, e.Name)
 	}
 }
 
@@ -646,6 +707,10 @@ func (d *DB) snapshot() error {
 		s.Sources = append(s.Sources, src)
 	}
 	sort.Slice(s.Sources, func(i, j int) bool { return s.Sources[i].ID < s.Sources[j].ID })
+	for _, r := range d.rules {
+		s.Rules = append(s.Rules, r)
+	}
+	sort.Slice(s.Rules, func(i, j int) bool { return s.Rules[i].ID < s.Rules[j].ID })
 	for _, p := range d.projects {
 		s.Projects = append(s.Projects, p)
 	}
@@ -1193,7 +1258,75 @@ func (d *DB) DeleteSource(id, user string) error {
 	if !ok {
 		return ErrNotFound
 	}
+	for _, r := range d.rules {
+		if r.Source == id {
+			return fmt.Errorf("%w: the replication rule %s copies from it", ErrInUse, r.Name)
+		}
+	}
 	return d.commit(entry{Op: "source-del", Name: id}, d.event(user, "source-delete", "", "", "", "", src.Name))
+}
+
+// Rules are the replication rules, by name.
+func (d *DB) Rules() []ReplicationRule {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]ReplicationRule, 0, len(d.rules))
+	for _, r := range d.rules {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out
+}
+
+// Rule is one rule.
+func (d *DB) Rule(id string) (ReplicationRule, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	r, ok := d.rules[id]
+	return r, ok
+}
+
+// PutRule adds a rule or changes one; names are not shared.
+func (d *DB) PutRule(r ReplicationRule, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for id, other := range d.rules {
+		if id != r.ID && strings.EqualFold(other.Name, r.Name) {
+			return fmt.Errorf("%w: a rule named %s", ErrExists, other.Name)
+		}
+	}
+	if _, ok := d.sources[r.Source]; !ok {
+		return fmt.Errorf("%w: no such source", ErrNotFound)
+	}
+	action := "rule-add"
+	if _, ok := d.rules[r.ID]; ok {
+		action = "rule-change"
+	}
+	return d.commit(entry{Op: "rule", Rule: &r}, d.event(user, action, r.Project, "", "", "", r.Name+": "+r.Repositories+" → "+r.Project))
+}
+
+// DeleteRule removes a rule.
+func (d *DB) DeleteRule(id, user string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r, ok := d.rules[id]
+	if !ok {
+		return ErrNotFound
+	}
+	return d.commit(entry{Op: "rule-del", Name: id}, d.event(user, "rule-delete", r.Project, "", "", "", r.Name))
+}
+
+// MarkRuleRun notes that a rule's schedule started it.
+func (d *DB) MarkRuleRun(id string, at time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r, ok := d.rules[id]
+	if !ok {
+		return ErrNotFound
+	}
+	at = at.UTC()
+	r.Last = &at
+	return d.commit(entry{Op: "rule", Rule: &r})
 }
 
 // MarkScheduled notes that a schedule started its job.

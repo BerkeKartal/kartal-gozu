@@ -101,8 +101,13 @@ type Server struct {
 
 	jobMu  sync.Mutex
 	jobCtx context.Context
-	// running are the jobs running, by kind: their IDs.
+	// running are the jobs running, by kind (and rule): their IDs.
 	running map[string]string
+	// Of the running jobs, by ID: how to stop them, who did, and how far
+	// they got.
+	cancels     map[string]context.CancelFunc
+	cancelledBy map[string]string
+	jobProgress map[string]meta.JobProgress
 }
 
 // grant is what a token allows.
@@ -127,7 +132,8 @@ func New(cfg Config) *Server {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{}}
+	return &Server{cfg: cfg, now: time.Now, tokens: map[string]*grant{}, uploads: map[string]string{}, running: map[string]string{},
+		cancels: map[string]context.CancelFunc{}, cancelledBy: map[string]string{}, jobProgress: map[string]meta.JobProgress{}}
 }
 
 // ---------------------------------------------------------------- errors

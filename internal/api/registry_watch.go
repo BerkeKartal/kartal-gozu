@@ -90,20 +90,26 @@ func (s *Server) registryAlerts(ctx context.Context) []alert.Alert {
 		// What counts is how each kind of job, of each project, last ended.
 		seen := map[string]bool{}
 		for _, j := range jobs.Jobs {
-			key := j.Kind + "\x00" + j.Project
+			key := j.Kind + "\x00" + j.Project + "\x00" + j.Rule
 			if j.Status == meta.JobRunning || seen[key] {
 				continue
 			}
 			seen[key] = true
 			what := j.Kind
-			if j.Project != "" {
+			switch {
+			case j.RuleName != "":
+				what += " " + j.RuleName
+			case j.Project != "":
 				what += " of " + j.Project
 			}
 			if j.Status == meta.JobFailed {
 				out = append(out, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Error})
 			}
-			if j.Alarm != "" {
+			switch {
+			case j.Alarm != "" && j.Kind == registry.JobVerify:
 				out = append(out, alert.Alert{Kind: alert.RegistryDamaged, Severity: "critical", Object: object, Detail: j.Alarm})
+			case j.Alarm != "":
+				out = append(out, alert.Alert{Kind: alert.RegistryJobFailed, Severity: "warning", Object: what, Detail: j.Alarm})
 			}
 		}
 	}

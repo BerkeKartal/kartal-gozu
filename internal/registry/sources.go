@@ -211,7 +211,7 @@ func sourceError(w http.ResponseWriter, s *Server, what string, err error) {
 	switch {
 	case errors.Is(err, ErrSource):
 		adminError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, meta.ErrExists):
+	case errors.Is(err, meta.ErrExists), errors.Is(err, meta.ErrInUse):
 		adminError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, meta.ErrNotFound):
 		adminError(w, http.StatusNotFound, "no such source")

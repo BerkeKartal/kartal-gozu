@@ -78,7 +78,7 @@ const NAV = [
   { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
-  { items: ['registry', 'regjobs', 'regsources', 'robots'] },
+  { items: ['registry', 'regjobs', 'regreplication', 'regsources', 'robots'] },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -589,6 +589,28 @@ const STRINGS = {
     'reg.quotaHelp': 'How much the project may hold, each layer counted once; empty for no limit. The registry’s admins set it.',
     regjobs: 'Jobs', 'reg.job.gc': 'Garbage collection', 'reg.job.verify': 'Blob check',
     regsources: 'Sources', 'reg.newSource': 'New source', 'reg.noSources': 'No sources yet.',
+    regreplication: 'Replication', 'reg.job.replication': 'Replication', 'reg.newRule': 'New rule', 'reg.noRules': 'No replication rules yet.',
+    'reg.replHint': 'Each rule copies images from a source into a project: what is here already is left, the rest is copied from the bottom up, every digest checked, the tags last. Run again, a rule goes on where it stopped.',
+    'reg.needSource': 'Add a source to copy from first:', 'reg.col.from': 'From', 'reg.col.into': 'Into', 'reg.manual': 'by hand',
+    'reg.withinDays': 'pushed in the last {0} days', 'reg.keepPath': 'path kept', 'reg.overwrite': 'overwrites', 'reg.withReferrers': 'signatures and SBOMs',
+    'reg.runRule': 'Run', 'reg.runRuleConfirm': 'Copy what {0} picks into {1} now?', 'reg.deleteRule': 'Delete',
+    'reg.deleteRuleConfirm': 'Delete the rule {0}? What it copied stays.', 'reg.ruleDeleted': 'Rule deleted.', 'reg.ruleSaved': 'Rule saved.',
+    'reg.replRuns': 'Runs', 'reg.ruleSource': 'Source', 'reg.ruleProject': 'Into the project',
+    'reg.ruleReposHelp': 'The source’s repositories, whole names: team-a/web, team-a/* (one level), team-a/** (all below), ** (all). One name alone is read without listing, as Docker Hub needs.',
+    'reg.ruleTagsHelp': 'A pattern of tags: ** for all, v*, 1.*.', 'reg.ruleWithin': 'Pushed within (days)',
+    'reg.ruleWithinHelp': 'Where the source tells when (Harbor, Nexus); empty for any time.',
+    'reg.keepPathHelp': 'Keep the source’s whole path (library/nginx becomes <project>/library/nginx), not just what follows its first part',
+    'reg.namedAs': 'For example {0} becomes {1}.', 'reg.overwriteHelp': 'Move a tag here that points at another image (an immutable one stays)',
+    'reg.referrersCopyHelp': 'Copy their signatures and SBOMs too', 'reg.rulePlatforms': 'Platforms',
+    'reg.rulePlatformsHelp': 'Of a multi-arch image, keep these only, such as linux/amd64; empty for all. An index of fewer platforms is a new one, of another digest.',
+    'reg.ruleConcurrency': 'Images at once', 'reg.ruleBandwidth': 'KiB a second (empty: no limit)',
+    'reg.ruleCronHelp': 'Empty to run by hand only; 0 * * * * is every hour, in the registry’s time zone.',
+    'reg.progress': '{0} of {1} done, {2}', 'reg.stopJob': 'Stop', 'reg.stopConfirm': 'Stop this job? What it did stays; run again, it goes on.',
+    'reg.stopped': 'Stopping.', 'reg.allPresent': 'Everything was here already.',
+    'reg.replSummary': '{0} tags picked: {1} copied ({2}), {3} here already, {4} kept, {5} failed',
+    'reg.replDrySummary': '{0} tags picked: {1} would be copied, {3} here already, {4} kept, {5} failed',
+    'reg.item.copied': 'copied', 'reg.item.would copy': 'would copy', 'reg.item.kept': 'kept', 'reg.item.failed': 'failed', 'reg.item.present': 'here already',
+    'reg.action.rule-add': 'rule added', 'reg.action.rule-change': 'rule changed', 'reg.action.rule-delete': 'rule deleted', 'reg.action.replicate': 'replicated',
     'reg.sourcesHint': 'Registries to copy images from: Harbor, Nexus, or any registry of the Distribution API (Docker Hub, GitLab, another of these). Their passwords are sealed, and never shown again.',
     'reg.col.name': 'Name', 'reg.col.url': 'Address', 'reg.col.username': 'User',
     'reg.kindSrc.harbor': 'Harbor', 'reg.kindSrc.nexus': 'Nexus', 'reg.kindSrc.registry': 'Docker registry (v2)', 'reg.sourceKind': 'Kind',
@@ -1168,6 +1190,28 @@ const STRINGS = {
     'reg.quotaHelp': 'Projenin tutabileceği alan, her katman bir kez sayılır; boşsa sınır yok. İmaj deposunun yöneticileri belirler.',
     regjobs: 'Görevler', 'reg.job.gc': 'Çöp toplama', 'reg.job.verify': 'Blob denetimi',
     regsources: 'Kaynaklar', 'reg.newSource': 'Yeni kaynak', 'reg.noSources': 'Henüz kaynak yok.',
+    regreplication: 'Çoğaltma', 'reg.job.replication': 'Çoğaltma', 'reg.newRule': 'Yeni kural', 'reg.noRules': 'Henüz çoğaltma kuralı yok.',
+    'reg.replHint': 'Her kural bir kaynaktan bir projeye imaj kopyalar: burada olan bırakılır, gerisi alttan üste kopyalanır, her digest denetlenir, tag’ler en sonda yazılır. Yeniden çalışan bir kural kaldığı yerden sürer.',
+    'reg.needSource': 'Önce kopyalanacak bir kaynak ekleyin:', 'reg.col.from': 'Nereden', 'reg.col.into': 'Nereye', 'reg.manual': 'elle',
+    'reg.withinDays': 'son {0} günde push edilenler', 'reg.keepPath': 'yol korunur', 'reg.overwrite': 'üzerine yazar', 'reg.withReferrers': 'imzalar ve SBOM’lar',
+    'reg.runRule': 'Çalıştır', 'reg.runRuleConfirm': '{0} kuralının seçtikleri şimdi {1} projesine kopyalansın mı?', 'reg.deleteRule': 'Sil',
+    'reg.deleteRuleConfirm': '{0} kuralı silinsin mi? Kopyaladıkları kalır.', 'reg.ruleDeleted': 'Kural silindi.', 'reg.ruleSaved': 'Kural kaydedildi.',
+    'reg.replRuns': 'Çalışmalar', 'reg.ruleSource': 'Kaynak', 'reg.ruleProject': 'Hedef proje',
+    'reg.ruleReposHelp': 'Kaynağın repoları, tam adlarıyla: team-a/web, team-a/* (bir seviye), team-a/** (altındakilerin hepsi), ** (hepsi). Tek bir ad, Docker Hub’ın istediği gibi listelemeden okunur.',
+    'reg.ruleTagsHelp': 'Tag deseni: hepsi için **, v*, 1.*.', 'reg.ruleWithin': 'Şu kadar günde push edilenler',
+    'reg.ruleWithinHelp': 'Kaynak ne zaman olduğunu söylüyorsa (Harbor, Nexus); boşsa zaman sınırı yok.',
+    'reg.keepPathHelp': 'Kaynaktaki yolun tamamını koru (library/nginx, <proje>/library/nginx olur); yalnızca ilk parçadan sonrasını değil',
+    'reg.namedAs': 'Örneğin {0}, {1} olur.', 'reg.overwriteHelp': 'Burada başka bir imajı gösteren tag’i buraya taşı (değişmez olan kalır)',
+    'reg.referrersCopyHelp': 'İmzalarını ve SBOM’larını da kopyala', 'reg.rulePlatforms': 'Platformlar',
+    'reg.rulePlatformsHelp': 'Çok mimarili bir imajın yalnızca bunlarını tut, örneğin linux/amd64; boşsa hepsi. Daha az platformlu bir index yenidir, digest’i farklıdır.',
+    'reg.ruleConcurrency': 'Aynı anda imaj', 'reg.ruleBandwidth': 'Saniyede KiB (boş: sınırsız)',
+    'reg.ruleCronHelp': 'Yalnızca elle çalıştırmak için boş bırakın; 0 * * * * her saat başı, registry’nin saat dilimiyle.',
+    'reg.progress': '{1} işin {0} tanesi bitti, {2}', 'reg.stopJob': 'Durdur', 'reg.stopConfirm': 'Bu iş durdurulsun mu? Yaptıkları kalır; yeniden çalışınca kaldığı yerden sürer.',
+    'reg.stopped': 'Durduruluyor.', 'reg.allPresent': 'Hepsi zaten buradaydı.',
+    'reg.replSummary': '{0} tag seçildi: {1} kopyalandı ({2}), {3} zaten burada, {4} tutuldu, {5} başarısız',
+    'reg.replDrySummary': '{0} tag seçildi: {1} kopyalanırdı, {3} zaten burada, {4} tutuldu, {5} başarısız',
+    'reg.item.copied': 'kopyalandı', 'reg.item.would copy': 'kopyalanırdı', 'reg.item.kept': 'tutuldu', 'reg.item.failed': 'başarısız', 'reg.item.present': 'zaten burada',
+    'reg.action.rule-add': 'kural eklendi', 'reg.action.rule-change': 'kural değişti', 'reg.action.rule-delete': 'kural silindi', 'reg.action.replicate': 'çoğaltıldı',
     'reg.sourcesHint': 'İmajların kopyalanacağı registry’ler: Harbor, Nexus ya da Distribution API’li herhangi bir registry (Docker Hub, GitLab, bunlardan bir başkası). Şifreleri mühürlenerek saklanır ve bir daha gösterilmez.',
     'reg.col.name': 'Ad', 'reg.col.url': 'Adres', 'reg.col.username': 'Kullanıcı',
     'reg.kindSrc.harbor': 'Harbor', 'reg.kindSrc.nexus': 'Nexus', 'reg.kindSrc.registry': 'Docker registry (v2)', 'reg.sourceKind': 'Tür',
@@ -2464,7 +2508,7 @@ function viewAllowed(id) {
   const me = state.me;
   if (spaceOf(id) === 'registry') {
     // The registry's projects, and its robot accounts for its admins.
-    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['robots', 'regjobs', 'regsources'].includes(id) || !!me.registryAdmin);
+    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['robots', 'regjobs', 'regreplication', 'regsources'].includes(id) || !!me.registryAdmin);
   }
   if (me && me.role === 'none') return false;
   return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
@@ -2722,6 +2766,7 @@ const NAV_ICONS = {
   robots: [[5, 8, 14, 11, 3], 'M12 4v4', [12, 3.5, 1], [9.5, 13, 1], [14.5, 13, 1], 'M10 16.5h4'],
   regjobs: [[12, 12, 9], 'M12 7v5l3.5 2'],
   regsources: ['M4 12h11', 'M11 8l4 4-4 4', [3, 4, 18, 16, 2]],
+  regreplication: ['M4 8h12l-3-3', 'M20 16H8l3 3', [18, 8, 2], [6, 16, 2]],
 };
 
 function navIcon(id) {
@@ -2876,7 +2921,7 @@ function renderContent() {
     case 'appmetrics': body = renderAppMetrics(state.data.watches, state.data.store); break;
     case 'explore': body = renderExplore(); break;
     case 'dashboards': body = renderDashboards(state.data); break;
-    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regjobs': case 'regsources': case 'robots':
+    case 'registry': case 'regproject': case 'regrepo': case 'regartifact': case 'regjobs': case 'regreplication': case 'regsources': case 'robots':
       body = renderRegistry(state.view, state.data, regUI);
       break;
     case 'certificates':

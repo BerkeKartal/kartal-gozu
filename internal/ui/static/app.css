@@ -930,3 +930,4 @@ table.sizing td > div + div { margin-top: 2px; }
 .reg-keep { display: flex; gap: 6px; }
 .reg-keep input { width: 80px; }
 @media (max-width: 640px) { .reg-rule { grid-template-columns: 1fr 1fr; } }
+.reg-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

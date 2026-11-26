@@ -3,7 +3,7 @@
 // helpers (ui) and the data it loaded with loadRegistry; nothing here keeps
 // state of its own.
 
-export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regjobs', 'regsources', 'robots'];
+export const REGISTRY_VIEWS = ['registry', 'regproject', 'regrepo', 'regartifact', 'regjobs', 'regreplication', 'regsources', 'robots'];
 
 const enc = encodeURIComponent;
 
@@ -44,6 +44,11 @@ export async function loadRegistry(view, rest, api, signal) {
       return { info, jobs: await api('registry/jobs?limit=100', { signal }) };
     case 'regsources':
       return { info, sources: await api('registry/sources', { signal }) };
+    case 'regreplication': {
+      const [rules, sources, projects, jobs] = await Promise.all([api('registry/rules', { signal }), api('registry/sources', { signal }),
+        api('registry/projects', { signal }), api('registry/jobs?limit=100', { signal })]);
+      return { info, rules, sources, projects, jobs };
+    }
     case 'robots':
       return { info, robots: await api('registry/robots', { signal }) };
   }
@@ -112,6 +117,7 @@ export function renderRegistry(view, data, ui) {
     case 'regartifact': return artifactPage(data, ui);
     case 'regjobs': return jobsPage(data, ui);
     case 'regsources': return sourcesPage(data, ui);
+    case 'regreplication': return replicationPage(data, ui);
     case 'robots': return robotsPage(data, ui);
   }
   return null;
@@ -581,23 +587,169 @@ function jobDialog(ui, id, title) {
       body.replaceChildren(h('p', { class: 'status-bad' }, e.message));
       return;
     }
-    if (j.status === 'running' && ++tries < 120) {
+    if (j.status === 'running' && ++tries < 3600) {
+      body.replaceChildren(h('p', { class: 'muted' }, progressText(ui, j.progress)));
       setTimeout(poll, 1000);
       return;
     }
     const r = j.report || {};
     const removed = r.removed || [];
-    body.replaceChildren(
+    const items = r.items || [];
+    // A DOM node takes null for text; what is not there is left out.
+    body.replaceChildren(...[
       j.error ? h('p', { class: 'status-bad' }, j.error) : h('p', null, jobSummary(ui, j)),
       r.unknown && r.unknown.length ? h('p', { class: 'muted small-text' }, t('reg.retentionUnknown', r.unknown.join(', '))) : null,
       removed.length ? h('table', { class: 'flat' },
         h('thead', null, h('tr', null, ['repository', 'artifact', 'tags', 'pushed'].map(k => h('th', null, t('reg.col.' + k))))),
         h('tbody', null, removed.map(x => h('tr', null, h('td', null, x.repo), h('td', null, ui.mono(shortDigest(x.digest))),
           h('td', null, x.tags && x.tags.length ? x.tags.join(', ') : h('span', { class: 'muted' }, t('reg.untagged'))), h('td', null, ui.age(x.pushed))))))
-        : j.status === 'done' ? h('p', { class: 'muted' }, t('reg.removedNone')) : null);
+        : j.kind === 'retention' && j.status === 'done' ? h('p', { class: 'muted' }, t('reg.removedNone')) : null,
+      items.length ? h('table', { class: 'flat' },
+        h('thead', null, h('tr', null, ['from', 'into', 'status', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
+        h('tbody', null, items.map(x => h('tr', { class: x.result === 'failed' ? 'problem' : null }, h('td', null, ui.mono(x.from)), h('td', null, ui.mono(x.to)),
+          h('td', null, t('reg.item.' + x.result)), h('td', null, x.error || (x.digest ? ui.mono(shortDigest(x.digest)) : ''))))))
+        : j.kind === 'replication' && j.status === 'done' ? h('p', { class: 'muted' }, t('reg.allPresent')) : null].filter(Boolean));
     ui.refresh();
   };
   poll();
+}
+
+// ---------------------------------------------------------------- replication
+
+// progressText says how far a running job got.
+function progressText(ui, p) {
+  return p ? ui.t('reg.progress', p.done, p.total, ui.bytes(p.bytes)) : ui.t('reg.waitJob');
+}
+
+function stopButton(ui, j) {
+  return ui.button(ui.t('reg.stopJob'), async () => {
+    if (!(await ui.ask({ title: ui.t('reg.stopJob'), message: ui.t('reg.stopConfirm'), confirm: ui.t('reg.stopJob'), danger: true }))) return;
+    act(ui, () => ui.api('registry/jobs/' + enc(j.id), { method: 'DELETE' }), ui.t('reg.stopped'));
+  }, 'danger');
+}
+
+function replicationPage(data, ui) {
+  const { h, t, button, age, emptyState, mono, routeHash } = ui;
+  const rules = data.rules || [];
+  const sources = data.sources || [];
+  const jobs = ((data.jobs && data.jobs.jobs) || []).filter(j => j.kind === 'replication');
+  const words = ui.words();
+  const rows = rules.filter(r => ui.matches(words, [r.name, r.sourceName, r.repositories, r.tags, r.project]));
+  const run = async (r, dryRun) => {
+    if (!dryRun && !(await ui.ask({ title: t('reg.runRule'), message: t('reg.runRuleConfirm', r.name, r.project), confirm: t('reg.runRule') }))) return;
+    try {
+      const j = await ui.api('registry/jobs', { method: 'POST', body: { kind: 'replication', rule: r.id, dryRun } });
+      jobDialog(ui, j.id, r.name);
+    } catch (e) {
+      ui.toast(e.message, true);
+    }
+  };
+  const head = ui.panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' }, h('div', { class: 'detail' }, t('reg.replHint')),
+      sources.length ? null : h('div', { class: 'detail status-warn' }, t('reg.needSource'), ' ',
+        h('a', { href: routeHash({ view: 'regsources', rest: [], ns: '' }) }, t('regsources')))),
+    h('div', { class: 'actions' }, sources.length ? button('+ ' + t('reg.newRule'), () => ruleDialog(ui, data)) : null)));
+  const table = rows.length ? h('table', null,
+    h('thead', null, h('tr', null, ['name', 'from', 'into', 'cron', 'next'].map(k => h('th', null, t('reg.col.' + k))), h('th'))),
+    h('tbody', null, rows.map(r => {
+      const running = jobs.find(j => j.rule === r.id && j.status === 'running');
+      return h('tr', null,
+        h('td', null, h('strong', null, r.name)),
+        h('td', null, r.sourceName, ' · ', mono(r.repositories), r.tags && r.tags !== '**' ? [' : ', mono(r.tags)] : null,
+          r.within ? h('div', { class: 'muted small-text' }, t('reg.withinDays', r.within)) : null),
+        h('td', null, h('a', { href: routeHash({ view: 'regproject', rest: [r.project], ns: '' }) }, r.project),
+          h('div', { class: 'muted small-text' }, [r.keepPath ? t('reg.keepPath') : null, r.overwrite ? t('reg.overwrite') : null,
+            r.referrers ? t('reg.withReferrers') : null, r.platforms && r.platforms.length ? r.platforms.join(', ') : null].filter(Boolean).join(' · '))),
+        h('td', null, r.cron ? mono(r.cron) : h('span', { class: 'muted' }, t('reg.manual')), r.cron && !r.enabled ? [' ', ui.pill(t('reg.scheduleOff'), 'warn')] : null),
+        h('td', null, r.next ? ui.until(r.next) : '—'),
+        h('td', { class: 'actions-cell' }, h('div', { class: 'actions' },
+          running ? [h('span', { class: 'muted small-text' }, progressText(ui, running.progress)), stopButton(ui, running)]
+            : [button(t('reg.retentionDry'), () => run(r, true)), button(t('reg.runRule'), () => run(r, false))],
+          button(t('edit'), () => ruleDialog(ui, data, r)),
+          button(t('reg.deleteRule'), async () => {
+            if (!(await ui.ask({ title: t('reg.deleteRule'), message: t('reg.deleteRuleConfirm', r.name), confirm: t('reg.deleteRule'), danger: true }))) return;
+            act(ui, () => ui.api('registry/rules/' + enc(r.id), { method: 'DELETE' }), t('reg.ruleDeleted'));
+          }, 'danger'))));
+    }))) : emptyState(t(rules.length ? 'noMatch' : 'reg.noRules'));
+  const recent = jobs.length ? ui.panel(t('reg.replRuns'), h('table', { class: 'flat' },
+    h('thead', null, h('tr', null, ['name', 'by', 'started', 'took', 'status', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
+    h('tbody', null, jobs.slice(0, 20).map(j => h('tr', { class: j.status === 'failed' || j.alarm ? 'problem' : null },
+      h('td', null, j.ruleName || '—', j.dryRun ? h('span', { class: 'muted' }, ' · ' + t('reg.dryRun')) : null),
+      h('td', null, j.by === 'schedule' ? h('span', { class: 'muted' }, t('reg.bySchedule')) : j.by),
+      h('td', null, age(j.started)),
+      h('td', null, j.finished ? ui.duration(j.started, j.finished) : progressText(ui, j.progress)),
+      h('td', null, jobState(ui, j)),
+      h('td', null, j.error ? h('span', { class: 'status-bad' }, j.error) : jobSummary(ui, j)))))), 'reg-events') : null;
+  return [problem(ui, data.info), head, table, recent];
+}
+
+function ruleDialog(ui, data, rule) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const editing = !!rule;
+  const r = rule || { repositories: '', tags: '**', concurrency: 2 };
+  const name = h('input', { type: 'text', required: true, value: r.name || '' });
+  const source = h('select', null, (data.sources || []).map(x => h('option', { value: x.id, selected: x.id === r.source }, x.name + ' (' + t('reg.kindSrc.' + x.kind) + ')')));
+  const repos = h('input', { type: 'text', class: 'mono', required: true, value: r.repositories, placeholder: 'team-a/**' });
+  const tags = h('input', { type: 'text', class: 'mono', value: r.tags || '**', placeholder: '**' });
+  const within = h('input', { type: 'number', min: '0', step: '1', value: r.within ? String(r.within) : '', placeholder: '∞' });
+  const project = h('select', null, (data.projects || []).map(p => h('option', { value: p.name, selected: p.name === r.project }, p.name)));
+  const keepPath = h('input', { type: 'checkbox', checked: !!r.keepPath });
+  const overwrite = h('input', { type: 'checkbox', checked: !!r.overwrite });
+  const referrers = h('input', { type: 'checkbox', checked: editing ? !!r.referrers : true });
+  const platforms = h('input', { type: 'text', class: 'mono', value: (r.platforms || []).join(', '), placeholder: 'linux/amd64, linux/arm64' });
+  const concurrency = h('input', { type: 'number', min: '1', max: '8', step: '1', value: String(r.concurrency || 2) });
+  const bandwidth = h('input', { type: 'number', min: '0', step: '1', value: r.bandwidthKiB ? String(r.bandwidthKiB) : '', placeholder: '∞' });
+  const cron = h('input', { type: 'text', class: 'mono', value: r.cron || '', placeholder: '0 * * * *' });
+  const enabled = h('input', { type: 'checkbox', checked: editing ? !!r.enabled : true });
+  const preview = h('div', { class: 'muted small-text' });
+  // Where a repository of the source goes.
+  const show = () => {
+    const example = (repos.value.trim() || 'team-a/web').replace(/\/?\*\*$/, '/web').replace(/\*/g, 'web');
+    const parts = example.split('/');
+    const rest = keepPath.checked || parts.length < 2 ? example : parts.slice(1).join('/');
+    preview.textContent = t('reg.namedAs', example, (project.value || '<project>') + '/' + rest);
+  };
+  [repos, project, keepPath].forEach(el => el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', show));
+  show();
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog wide',
+    onsubmit: async e => {
+      e.preventDefault();
+      const body = {
+        name: name.value.trim(), source: source.value, repositories: repos.value.trim(), tags: tags.value.trim(),
+        within: Number(within.value) || 0, project: project.value, keepPath: keepPath.checked, overwrite: overwrite.checked,
+        referrers: referrers.checked, platforms: platforms.value.split(/[\s,]+/).filter(Boolean),
+        concurrency: Number(concurrency.value) || 2, bandwidthKiB: Number(bandwidth.value) || 0, cron: cron.value.trim(), enabled: enabled.checked,
+      };
+      try {
+        await api('registry/rules' + (editing ? '/' + enc(rule.id) : ''), { method: editing ? 'PUT' : 'POST', body });
+        close();
+        ui.toast(t('reg.ruleSaved'));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, editing ? rule.name : t('reg.newRule')),
+  dialogField(t('reg.col.name'), name),
+  dialogField(t('reg.ruleSource'), source),
+  dialogField(t('reg.rule.repos'), repos, t('reg.ruleReposHelp')),
+  dialogField(t('reg.rule.tags'), tags, t('reg.ruleTagsHelp')),
+  dialogField(t('reg.ruleWithin'), within, t('reg.ruleWithinHelp')),
+  dialogField(t('reg.ruleProject'), project),
+  h('label', { class: 'check-item' }, keepPath, ' ', t('reg.keepPathHelp')),
+  preview,
+  h('label', { class: 'check-item' }, overwrite, ' ', t('reg.overwriteHelp')),
+  h('label', { class: 'check-item' }, referrers, ' ', t('reg.referrersCopyHelp')),
+  dialogField(t('reg.rulePlatforms'), platforms, t('reg.rulePlatformsHelp')),
+  h('div', { class: 'reg-two' }, dialogField(t('reg.ruleConcurrency'), concurrency), dialogField(t('reg.ruleBandwidth'), bandwidth)),
+  dialogField(t('reg.col.cron'), cron, t('reg.ruleCronHelp')),
+  h('label', { class: 'check-item' }, enabled, ' ', t('reg.scheduleOn')),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  name.focus();
 }
 
 // ---------------------------------------------------------------- jobs
@@ -614,6 +766,9 @@ function jobSummary(ui, j) {
   }
   if (j.kind === 'retention' && r.started) {
     return t(r.dryRun ? 'reg.retentionDrySummary' : 'reg.retentionSummary', r.picked, r.kept, r.protected, r.deleted);
+  }
+  if (j.kind === 'replication' && r.started) {
+    return t(r.dryRun ? 'reg.replDrySummary' : 'reg.replSummary', r.picked, r.copied, bytes(r.bytes), r.present, r.kept, r.failed);
   }
   return j.summary || '';
 }
@@ -648,14 +803,14 @@ function jobsPage(data, ui) {
   const history = jobs.length ? h('table', null,
     h('thead', null, h('tr', null, ['job', 'by', 'started', 'took', 'status', 'what'].map(k => h('th', null, t('reg.col.' + k))))),
     h('tbody', null, jobs.map(j => h('tr', { class: j.status === 'failed' || j.alarm ? 'problem' : null },
-      h('td', null, t('reg.job.' + j.kind), j.project ? h('span', { class: 'muted' }, ' · ' + j.project) : null,
+      h('td', null, t('reg.job.' + j.kind), j.ruleName ? h('span', { class: 'muted' }, ' · ' + j.ruleName) : j.project ? h('span', { class: 'muted' }, ' · ' + j.project) : null,
         j.dryRun ? h('span', { class: 'muted' }, ' · ' + t('reg.dryRun')) : null),
       h('td', null, j.by === 'schedule' ? h('span', { class: 'muted' }, t('reg.bySchedule')) : j.by),
       h('td', null, age(j.started)),
-      h('td', null, j.finished ? ui.duration(j.started, j.finished) : '…'),
-      h('td', null, jobState(ui, j)),
+      h('td', null, j.finished ? ui.duration(j.started, j.finished) : progressText(ui, j.progress)),
+      h('td', null, jobState(ui, j), j.status === 'running' ? [' ', stopButton(ui, j)] : null),
       h('td', null, j.error ? h('span', { class: 'status-bad' }, j.error) : [jobSummary(ui, j),
-        j.alarm ? h('div', { class: 'status-bad small-text' }, t('reg.verifyAlarm', ((j.report || {}).corrupt || []).length,
+        j.alarm && j.kind === 'verify' ? h('div', { class: 'status-bad small-text' }, t('reg.verifyAlarm', ((j.report || {}).corrupt || []).length,
           ((j.report || {}).missing || []).length)) : null]))))) : emptyState(t('reg.noJobs'));
   return [problem(ui, data.info), head, sched, h('div', { class: 'reg-events' }, history)];
 }

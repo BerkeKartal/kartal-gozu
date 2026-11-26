@@ -57,6 +57,11 @@ func (s *Server) routeRegistry(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/registry/sources/{id}", s.signedIn(s.registrySources))
 	mux.HandleFunc("DELETE /api/v1/registry/sources/{id}", s.signedIn(s.registrySources))
 	mux.HandleFunc("GET /api/v1/registry/sources/{id}/projects", s.signedIn(s.registrySources))
+	mux.HandleFunc("GET /api/v1/registry/rules", s.signedIn(s.registryRules))
+	mux.HandleFunc("POST /api/v1/registry/rules", s.signedIn(s.registryRules))
+	mux.HandleFunc("PUT /api/v1/registry/rules/{id}", s.signedIn(s.registryRules))
+	mux.HandleFunc("DELETE /api/v1/registry/rules/{id}", s.signedIn(s.registryRules))
+	mux.HandleFunc("DELETE /api/v1/registry/jobs/{id}", s.signedIn(s.registryCancelJob))
 	mux.HandleFunc("GET /api/v1/registry/robots", s.signedIn(s.robotList))
 	mux.HandleFunc("POST /api/v1/registry/robots", s.signedIn(s.robotAdd))
 	mux.HandleFunc("PUT /api/v1/registry/robots/{name}", s.signedIn(s.robotUpdate))
@@ -554,8 +559,9 @@ func (s *Server) registryStartJob(w http.ResponseWriter, r *http.Request) {
 		Kind    string `json:"kind"`
 		DryRun  bool   `json:"dryRun"`
 		Project string `json:"project,omitempty"`
+		Rule    string `json:"rule,omitempty"`
 	}
-	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention", "dryRun", "project"}`) {
+	if !readJSON(w, r, &body, `{"kind": "gc"|"verify"|"retention"|"replication", "dryRun", "project", "rule"}`) {
 		return
 	}
 	// A project's admins apply its retention rules; the rest is the
@@ -635,6 +641,36 @@ func (s *Server) registrySources(w http.ResponseWriter, r *http.Request) {
 		path += "/projects"
 	}
 	s.relay(w, r, r.Method, path, nil, body)
+}
+
+// registryRules hands the registry's admins' calls about replication
+// rules to the registry.
+func (s *Server) registryRules(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	var body any
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		var raw json.RawMessage
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&raw); err != nil {
+			writeError(w, http.StatusBadRequest, "the body must be a replication rule, as JSON")
+			return
+		}
+		body = raw
+	}
+	path := "/admin/v1/rules"
+	if id := r.PathValue("id"); id != "" {
+		path += "/" + url.PathEscape(id)
+	}
+	s.relay(w, r, r.Method, path, nil, body)
+}
+
+// registryCancelJob stops a running job, for the registry's admins.
+func (s *Server) registryCancelJob(w http.ResponseWriter, r *http.Request) {
+	if !s.registryAdminOnly(w, r) {
+		return
+	}
+	s.relay(w, r, http.MethodDelete, "/admin/v1/jobs/"+url.PathEscape(r.PathValue("id")), nil, nil)
 }
 
 // ---------------------------------------------------------------- robot accounts

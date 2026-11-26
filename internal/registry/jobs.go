@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/BerkeKartal/kartal-gozu/internal/cron"
@@ -132,6 +133,28 @@ func (s *Server) RunDue() {
 			s.cfg.Log.Warn("registry: starting a scheduled job", "kind", sc.Kind, "err", err)
 		}
 	}
+	// And the replication rules on schedules of their own.
+	for _, r := range s.cfg.DB.Rules() {
+		next := s.NextRuleRun(r)
+		if next.IsZero() || next.After(now) {
+			continue
+		}
+		if err := s.cfg.DB.MarkRuleRun(r.ID, now); err != nil {
+			s.cfg.Log.Warn("registry: noting a rule's run", "rule", r.Name, "err", err)
+			continue
+		}
+		if _, err := s.StartReplication(r.ID, false, ScheduledBy); err != nil && !errors.Is(err, ErrRunning) {
+			s.cfg.Log.Warn("registry: starting a scheduled replication", "rule", r.Name, "err", err)
+		}
+	}
+}
+
+// NextRuleRun is when a rule runs next on its schedule, or the zero time.
+func (s *Server) NextRuleRun(r meta.ReplicationRule) time.Time {
+	if !r.Enabled || r.Cron == "" {
+		return time.Time{}
+	}
+	return s.NextRun(meta.Schedule{Cron: r.Cron, Enabled: true, Since: r.Since, Last: r.Last})
 }
 
 // SetSchedule changes a kind of job's schedule; it runs first at the first
@@ -150,9 +173,13 @@ func (s *Server) SetSchedule(kind, expr string, enabled bool, user string) (meta
 
 // StartJob starts a job, which runs on its own; the job is remembered as
 // running. Collecting garbage and retention have dry runs, and retention
-// may be of one project.
+// may be of one project. A replication rule's runs start with
+// StartReplication.
 func (s *Server) StartJob(kind string, dryRun bool, project, by string) (meta.Job, error) {
 	if !jobKind(kind) {
+		if kind == JobReplication {
+			return meta.Job{}, fmt.Errorf("%w: a replication runs a rule", ErrJob)
+		}
 		return meta.Job{}, fmt.Errorf("%w: %q", ErrJob, kind)
 	}
 	if dryRun && kind == JobVerify {
@@ -169,36 +196,102 @@ func (s *Server) StartJob(kind string, dryRun bool, project, by string) (meta.Jo
 			return meta.Job{}, fmt.Errorf("%w: project %s has no retention rules", ErrJob, project)
 		}
 	}
+	return s.launch(meta.Job{Kind: kind, DryRun: dryRun, Project: project, By: by})
+}
+
+// StartReplication runs a replication rule, or tries it in a dry run.
+func (s *Server) StartReplication(rule string, dryRun bool, by string) (meta.Job, error) {
+	r, ok := s.cfg.DB.Rule(rule)
+	if !ok {
+		return meta.Job{}, fmt.Errorf("%w: no such replication rule", ErrJob)
+	}
+	return s.launch(meta.Job{Kind: JobReplication, DryRun: dryRun, Project: r.Project, Rule: r.ID, RuleName: r.Name, By: by})
+}
+
+// runKey is what one job runs at a time of: its kind, or its rule.
+func runKey(j meta.Job) string { return j.Kind + "\x00" + j.Rule }
+
+func (s *Server) launch(j meta.Job) (meta.Job, error) {
 	b := make([]byte, 8)
 	rand.Read(b)
-	j := meta.Job{ID: hex.EncodeToString(b), Kind: kind, DryRun: dryRun, Project: project, By: by, Started: s.now().UTC(), Status: meta.JobRunning}
+	j.ID, j.Started, j.Status = hex.EncodeToString(b), s.now().UTC(), meta.JobRunning
+	key := runKey(j)
 	s.jobMu.Lock()
-	if id, ok := s.running[kind]; ok {
+	if id, ok := s.running[key]; ok {
 		s.jobMu.Unlock()
 		return meta.Job{}, fmt.Errorf("%w: %s", ErrRunning, id)
 	}
-	s.running[kind] = j.ID
-	ctx := s.jobCtx
+	s.running[key] = j.ID
+	base := s.jobCtx
 	s.jobMu.Unlock()
 	if err := s.cfg.DB.PutJob(j); err != nil {
 		s.jobMu.Lock()
-		delete(s.running, kind)
+		delete(s.running, key)
 		s.jobMu.Unlock()
 		return meta.Job{}, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if base == nil {
+		base = context.Background()
 	}
+	ctx, cancel := context.WithCancel(base)
+	s.jobMu.Lock()
+	s.cancels[j.ID] = cancel
+	s.jobMu.Unlock()
 	go s.runJob(ctx, j)
 	return j, nil
 }
 
+// CancelJob stops a running job; it ends as failed, saying who stopped it.
+func (s *Server) CancelJob(id, by string) error {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	cancel, ok := s.cancels[id]
+	if !ok {
+		return fmt.Errorf("%w: it is not running", ErrJob)
+	}
+	s.cancelledBy[id] = by
+	cancel()
+	return nil
+}
+
+// setProgress keeps how far a running job got.
+func (s *Server) setProgress(id string, p meta.JobProgress) {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	if _, ok := s.cancels[id]; ok {
+		s.jobProgress[id] = p
+	}
+}
+
+// withProgress is a job as the API shows it: a running one with how far
+// it got.
+func (s *Server) withProgress(j meta.Job) meta.Job {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	if p, ok := s.jobProgress[j.ID]; ok && j.Status == meta.JobRunning {
+		j.Progress = &p
+	}
+	return j
+}
+
 func (s *Server) runJob(ctx context.Context, j meta.Job) {
-	defer func() {
-		s.jobMu.Lock()
-		delete(s.running, j.Kind)
-		s.jobMu.Unlock()
-	}()
+	// It is no longer running before it is written down as ended, so that
+	// one who sees it ended cannot stop it any more.
+	var once sync.Once
+	end := func() {
+		once.Do(func() {
+			s.jobMu.Lock()
+			delete(s.running, runKey(j))
+			if cancel := s.cancels[j.ID]; cancel != nil {
+				cancel()
+			}
+			delete(s.cancels, j.ID)
+			delete(s.jobProgress, j.ID)
+			delete(s.cancelledBy, j.ID)
+			s.jobMu.Unlock()
+		})
+	}
+	defer end()
 	var report any
 	var err error
 	switch j.Kind {
@@ -217,6 +310,13 @@ func (s *Server) runJob(ctx context.Context, j meta.Job) {
 		var rep RetentionReport
 		rep, err = s.Retention(ctx, j.Project, j.DryRun, j.By)
 		report, j.Summary = rep, rep.String()
+	case JobReplication:
+		var rep ReplicationReport
+		rep, err = s.Replicate(ctx, j.Rule, j.DryRun, j.By, func(p meta.JobProgress) { s.setProgress(j.ID, p) })
+		report, j.Summary = rep, rep.String()
+		if err == nil && rep.Failed > 0 {
+			j.Alarm = fmt.Sprintf("%d of %d images could not be copied", rep.Failed, rep.Picked)
+		}
 	}
 	if b, merr := json.Marshal(report); merr == nil {
 		j.Report = b
@@ -224,9 +324,16 @@ func (s *Server) runJob(ctx context.Context, j meta.Job) {
 	now := s.now().UTC()
 	j.Finished, j.Status = &now, meta.JobDone
 	if err != nil {
+		s.jobMu.Lock()
+		by, stopped := s.cancelledBy[j.ID]
+		s.jobMu.Unlock()
+		if stopped && errors.Is(err, context.Canceled) {
+			err = fmt.Errorf("stopped by %s", by)
+		}
 		j.Status, j.Error = meta.JobFailed, err.Error()
 		s.cfg.Log.Warn("registry: a job failed", "job", j.ID, "kind", j.Kind, "err", err)
 	}
+	end()
 	if err := s.cfg.DB.PutJob(j); err != nil {
 		s.cfg.Log.Warn("registry: recording a job", "job", j.ID, "err", err)
 	}
