@@ -19,8 +19,9 @@ import (
 // for a grace period: a blob newer than it, or linked to a repository
 // lately (a push that finds a blob there renews its link), stays.
 
-// DefaultGrace is how long garbage is spared, for the pushes under way.
-const DefaultGrace = 2 * time.Hour
+// DefaultGrace is how long garbage is spared, for the pushes under way: as
+// long as it counts in its project's quota.
+const DefaultGrace = meta.PendingLinks
 
 // uploadsKept is how long an upload left behind is kept.
 const uploadsKept = 24 * time.Hour

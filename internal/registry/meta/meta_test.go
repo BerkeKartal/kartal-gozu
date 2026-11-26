@@ -490,3 +490,33 @@ func TestGarbageLinks(t *testing.T) {
 		t.Error("InUse")
 	}
 }
+
+// What an artifact deleted leaves behind counts no more in its project's
+// quota, though garbage is not collected yet; a push under way does.
+func TestQuotaAfterADelete(t *testing.T) {
+	d := open(t, t.TempDir())
+	defer d.Close()
+	d.CreateProject(Project{Name: "shop", Quota: 3000}, "admin")
+	now := time.Now()
+	d.SetClock(func() time.Time { return now.Add(-3 * time.Hour) })
+	push(t, d, "shop/web", dM, "1.0")
+	d.SetClock(time.Now)
+	if p := d.Projects(); p[0].Size != 100+2000+500 {
+		t.Fatalf("with the image: %+v", p)
+	}
+	if err := d.LinkBlob("shop/web", dC, 1000); !errors.Is(err, ErrQuota) {
+		t.Errorf("over the quota: %v", err)
+	}
+	if err := d.DeleteArtifact("shop/web", dM, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if p := d.Projects(); p[0].Size != 0 {
+		t.Errorf("after the delete: %+v", p)
+	}
+	if err := d.LinkBlob("shop/web", dC, 1000); err != nil {
+		t.Errorf("room again: %v", err)
+	}
+	if p, r := d.Projects(), d.Repositories("shop"); p[0].Size != 1000 || r[0].Size != 1000 {
+		t.Errorf("a push under way: %+v %+v", p, r)
+	}
+}

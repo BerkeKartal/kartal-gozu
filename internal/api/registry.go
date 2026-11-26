@@ -192,7 +192,9 @@ func (s *Server) registryRunning(w http.ResponseWriter, r *http.Request) {
 			digests, refs := map[string]bool{}, map[string]bool{}
 			add := func(images ...string) {
 				for _, img := range images {
-					local, digest := registry.ImageRef(img, s.cfg.RegistryPublic)
+					// Of any host: nodes may pull from the registry by
+					// another name than RegistryPublic.
+					local, digest := registry.ImageRef(img, "")
 					if digest != "" {
 						digests[digest] = true
 					}

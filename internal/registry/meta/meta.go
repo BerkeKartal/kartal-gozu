@@ -143,15 +143,31 @@ func (e immutableError) Error() string {
 
 func (e immutableError) Is(target error) bool { return target == ErrImmutable }
 
-// usage is what a project holds: its blobs and manifests, each once.
+// PendingLinks is how long a link no artifact uses still counts: a push
+// under way uploads its blobs before the manifest that uses them. Garbage
+// collection spares it as long.
+const PendingLinks = 2 * time.Hour
+
+// counts tells whether a repository's link counts in what its project
+// holds: an artifact uses it, or a push may.
+func (d *DB) counts(r *Repository, used map[string]bool, digest string) bool {
+	return used[digest] || d.now().Sub(r.Linked[digest]) < PendingLinks
+}
+
+// usage is what a project holds: its artifacts' blobs and manifests, and
+// the blobs of pushes under way, each once. What an artifact deleted
+// leaves behind counts no more, before garbage is collected.
 func (d *DB) usage(project string) int64 {
 	blobs := map[string]int64{}
 	for _, r := range d.repos {
 		if ProjectOf(r.Name) != project {
 			continue
 		}
+		used := usedBy(r)
 		for dg, n := range r.Blobs {
-			blobs[dg] = n
+			if d.counts(r, used, dg) {
+				blobs[dg] = n
+			}
 		}
 		for dg, a := range r.Artifacts {
 			blobs[dg] = a.Size
@@ -164,11 +180,12 @@ func (d *DB) usage(project string) int64 {
 	return n
 }
 
-// holds tells whether a project has a blob already, in any repository.
+// holds tells whether a project has a blob already, counted in what it
+// holds.
 func (d *DB) holds(project, digest string) bool {
 	for _, r := range d.repos {
 		if ProjectOf(r.Name) == project {
-			if _, ok := r.Blobs[digest]; ok {
+			if _, ok := r.Blobs[digest]; ok && d.counts(r, usedBy(r), digest) {
 				return true
 			}
 		}
@@ -1144,8 +1161,11 @@ func (d *DB) Repositories(project string) []RepoInfo {
 			continue
 		}
 		info := RepoInfo{Name: r.Name, Created: r.Created, Artifacts: len(r.Artifacts), Tags: len(r.Tags), Updated: r.Created}
-		for _, n := range r.Blobs {
-			info.Size += n
+		used := usedBy(r)
+		for dg, n := range r.Blobs {
+			if d.counts(r, used, dg) {
+				info.Size += n
+			}
 		}
 		for _, a := range r.Artifacts {
 			if _, linked := r.Blobs[a.Digest]; !linked {

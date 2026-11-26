@@ -32,6 +32,17 @@ func TestImageRef(t *testing.T) {
 			t.Errorf("%s: %q %q, want %q %q", c.ref, local, digest, c.local, c.digest)
 		}
 	}
+	// Of any host.
+	for _, c := range []struct{ ref, local string }{
+		{"kartal-registry.kartal-gozu.svc:5000/team-a/web:1.0", "team-a/web:1.0"},
+		{"team-a/web:1.0", "team-a/web:1.0"},
+		{"localhost/team-a/web", "team-a/web:latest"},
+		{"nginx:1.27", ""},
+	} {
+		if local, _ := ImageRef(c.ref, ""); local != c.local {
+			t.Errorf("%s of any host: %q, want %q", c.ref, local, c.local)
+		}
+	}
 }
 
 func TestValidRetention(t *testing.T) {
@@ -185,5 +196,40 @@ func TestRetentionJob(t *testing.T) {
 	}
 	if done := e.wait(j.ID); done.Status != meta.JobDone || done.Project != "shop" || !strings.Contains(done.Summary, "would delete 0") {
 		t.Errorf("the job: %+v", done)
+	}
+}
+
+// An index that goes lets its images be picked; a dry run says so too.
+func TestRetentionOfAnIndex(t *testing.T) {
+	e := newEnv(t)
+	e.reg.cfg.Running = &images{}
+	ci := e.token("ci", "repository:shop/web:pull,push,delete")
+	now := time.Now()
+	old := now.Add(-48 * time.Hour)
+	e.db.SetClock(func() time.Time { return old })
+	amd, _ := e.pushImage("shop/web", "amd", ci, "amd64")
+	arm, _ := e.pushImage("shop/web", "arm", ci, "arm64")
+	e.db.Untag("shop/web", "amd", "ci")
+	e.db.Untag("shop/web", "arm", "ci")
+	index := []byte(`{"schemaVersion":2,"mediaType":"` + manifest.OCIIndex + `","manifests":[
+		{"mediaType":"` + manifest.OCIManifest + `","digest":"` + amd + `","size":1,"platform":{"architecture":"amd64","os":"linux"}},
+		{"mediaType":"` + manifest.OCIManifest + `","digest":"` + arm + `","size":1,"platform":{"architecture":"arm64","os":"linux"}}]}`)
+	if a := e.do("PUT", "/v2/shop/web/manifests/1.0", ci, index, "Content-Type", manifest.OCIIndex); a.code != 201 {
+		t.Fatalf("index: %d %s", a.code, a.body)
+	}
+	e.db.SetClock(time.Now)
+	e.pushImage("shop/web", "2.0", ci, "s390x")
+	one := []meta.RetentionRule{{Tags: "**", Untagged: true, Keep: KeepLatestPushed, Count: 1}}
+	e.db.UpdateProject("shop", meta.ProjectChange{Retention: &one}, "root")
+	dry, err := e.reg.Retention(context.Background(), "shop", true, "root")
+	if err != nil || dry.Deleted != 3 || dry.Kept != 1 {
+		t.Errorf("a dry run: %+v %v", dry, err)
+	}
+	rep, err := e.reg.Retention(context.Background(), "shop", false, "root")
+	if err != nil || rep.Deleted != dry.Deleted {
+		t.Errorf("retention: %+v %v", rep, err)
+	}
+	if arts, _ := e.db.Artifacts("shop/web"); len(arts) != 1 || arts[0].Tags[0] != "2.0" {
+		t.Errorf("left: %+v", arts)
 	}
 }

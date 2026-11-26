@@ -61,7 +61,9 @@ func normalHost(h string) string {
 
 // ImageRef reads an image as a pod names it (or a kubelet's imageID): the
 // digest it pins, if any, and, when it is of the registry at host, its
-// repository with its tag, latest by default, or digest.
+// repository with its tag, latest by default, or digest. With no host, an
+// image of any registry is taken as this one's: nodes may reach it by
+// another name than its public one, and keeping more is never wrong.
 func ImageRef(ref, host string) (local, digest string) {
 	if all := digestIn.FindAllString(ref, -1); len(all) > 0 {
 		digest = all[len(all)-1]
@@ -70,7 +72,16 @@ func ImageRef(ref, host string) (local, digest string) {
 		ref = ref[i+3:]
 	}
 	first, rest, ok := strings.Cut(ref, "/")
-	if !ok || host == "" || normalHost(first) != normalHost(host) || !(strings.ContainsAny(first, ".:") || first == "localhost") {
+	if !ok {
+		return "", digest
+	}
+	isHost := strings.ContainsAny(first, ".:") || first == "localhost"
+	switch {
+	case host == "":
+		if !isHost {
+			rest = ref
+		}
+	case !isHost || normalHost(first) != normalHost(host):
 		return "", digest
 	}
 	name, pinned, _ := strings.Cut(rest, "@")
@@ -230,7 +241,7 @@ type RetentionReport struct {
 	// Protected are those no rule kept that stay as they run in a cluster
 	// or have an immutable tag.
 	Protected int `json:"protected"`
-	// Deleted are those deleted; Removed says which (the first 500).
+	// Deleted are those deleted; Removed says which (the first 200).
 	Deleted int       `json:"deleted"`
 	Removed []Removal `json:"removed"`
 	// Unknown are the clusters taken at their last word, or for running
@@ -334,10 +345,18 @@ func (s *Server) retainIn(p meta.Project, repo string, digests, refs map[string]
 	rep *RetentionReport) error {
 	rel := strings.TrimPrefix(repo, p.Name+"/")
 	seen := map[string]bool{}
+	// What went, or in a dry run would have, with what is about it.
+	removed := map[string]bool{}
 	for pass := 0; pass < 3; pass++ {
-		arts, ok := s.cfg.DB.Artifacts(repo)
+		all, ok := s.cfg.DB.Artifacts(repo)
 		if !ok {
 			return nil
+		}
+		var arts []meta.ArtifactInfo
+		for _, a := range all {
+			if !removed[a.Digest] && !removed[a.Subject] {
+				arts = append(arts, a)
+			}
 		}
 		picked, kept := retain(p.Retention, rel, arts, now)
 		byDigest := map[string]meta.ArtifactInfo{}
@@ -399,10 +418,11 @@ func (s *Server) retainIn(p meta.Project, repo string, digests, refs map[string]
 				if err != nil {
 					return err
 				}
-				deletedIndex = deletedIndex || len(a.Manifests) > 0
 			}
+			removed[a.Digest] = true
+			deletedIndex = deletedIndex || len(a.Manifests) > 0
 			rep.Deleted++
-			if len(rep.Removed) < 500 {
+			if len(rep.Removed) < 200 {
 				rep.Removed = append(rep.Removed, Removal{Repo: repo, Digest: a.Digest, Tags: a.Tags, Pushed: a.Pushed})
 			}
 		}
