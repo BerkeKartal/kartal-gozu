@@ -25,7 +25,9 @@ func TestPrometheusAPI(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	keeper := settings.NewKeeper(context.Background(), settings.Memory{}, log)
 	dir := t.TempDir()
-	db, err := tsdb.Open(dir)
+	// The samples go back ten minutes, which may be yesterday's (UTC): the
+	// store opens on the day of the first.
+	db, err := tsdb.OpenAt(dir, time.Now().Add(-11*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

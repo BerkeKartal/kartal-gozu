@@ -476,7 +476,63 @@ func (s *Server) registryDeleteProject(w http.ResponseWriter, r *http.Request) {
 	if !s.registryAdminOnly(w, r) {
 		return
 	}
-	s.relay(w, r, http.MethodDelete, "/admin/v1/projects/"+url.PathEscape(r.PathValue("name")), nil, nil)
+	name := r.PathValue("name")
+	status, b, err := s.registryCall(r, http.MethodDelete, "/admin/v1/projects/"+url.PathEscape(name), nil, nil)
+	if err != nil {
+		s.log.Warn("the registry could not be reached", "err", err)
+		writeError(w, http.StatusBadGateway, "the image registry could not be reached")
+		return
+	}
+	if status == http.StatusNoContent {
+		s.dropMembers(r, name)
+		w.WriteHeader(status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(b)
+}
+
+// dropMembers takes a deleted project's members away (see
+// accounts.DropProject), ends their sessions, and notes it.
+func (s *Server) dropMembers(r *http.Request, project string) {
+	if s.cfg.Accounts == nil {
+		return
+	}
+	u := userOf(r)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	d, err := s.cfg.Accounts.DropProject(ctx, project, u.Name)
+	if err != nil {
+		// The project is gone; its members' grants of it are left, which
+		// the members page shows if a project is made by the name again.
+		s.log.Error("taking a deleted project's members away", "project", project, "err", err)
+	}
+	for _, name := range d.Users {
+		s.signOut(name)
+	}
+	s.signOutGroups(d.Groups...)
+	note := func(object, detail string) {
+		s.audit.add(AuditEntry{Time: s.now().UTC(), User: u.Name, Role: u.Role.String(), Action: "registry-member", Object: object,
+			Detail: detail, OK: err == nil, Project: project})
+	}
+	for _, name := range d.Users {
+		note("user/"+name, project+": none, the project was deleted")
+	}
+	for _, g := range d.Groups {
+		note("group/"+g.Name, project+": none, the project was deleted")
+	}
+	disabled := map[string]bool{}
+	for _, name := range d.Disabled {
+		disabled[name] = true
+	}
+	for _, name := range d.Robots {
+		if disabled[name] {
+			note(name, project+": none, the project was deleted; disabled, as it has no grant left")
+		} else {
+			note(name, project+": none, the project was deleted")
+		}
+	}
 }
 
 func (s *Server) registryRepositories(w http.ResponseWriter, r *http.Request) {

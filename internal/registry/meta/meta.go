@@ -1165,6 +1165,12 @@ func (d *DB) DeleteProject(name, user string) error {
 			return ErrNotEmpty
 		}
 	}
+	// A rule that copies into it would fail every time it ran.
+	for _, r := range d.rules {
+		if r.Project == name {
+			return fmt.Errorf("%w: the replication rule %s copies into it; delete the rule or change its project first", ErrInUse, r.Name)
+		}
+	}
 	return d.commit(entry{Op: "project-del", Name: name}, d.event(user, "project-delete", name, "", "", "", ""))
 }
 

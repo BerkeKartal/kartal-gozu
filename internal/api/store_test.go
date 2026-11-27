@@ -24,7 +24,8 @@ func TestStoreFollowsRoles(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	keeper := settings.NewKeeper(context.Background(), settings.Memory{}, log)
 	dir := t.TempDir()
-	db, err := tsdb.Open(dir)
+	// A minute back may be yesterday's (UTC): the store opens on its day.
+	db, err := tsdb.OpenAt(dir, time.Now().Add(-2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,8 @@ func TestStoreQueriesFollowRoles(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	keeper := settings.NewKeeper(context.Background(), settings.Memory{}, log)
 	dir := t.TempDir()
-	db, err := tsdb.Open(dir)
+	// A minute back may be yesterday's (UTC): the store opens on its day.
+	db, err := tsdb.OpenAt(dir, time.Now().Add(-2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -290,6 +290,8 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		adminError(w, http.StatusNotFound, "no such project")
 	case errors.Is(err, meta.ErrNotEmpty):
 		adminError(w, http.StatusConflict, "the project still has repositories; delete them first")
+	case errors.Is(err, meta.ErrInUse):
+		adminError(w, http.StatusConflict, err.Error())
 	case err != nil:
 		s.adminInternal(w, "deleting a project", err)
 	default:
