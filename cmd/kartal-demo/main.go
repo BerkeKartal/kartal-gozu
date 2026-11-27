@@ -204,6 +204,12 @@ func run(listen, adminToken string, namespaces int, withLDAP, withRegistry bool,
 		defer stopRegistry()
 		cfg.RegistryURL, cfg.RegistrySecret, cfg.RegistryPublic = adminURL, secret, public
 		registryNote = "Its image registry: docker login " + public + "\n"
+		// People with roles in its projects, for the projects' members.
+		if cfg.Accounts != nil {
+			if err := seedRegistryPeople(ctx, cfg.Accounts); err != nil {
+				return err
+			}
+		}
 	}
 	server := api.New(cfg, st, log)
 	go backfill(ctx, st, hist, usage, "production")

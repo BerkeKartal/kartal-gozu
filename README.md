@@ -532,19 +532,27 @@ takes effect when the server restarts.
 
 ### The admin page
 
-Admins of everything manage who may do what on the **Admin** page
-(Clusters, under Operations), without a restart. What they change is kept
-with the other settings (`KARTAL_SETTINGS_SECRET` or
+Admins of everything manage who may do what in the **Admin** space, next
+to Clusters, Observe and Images in the top bar, without a restart. What
+they change is kept with the other settings (`KARTAL_SETTINGS_SECRET` or
 `KARTAL_SETTINGS_FILE`); without either, it lasts until the server stops.
-The page has five tabs:
+Its pages:
 
-| Tab | Shows and does |
+| Page | Shows and does |
 |---|---|
-| Users | Add someone with a user name and a password, and optionally a full name and an e-mail address; give them grants of their own (a role, a cluster and a namespace each, where `*` and names ending in `*` work as above) and put them in groups. Change any of it later, disable an account (the person cannot sign in, and is told so, until it is turned back on) or remove it. The tab also lists the users of `KARTAL_USERS` and the directory's rules, which it leaves alone |
+| Users | Add someone with a user name and a password, and optionally a full name and an e-mail address; give them grants of their own (a role, a cluster and a namespace each, where `*` and names ending in `*` work as above) and put them in groups. Change any of it later, disable an account (the person cannot sign in, and is told so, until it is turned back on) or remove it. The page also lists the users of `KARTAL_USERS` and the directory's rules, which it leaves alone |
 | Groups | A group has grants and gives them to its members: the users named in it (users added here, users of `KARTAL_USERS` who sign in with a password, and directory users by their name) and the members of the directory groups mapped to it, by CN or whole DN. A directory group can so be given access here, next to the rules of `KARTAL_LDAP_GROUPS` |
-| Access | Pick a cluster and a namespace, or none for the whole cluster, to see who may do what there, with which role and because of which grant: their own, a group's, a directory rule or `KARTAL_USERS`. **Access** next to a user or group lists everywhere they may act |
+| Robot accounts | The image registry's robot accounts (see [Image registry](#image-registry)); the registry's admins, who see only this page of the space |
+| Access | Pick a cluster and a namespace, or none for the whole cluster, to see who may do what there, with which role and because of which grant: their own, a group's, a directory rule or `KARTAL_USERS`. With the image registry, pick a project of it instead to see its members (see [Image registry](#image-registry)). **Access** next to a user or group lists everywhere they may act |
 | Sessions | Everyone signed in with a password or through the directory, with their grants, how they signed in and when the session ends; an admin can end any session |
-| Audit | The audit log, where every change made on the page is, never with a password |
+| Admin log | The audit log, where every change made in the space is, never with a password |
+
+A user's and a group's grants are in two parts: clusters and namespaces,
+and the image registry's projects (`viewer` pulls, `operator` also pushes,
+tags and deletes, `admin` runs the project and its members). A role in
+every cluster and namespace (`*/*`) is a role everywhere, in the registry
+too; a role in a project reaches no cluster. Links to the page of before
+(`#/c/<cluster>/users/<tab>`) open its page here.
 
 Someone has their own grants and those of all their groups. A change takes
 effect at once and ends the open sessions of the people it touches (the
@@ -1038,6 +1046,19 @@ users, passwords, directory and roles the rest has.
   `admin@registry:team-a` changes the project. A public project lets anyone
   pull without signing in. The registry's admins (admin everywhere, or
   `admin@registry:*`) make projects and robot accounts.
+- **Members.** A project's **Members** tab lists everyone and everything
+  with a role in it and why, as Harbor's does: the UI's users and groups,
+  the users of `KARTAL_USERS`, robot accounts and the directory's rules,
+  with the registry scope that reaches the project (`registry:team-a`,
+  `registry:*` or everywhere; never a grant's clusters). The project's
+  admins, and the admins of everything, give the UI's users and groups a
+  role there or take it away: a grant of that project alone
+  (`operator@registry:team-a`), so no one gives a role anywhere else this
+  way. The member's open sessions end, so the role applies at once, and
+  the change is in the audit log with its project. What reaches the
+  project otherwise is changed where it is set. The API:
+  `GET`, `PUT` (`{"kind": "user", "name": "ayse", "role": "operator"}`) and
+  `DELETE …/members/{kind}/{name}` on `/api/v1/registry/projects/{name}/members`.
 - **Signing in.** `docker login registry.example.org` takes a user name and
   password (the server's own users, or the directory's), a user's token as
   the password, or a robot account.

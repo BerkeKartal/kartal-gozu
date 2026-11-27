@@ -8,7 +8,7 @@ import { toYAML, diffLines } from './yaml.js';
 import { lineChart } from './chart.js';
 import { plot, sparkline } from './plot.js';
 import { lookSelf, lookVulns, LookupError } from './versions.js';
-import { REGISTRY_VIEWS, loadRegistry, renderRegistry } from './registry.js';
+import { REGISTRY_VIEWS, loadRegistry, renderRegistry, membersTable } from './registry.js';
 
 const REFRESH_MS = 10000;
 const FOLLOW_MS = 3000;
@@ -19,10 +19,10 @@ const TOKEN_KEY = 'kartal.token';
 const VIEWS = ['overview', 'pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'workloads',
   'services', 'ingresses', 'configmaps', 'secrets', 'certificates', 'volumeclaims', 'helm', 'nodes', 'namespaces', 'events',
   'alerts', 'appmetrics', 'explore', 'dashboards', 'uptime', 'changes', 'releases', 'audit', 'users', 'resources',
-  'placement', 'netcheck', 'sizing', 'probes', 'rollouts', 'updates', ...REGISTRY_VIEWS];
+  'placement', 'netcheck', 'sizing', 'probes', 'rollouts', 'updates', ...REGISTRY_VIEWS, 'groups', 'access', 'sessions', 'adminlog'];
 // Views that are not about one namespace.
 const CLUSTER_SCOPED = new Set(['nodes', 'namespaces', 'alerts', 'uptime', 'releases', 'audit', 'explore', 'dashboards', 'users',
-  'placement', 'netcheck', 'updates', ...REGISTRY_VIEWS]);
+  'placement', 'netcheck', 'updates', ...REGISTRY_VIEWS, 'groups', 'access', 'sessions', 'adminlog']);
 // Views that show every cluster at once.
 const ALL_CLUSTERS = new Set(['alerts', 'releases', 'audit', 'explore', 'dashboards', 'updates']);
 // Views of the server itself: the addresses it checks, its users.
@@ -56,11 +56,17 @@ const OBSERVE_VIEWS = new Set(['dashboards', 'explore', 'appmetrics', 'alerts', 
 const REGISTRY_SET = new Set(REGISTRY_VIEWS);
 // The registry's pages under its projects, which the menu does not list.
 const REGISTRY_PAGES = new Set(['regproject', 'regrepo', 'regartifact']);
-const spaceOf = view => (REGISTRY_SET.has(view) ? 'registry' : OBSERVE_VIEWS.has(view) ? 'observe' : 'cluster');
-const SPACE_HOME = { cluster: 'overview', observe: 'dashboards', registry: 'registry' };
-const SPACE_NAME = { cluster: 'spaceCluster', observe: 'spaceObserve', registry: 'spaceRegistry' };
-const SPACE_TITLE = { cluster: 'spaceClusterTitle', observe: 'spaceObserveTitle', registry: 'spaceRegistryTitle' };
-const SPACE_HELP = { cluster: 'spaceClusterHelp', observe: 'spaceObserveHelp', registry: 'spaceRegistryHelp' };
+// The admin space: who may do what, of no cluster. The admins of
+// everything see all of it; the registry's admins its robot accounts.
+const ADMIN_VIEWS = ['users', 'groups', 'robots', 'access', 'sessions', 'adminlog'];
+const ADMIN_SET = new Set(ADMIN_VIEWS);
+const spaceOf = view => (ADMIN_SET.has(view) ? 'admin' : REGISTRY_SET.has(view) ? 'registry' : OBSERVE_VIEWS.has(view) ? 'observe' : 'cluster');
+// Spaces of no cluster: the top bar has no clusters there.
+const clusterless = view => spaceOf(view) === 'registry' || spaceOf(view) === 'admin';
+const SPACE_HOME = { cluster: 'overview', observe: 'dashboards', registry: 'registry', admin: 'users' };
+const SPACE_NAME = { cluster: 'spaceCluster', observe: 'spaceObserve', registry: 'spaceRegistry', admin: 'spaceAdmin' };
+const SPACE_TITLE = { cluster: 'spaceClusterTitle', observe: 'spaceObserveTitle', registry: 'spaceRegistryTitle', admin: 'spaceAdminTitle' };
+const SPACE_HELP = { cluster: 'spaceClusterHelp', observe: 'spaceObserveHelp', registry: 'spaceRegistryHelp', admin: 'spaceAdminHelp' };
 const LAST_VIEW_KEY = 'kartal.lastView.';
 
 // NAV is the sidebar: groups of views, each with its count from the
@@ -75,10 +81,11 @@ const NAV = [
   { group: 'grpStorage', items: ['volumeclaims'] },
   { group: 'grpApps', items: ['helm', 'releases', 'rollouts', 'sizing', 'probes'] },
   { group: 'grpCluster', items: ['nodes', 'namespaces', 'events', 'placement', 'netcheck'] },
-  { group: 'grpOps', items: ['changes', 'audit', 'updates', 'users'] },
+  { group: 'grpOps', items: ['changes', 'audit', 'updates'] },
   { items: ['resources'] },
   { items: ['dashboards', 'explore', 'appmetrics', 'alerts', 'uptime'] },
-  { items: ['registry', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'regstores', 'robots'] },
+  { items: ['registry', 'regrunning', 'regjobs', 'regreplication', 'regsources', 'regstores'] },
+  { items: ADMIN_VIEWS },
 ];
 const NAV_COUNT = {
   pods: ['pods', 'podsUnhealthy'], deployments: ['deployments', 'deploymentsDegraded'],
@@ -427,7 +434,7 @@ const STRINGS = {
     dsIndex: 'Index pattern', dsTimeField: 'Time field', dsMessageField: 'Message field',
     dsTest: 'Try', dsTesting: 'Asking…', dsTestOK: 'It answers: {0}', dsSaved: 'Data source saved.', dsRemove: 'Remove',
     dsRemoveTitle: 'Remove data source', dsRemoveConfirm: '{0} will no longer be queried. Remove it?', dsRemoved: 'Data source removed.',
-    users: 'Admin', userAdd: 'Add user', userEdit: 'Change user', userRole: 'Role', userGrant: 'Access', userBy: 'Added by', userChanged: 'Changed',
+    users: 'Users', userAdd: 'Add user', userEdit: 'Change user', userRole: 'Role', userGrant: 'Access', userBy: 'Added by', userChanged: 'Changed',
     userGrantHelp: 'viewer, operator or admin; only in some places: operator@production/payments+staging/*',
     userPasswordHelp: 'At least 10 characters.', userPasswordKeep: 'Leave empty to keep the password.', userPasswordAgain: 'Password again',
     userPasswordsDiffer: 'The passwords differ.', userAdded: 'User added.', userSaved: 'User saved; their open sessions ended.',
@@ -465,6 +472,15 @@ const STRINGS = {
     'admin.disabledHelp': 'Disabled: cannot sign in',
     'admin.saveEndsSessions': 'Saving ends the person’s open sessions, so the change applies at once.',
     'admin.addGrant': 'Add a grant',
+    'admin.clusterGrants': 'Clusters and namespaces', 'admin.registryGrants': 'Image registry projects',
+    'admin.registryGrantsHelp': 'A role in a project, or in all of them (*). It reaches no cluster.',
+    'admin.noRegistryGrants': 'No role in a registry project of their own.',
+    'admin.everywhereNote': 'A role in every cluster and namespace (* / *) is a role everywhere: in the registry’s projects too.',
+    'admin.regRole.viewer': 'Viewer (pull)', 'admin.regRole.operator': 'Operator (push, tag, delete)',
+    'admin.regRole.admin': 'Admin (settings and members)', 'admin.kind.robot': 'robot account',
+    'admin.fromRobot': 'robot account', 'admin.fromRule': 'directory rule {0}',
+    'admin.accessWhat': 'Where', 'admin.accessClusterOpt': 'A cluster or a namespace', 'admin.accessProjectOpt': 'An image registry project',
+    'admin.accessProjectHint': 'Who may do what in a project of the image registry, and why: the project’s members.',
     'admin.addEverywhere': 'Everywhere',
     'admin.addRegistry': 'Registry project', 'admin.allProjects': 'All projects (*)', 'admin.registryScope': 'Registry',
     'admin.badProject': '“{0}” is not a registry project: letters, digits, . _ -, or * (alone or at the end).',
@@ -528,12 +544,29 @@ const STRINGS = {
     spaceObserveHelp: 'Dashboards, Explore, the metrics your apps expose, alerts and URL checks.',
     chooseSpace: 'What would you like to open?',
     spaceRegistry: 'Images', spaceRegistryTitle: 'Image registry',
+    spaceAdmin: 'Admin', spaceAdminTitle: 'Admin',
+    spaceAdminHelp: 'Who may do what: users, groups and robot accounts, and who reaches a cluster, a namespace or a registry project.',
+    groups: 'Groups', access: 'Access', sessions: 'Sessions', adminlog: 'Admin log',
     spaceRegistryHelp: 'Projects, repositories and the images in them: push and pull, tags, layers, signatures, robot accounts.',
     registry: 'Projects', regproject: 'Project', regrepo: 'Repository', regartifact: 'Artifact', robots: 'Robot accounts',
     'role.none': 'no role', viaRegistry: 'Happened in the image registry',
     'reg.off': 'This server has no image registry (KARTAL_REGISTRY_URL).',
     'reg.unreachable': 'The image registry could not be reached; what it holds may be missing here.',
     'reg.cardRepos': 'Repositories, tags and layers', 'reg.cardPull': 'docker push and pull, with your own sign-in',
+    'reg.tab.repos': 'Repositories', 'reg.tab.members': 'Members',
+    'reg.members.hint': 'Everyone with a role in this project, and why. Its admins give the UI’s users and groups a role here: a grant of this project alone, which gives nothing in any cluster or other project.',
+    'reg.members.add': 'Add a member', 'reg.members.col.who': 'Member', 'reg.members.col.kind': 'Kind', 'reg.members.col.role': 'Role here',
+    'reg.members.col.because': 'Because of', 'reg.members.none': 'Nobody has a role in this project.',
+    'reg.members.setRole': 'Change the role', 'reg.members.giveRole': 'Give a role here', 'reg.members.setRoleOf': 'Role of {0} here',
+    'reg.members.remove': 'Remove', 'reg.members.removeConfirm': 'Take the role {0} has of their own in {1} away? What a group or a pattern such as registry:* gives stays.',
+    'reg.members.removeOwn': 'It is your own: without it you may no longer run this project.',
+    'reg.members.saved': 'Saved. {0}’s open sessions ended, so the role applies at once.', 'reg.members.removed': 'Removed.',
+    'reg.members.pick': 'Who', 'reg.members.noCandidates': 'No users or groups of the UI to add; admins add them in Admin.',
+    'reg.members.elsewhere.fixed': 'set in KARTAL_USERS', 'reg.members.elsewhere.robot': 'changed in Robot accounts',
+    'reg.members.elsewhere.rule': 'set in KARTAL_LDAP_GROUPS',
+    'reg.members.publicNote': 'The project is public: anyone may pull from it, member or not.',
+    'reg.members.dialogHint': 'A role in {0} alone: it gives nothing in any cluster or other project.',
+    'reg.members.noProjects': 'There are no projects yet.',
     'reg.hint': 'Push and pull at {0}, signed in with your user name and password, a token, or a robot account.',
     'reg.status': '{0} projects, {1} repositories, {2} artifacts, {3} kept',
     'reg.storeProblem': 'The registry’s metadata: {0}',
@@ -1106,7 +1139,7 @@ const STRINGS = {
     dsIndex: 'İndeks deseni', dsTimeField: 'Zaman alanı', dsMessageField: 'Mesaj alanı',
     dsTest: 'Dene', dsTesting: 'Soruluyor…', dsTestOK: 'Yanıt veriyor: {0}', dsSaved: 'Veri kaynağı kaydedildi.', dsRemove: 'Kaldır',
     dsRemoveTitle: 'Veri kaynağını kaldır', dsRemoveConfirm: '{0} artık sorgulanmayacak. Kaldırılsın mı?', dsRemoved: 'Veri kaynağı kaldırıldı.',
-    users: 'Yönetim', userAdd: 'Kullanıcı ekle', userEdit: 'Kullanıcıyı düzenle', userRole: 'Rol', userGrant: 'Yetki', userBy: 'Ekleyen', userChanged: 'Değişiklik',
+    users: 'Kullanıcılar', userAdd: 'Kullanıcı ekle', userEdit: 'Kullanıcıyı düzenle', userRole: 'Rol', userGrant: 'Yetki', userBy: 'Ekleyen', userChanged: 'Değişiklik',
     userGrantHelp: 'viewer, operator ya da admin; yalnızca bazı yerlerde: operator@production/payments+staging/*',
     userPasswordHelp: 'En az 10 karakter.', userPasswordKeep: 'Boş bırakılırsa şifre değişmez.', userPasswordAgain: 'Şifre (tekrar)',
     userPasswordsDiffer: 'Şifreler aynı değil.', userAdded: 'Kullanıcı eklendi.', userSaved: 'Kullanıcı kaydedildi; açık oturumları kapandı.',
@@ -1144,6 +1177,15 @@ const STRINGS = {
     'admin.disabledHelp': 'Devre dışı: giriş yapamaz',
     'admin.saveEndsSessions': 'Kaydetmek kişinin açık oturumlarını kapatır; değişiklik hemen geçerli olur.',
     'admin.addGrant': 'Yetki ekle',
+    'admin.clusterGrants': 'Cluster ve namespace’ler', 'admin.registryGrants': 'İmaj deposu projeleri',
+    'admin.registryGrantsHelp': 'Bir projede ya da hepsinde (*) rol. Hiçbir cluster’a erişim vermez.',
+    'admin.noRegistryGrants': 'Kendine ait bir imaj deposu projesi rolü yok.',
+    'admin.everywhereNote': 'Her cluster ve namespace’te (* / *) bir rol her yerde geçerlidir: imaj deposunun projelerinde de.',
+    'admin.regRole.viewer': 'Görüntüleyici (pull)', 'admin.regRole.operator': 'Operatör (push, tag, sil)',
+    'admin.regRole.admin': 'Yönetici (ayarlar ve üyeler)', 'admin.kind.robot': 'robot hesabı',
+    'admin.fromRobot': 'robot hesabı', 'admin.fromRule': '{0} dizin kuralı',
+    'admin.accessWhat': 'Nerede', 'admin.accessClusterOpt': 'Bir cluster ya da namespace', 'admin.accessProjectOpt': 'Bir imaj deposu projesi',
+    'admin.accessProjectHint': 'İmaj deposunun bir projesinde kimin ne yapabileceği ve nedeni: projenin üyeleri.',
     'admin.addEverywhere': 'Her yerde',
     'admin.addRegistry': 'İmaj deposu projesi', 'admin.allProjects': 'Tüm projeler (*)', 'admin.registryScope': 'İmaj deposu',
     'admin.badProject': '“{0}” bir imaj deposu projesi değil: harf, rakam, . _ - ya da * (tek başına ya da sonda).',
@@ -1207,12 +1249,29 @@ const STRINGS = {
     spaceObserveHelp: 'Panolar, Keşfet, uygulamaların yayınladığı metrikler, uyarılar ve URL kontrolleri.',
     chooseSpace: 'Neyi açmak istersiniz?',
     spaceRegistry: 'İmajlar', spaceRegistryTitle: 'İmaj deposu',
+    spaceAdmin: 'Yönetim', spaceAdminTitle: 'Yönetim',
+    spaceAdminHelp: 'Kim neyi yapabilir: kullanıcılar, gruplar ve robot hesapları; bir cluster’a, namespace’e ya da imaj deposu projesine kimin eriştiği.',
+    groups: 'Gruplar', access: 'Erişim', sessions: 'Oturumlar', adminlog: 'Denetim',
     spaceRegistryHelp: 'Projeler, repolar ve içlerindeki imajlar: push ve pull, tag’ler, katmanlar, imzalar, robot hesapları.',
     registry: 'Projeler', regproject: 'Proje', regrepo: 'Repo', regartifact: 'Artifact', robots: 'Robot hesapları',
     'role.none': 'rol yok', viaRegistry: 'İmaj deposunda oldu',
     'reg.off': 'Bu sunucunun imaj deposu yok (KARTAL_REGISTRY_URL).',
     'reg.unreachable': 'İmaj deposuna ulaşılamadı; tuttukları burada eksik görünebilir.',
     'reg.cardRepos': 'Repolar, tag’ler ve katmanlar', 'reg.cardPull': 'Kendi girişinizle docker push ve pull',
+    'reg.tab.repos': 'Repolar', 'reg.tab.members': 'Üyeler',
+    'reg.members.hint': 'Bu projede rolü olan herkes ve nedeni. Projenin yöneticileri arayüzün kullanıcılarına ve gruplarına burada rol verir: yalnızca bu projenin yetkisi; hiçbir cluster’da ya da başka projede bir şey vermez.',
+    'reg.members.add': 'Üye ekle', 'reg.members.col.who': 'Üye', 'reg.members.col.kind': 'Tür', 'reg.members.col.role': 'Buradaki rolü',
+    'reg.members.col.because': 'Nedeni', 'reg.members.none': 'Bu projede kimsenin rolü yok.',
+    'reg.members.setRole': 'Rolü değiştir', 'reg.members.giveRole': 'Burada rol ver', 'reg.members.setRoleOf': '{0} için buradaki rol',
+    'reg.members.remove': 'Çıkar', 'reg.members.removeConfirm': '{0} için {1} projesindeki kendi rolü kaldırılsın mı? Bir grubun ya da registry:* gibi bir desenin verdiği kalır.',
+    'reg.members.removeOwn': 'Bu sizin kendi rolünüz: onsuz bu projeyi yönetemeyebilirsiniz.',
+    'reg.members.saved': 'Kaydedildi. {0} için açık oturumlar kapatıldı; rol hemen geçerli.', 'reg.members.removed': 'Çıkarıldı.',
+    'reg.members.pick': 'Kim', 'reg.members.noCandidates': 'Eklenecek arayüz kullanıcısı ya da grubu yok; yöneticiler Yönetim’den ekler.',
+    'reg.members.elsewhere.fixed': 'KARTAL_USERS’ta tanımlı', 'reg.members.elsewhere.robot': 'Robot hesaplarında değişir',
+    'reg.members.elsewhere.rule': 'KARTAL_LDAP_GROUPS’ta tanımlı',
+    'reg.members.publicNote': 'Proje herkese açık: üye olsun olmasın herkes pull yapabilir.',
+    'reg.members.dialogHint': 'Yalnızca {0} projesinde rol: hiçbir cluster’da ya da başka projede bir şey vermez.',
+    'reg.members.noProjects': 'Henüz proje yok.',
     'reg.hint': '{0} adresine push ve pull yapın: kullanıcı adınız ve şifrenizle, bir token’la ya da bir robot hesabıyla.',
     'reg.status': '{0} proje, {1} repo, {2} artifact, {3} yer kaplıyor',
     'reg.storeProblem': 'Deponun metadata’sı: {0}',
@@ -1787,6 +1846,12 @@ function parseRoute() {
     r.cluster = parts[1] || '';
     if (VIEWS.includes(parts[2])) r.view = parts[2];
     r.rest = parts.slice(3).filter(Boolean);
+    // The admin page's tabs of before are pages of the admin space now.
+    const old = { groups: 'groups', access: 'access', sessions: 'sessions', audit: 'adminlog' }[r.view === 'users' && r.rest[0]];
+    if (old) {
+      r.view = old;
+      r.rest = [];
+    }
   }
   return r;
 }
@@ -1861,10 +1926,11 @@ function onRoute() {
     els.shell.classList.remove('side-open');
     els.shell.classList.toggle('space-observe', spaceOf(state.view) === 'observe');
     els.shell.classList.toggle('space-registry', spaceOf(state.view) === 'registry');
+    els.shell.classList.toggle('space-admin', spaceOf(state.view) === 'admin');
   }
   // Each half opens again where it was left.
   writeStore('localStorage', LAST_VIEW_KEY + spaceOf(state.view), state.view);
-  const where = spaceOf(state.view) === 'registry' ? t('spaceRegistryTitle') : state.cluster;
+  const where = clusterless(state.view) ? t(SPACE_TITLE[spaceOf(state.view)]) : state.cluster;
   document.title = (where ? t(state.view) + ' · ' + where + ' · ' : '') + 'Kartal Gözü';
   state.nsMenuOpen = false;
   renderTop();
@@ -1972,7 +2038,7 @@ async function refresh({ auto = false } = {}) {
       renderTop();
       renderDetail();
     }
-    if (spaceOf(state.view) === 'registry') {
+    if (REGISTRY_SET.has(state.view)) {
       await refreshRegistry(my, signal, auto);
       return;
     }
@@ -2134,7 +2200,7 @@ async function loadView(signal) {
     }
     case 'uptime':
       return { checks: await api('checks', { signal }) };
-    case 'users':
+    case 'users': case 'groups': case 'access': case 'sessions': case 'adminlog':
       return await loadAdmin(signal);
     case 'placement': {
       const [nodes, workloads, pods] = await Promise.all([api(c + '/nodes', { signal }), api(c + '/workloads', { signal }), api(c + '/pods', { signal })]);
@@ -2314,7 +2380,10 @@ function lastView(space) {
   const v = readStore('localStorage', LAST_VIEW_KEY + space);
   // A page under the registry's projects needs what it shows; its space
   // opens on the projects again.
-  return VIEWS.includes(v) && spaceOf(v) === space && !REGISTRY_PAGES.has(v) ? v : SPACE_HOME[space];
+  if (VIEWS.includes(v) && spaceOf(v) === space && !REGISTRY_PAGES.has(v) && (!state.me || viewAllowed(v))) return v;
+  // The admin space of a registry admin is its robot accounts.
+  if (space === 'admin' && state.me) return ADMIN_VIEWS.find(viewAllowed) || SPACE_HOME.admin;
+  return SPACE_HOME[space];
 }
 
 // renderChooser asks which half of the UI to open: the clusters' objects,
@@ -2338,7 +2407,14 @@ function renderChooser() {
   const cluster = readStore('localStorage', 'kartal.cluster') || '';
   // Whether there is a registry to offer is the server's to say; asking
   // must not bring up the sign-in, which the chooser does not need.
-  if (!me) whoAmI().then(m => { if (m && els.chooser && !state.me) { state.me = m; if (m.registry) renderChooser(); } });
+  if (!me) {
+    whoAmI().then(m => {
+      if (m && els.chooser && !state.me) {
+        state.me = m;
+        if (m.registry || ADMIN_VIEWS.some(viewAllowed)) renderChooser();
+      }
+    });
+  }
   const card = (space, icon, items) => h('a', {
     class: 'space-card ' + space, href: routeHash({ cluster, view: lastView(space), ns: '' }),
   },
@@ -2352,7 +2428,8 @@ function renderChooser() {
     h('div', { class: 'space-cards' },
       card('cluster', '⎈', ['overview', 'workloads', 'nodes', 'changes']),
       card('observe', '∿', ['dashboards', 'explore', 'appmetrics', 'alerts']),
-      me && me.registry ? card('registry', '⬡', ['registry', 'reg.cardRepos', 'reg.cardPull', 'robots']) : null));
+      me && me.registry ? card('registry', '⬡', ['registry', 'reg.cardRepos', 'reg.cardPull', 'regrunning']) : null,
+      me && ADMIN_VIEWS.some(viewAllowed) ? card('admin', '⚿', ADMIN_VIEWS.filter(viewAllowed)) : null));
   fill(root, els.chooser, toasts);
 }
 
@@ -2393,7 +2470,7 @@ function renderTop() {
       }, t(SPACE_NAME[space]));
     })),
     // The registry is no cluster's.
-    h('div', { class: 'clusters' }, spaceOf(state.view) === 'registry' ? null : (state.clusters || []).map(clusterChip)),
+    h('div', { class: 'clusters' }, clusterless(state.view) ? null : (state.clusters || []).map(clusterChip)),
     h('button', { type: 'button', class: 'btn search-btn', title: t('searchTitle'), onclick: openPalette },
       '⌕', h('span', { class: 'label' }, t('search')), h('kbd', null, isMac ? '⌘K' : 'Ctrl K')),
     // Someone whose password is kept here changes it from their name.
@@ -2414,6 +2491,7 @@ function spaces() {
   const me = state.me;
   const out = !me || me.role !== 'none' ? ['cluster', 'observe'] : [];
   if (me && me.registry) out.push('registry');
+  if (me && ADMIN_VIEWS.some(viewAllowed)) out.push('admin');
   return out;
 }
 // shownRole is the user's role where they are: the registry's in its space.
@@ -2601,7 +2679,10 @@ function navResults(q, counts) {
 // order is remembered in this browser; views added later go to their usual
 // place.
 // v2: the menu split in two halves; an order saved before does not fit.
-const NAV_LAYOUT_KEY = 'kartal.navLayout.v2';
+// v3: the admin space; an order of v2 is taken, but for the admin pages,
+// which go to their place there.
+const NAV_LAYOUT_KEY = 'kartal.navLayout.v3';
+const NAV_LAYOUT_V2 = 'kartal.navLayout.v2';
 let navEntries = navLayout();
 let navEditing = false;
 let navDrag = null; // what is being dragged: { id } or { group }
@@ -2614,14 +2695,18 @@ function defaultNavLayout() {
 // navLayout is the menu as entries: a view's id, or a group with its views.
 // A saved order is checked against the views and groups there are now.
 function navLayout() {
-  let saved = null;
-  try { saved = JSON.parse(readStore('localStorage', NAV_LAYOUT_KEY) || 'null'); } catch { saved = null; }
+  const read = key => {
+    try { return JSON.parse(readStore('localStorage', key) || 'null'); } catch { return null; }
+  };
+  let saved = read(NAV_LAYOUT_KEY);
+  const v2 = !Array.isArray(saved);
+  if (v2) saved = read(NAV_LAYOUT_V2);
   if (!Array.isArray(saved)) return defaultNavLayout();
   const home = new Map(); // each view's group by default, '' for none
   NAV.forEach(s => s.items.forEach(id => home.set(id, s.group || '')));
   const placed = new Set();
   const take = id => {
-    if (typeof id !== 'string' || !home.has(id) || placed.has(id)) return false;
+    if (typeof id !== 'string' || !home.has(id) || placed.has(id) || (v2 && ADMIN_SET.has(id))) return false;
     placed.add(id);
     return true;
   };
@@ -2662,13 +2747,14 @@ function setNavEditing(on) {
 // it, on a server that keeps them.
 function viewAllowed(id) {
   const me = state.me;
+  if (id === 'robots') return !!me && !!me.registry && !!me.registryAdmin;
+  if (ADMIN_SET.has(id)) return !!me && !!me.users && me.everywhere === 'admin';
   if (spaceOf(id) === 'registry') {
-    // The registry's projects, and its robot accounts for its admins.
-    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['robots', 'regjobs', 'regreplication', 'regsources', 'regstores'].includes(id) || !!me.registryAdmin);
+    // The registry's projects; its jobs, replication and stores for its admins.
+    return !!me && !!me.registry && !REGISTRY_PAGES.has(id) && (!['regjobs', 'regreplication', 'regsources', 'regstores'].includes(id) || !!me.registryAdmin);
   }
   if (me && me.role === 'none') return false;
   return (id !== 'audit' || roleAtLeast('operator')) && ((id !== 'nodes' && id !== 'placement') || roleIn('') > 0) &&
-    (id !== 'users' || (!!state.me && state.me.users && state.me.everywhere === 'admin')) &&
     (id !== 'netcheck' || canIn('admin', ''));
 }
 
@@ -2912,6 +2998,10 @@ const NAV_ICONS = {
   changes: ['M3.5 12a8.5 8.5 0 1 0 2.5-6', 'M3 4v5h5', 'M12 8v4l3 2'],
   audit: [[5.5, 4, 13, 17, 2], 'M9 4V3h6v1', 'M9 10h6', 'M9 14h6', 'M9 18h3'],
   users: [[12, 8, 4], 'M4 21c0-4 3.6-7 8-7s8 3 8 7'],
+  groups: [[9, 8, 3.5], 'M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6', [17, 9, 2.5], 'M17 14c2.7 0 4.5 1.8 4.5 4.5'],
+  access: [[8, 12, 4], 'M12 12h9', 'M18 12v3', 'M21 12v2'],
+  sessions: [[3, 5, 18, 12, 2], 'M8 21h8', 'M12 17v4'],
+  adminlog: [[5.5, 4, 13, 17, 2], 'M9 4V3h6v1', 'M9 10h6', 'M9 14h6', 'M9 18h3'],
   resources: ['M9 6h12', 'M9 12h12', 'M9 18h12', 'M4 6h.01', 'M4 12h.01', 'M4 18h.01'],
   dashboards: [[3, 3, 18, 18, 2], 'M3 9h18', 'M10 9v12'],
   explore: [[12, 12, 9], 'M15.5 8.5l-2 5-5 2 2-5z'],
@@ -3000,7 +3090,7 @@ function renderHead() {
   });
   els.updated = h('span', { class: 'muted' });
   // The users are the server's, of no cluster or namespace.
-  const scope = v === 'users' || REGISTRY_SET.has(v) ? null : CLUSTER_SCOPED.has(v)
+  const scope = clusterless(v) ? null : CLUSTER_SCOPED.has(v)
     ? h('span', { class: 'muted' }, t(SERVER_VIEWS.has(v) ? 'fromServer' : ALL_CLUSTERS.has(v) ? 'allClusters' : 'clusterWide'))
     : state.ns
       ? h('span', { class: 'chip active' }, t('namespace') + ': ' + state.ns,
@@ -3025,7 +3115,7 @@ function renderHead() {
 
 function updateStamp() {
   if (!els.updated) return;
-  const c = spaceOf(state.view) === 'registry' ? null : currentCluster();
+  const c = clusterless(state.view) ? null : currentCluster();
   const at = c ? when(c.collectedAt) : NaN;
   els.updated.textContent = Number.isFinite(at) ? t('dataFrom', new Date(at).toLocaleTimeString()) : '';
   els.updated.title = c ? [c.kubeVersion && 'Kubernetes ' + c.kubeVersion, c.agentVersion && 'agent ' + c.agentVersion].filter(Boolean).join(' · ') : '';
@@ -3033,7 +3123,7 @@ function updateStamp() {
 
 function renderBanner() {
   if (!els.banner) return;
-  const c = spaceOf(state.view) === 'registry' ? null : currentCluster();
+  const c = clusterless(state.view) ? null : currentCluster();
   fill(els.banner, c && c.status === 'offline' ? h('div', { class: 'banner' }, '⚠ ', t('offlineBanner', ago(c.lastSeen))) : null);
 }
 
@@ -3042,7 +3132,7 @@ let drawnAt = 0;
 // regUI is what the image registry's pages (registry.js) draw with.
 const regUI = {
   h, t, button, pill, panel, emptyState, mono, bytes, age, ago, duration, copyText, modal, ask, toast, dialogField, formNote, api, download,
-  grantChips, matches, routeHash, go, refresh: () => refresh(),
+  grantChips, matches, routeHash, go, refresh: () => refresh(), me: () => state.me,
   words: () => state.q.toLowerCase().split(/\s+/).filter(Boolean),
   // until is how long until a time, or since it passed.
   until: v => {
@@ -3070,7 +3160,7 @@ function renderContent() {
     case 'releases': body = renderReleases(state.data.items); break;
     case 'updates': body = renderUpdates(state.data.versions); break;
     case 'uptime': body = renderUptime(state.data.checks); break;
-    case 'users': body = renderUsers(state.data); break;
+    case 'users': case 'groups': case 'access': case 'sessions': case 'adminlog': body = renderUsers(state.data); break;
     case 'placement': body = renderPlacement(state.data); break;
     case 'netcheck': body = renderNetCheck(state.data); break;
     case 'sizing': body = renderSizing(state.data); break;
@@ -4203,22 +4293,20 @@ async function mailDialog() {
 
 // ---------------------------------------------------------------- admin panel
 
-// The admin panel: the users and groups admins manage here, who may do what
-// where, the live sessions and what admins changed. Its tab is in the route
-// (#/c/<cluster>/users/<tab>).
-const ADMIN_TABS = ['users', 'groups', 'access', 'sessions', 'audit'];
+// The admin space's pages: the users and groups admins manage here, who
+// may do what where, the live sessions and what admins changed; the robot
+// accounts are the registry's pages (registry.js).
 const ADMIN_ACTIONS = new Set(['add-user', 'change-user', 'remove-user', 'add-group', 'change-group', 'remove-group',
-  'end-session', 'sign-in', 'change-own-password']);
-function adminTab() { return ADMIN_TABS.includes(state.rest[0]) ? state.rest[0] : 'users'; }
+  'end-session', 'sign-in', 'change-own-password', 'registry-member', 'robot-add', 'robot-change', 'robot-rotate', 'robot-remove']);
 
 async function loadAdmin(signal) {
-  const tab = adminTab();
+  const v = state.view;
   const [base, sessions, audit] = await Promise.all([
     api('users', { signal }),
-    tab === 'sessions' ? api('sessions', { signal }) : null,
-    tab === 'audit' ? api('audit', { signal }) : null,
+    v === 'sessions' ? api('sessions', { signal }) : null,
+    v === 'adminlog' ? api('audit', { signal }) : null,
   ]);
-  return Object.assign({ tab, sessions, audit }, base);
+  return Object.assign({ sessions, audit }, base);
 }
 
 // A grant is written as the server reads it: "operator", or
@@ -4268,20 +4356,13 @@ function directoryName(dn) {
 }
 
 function renderUsers(data) {
-  const tab = adminTab();
-  const counts = { users: data.users.length, groups: data.groups.length, sessions: data.sessions ? data.sessions.sessions.length : null };
-  const tabs = h('nav', { class: 'detail-tabs admin-tabs', role: 'tablist' }, ADMIN_TABS.map(id => h('a', {
-    role: 'tab', class: id === tab ? 'dtab active' : 'dtab', 'aria-selected': String(id === tab),
-    href: routeHash({ view: 'users', rest: id === 'users' ? [] : [id] }),
-  }, t('admin.' + id), counts[id] != null ? h('span', { class: 'tab-count' }, String(counts[id])) : null)),
-  // Robot accounts are the image registry's, kept with these users.
-  viewAllowed('robots') ? h('a', { role: 'tab', class: 'dtab', href: routeHash({ view: 'robots', rest: [] }) }, t('robots') + ' ↗') : null);
-  const body = tab === 'groups' ? renderGroupsTab(data)
-    : tab === 'access' ? renderAccessTab(data)
-      : tab === 'sessions' ? renderSessionsTab(data)
-        : tab === 'audit' ? renderAudit((data.audit || []).filter(e => ADMIN_ACTIONS.has(e.action)))
+  const v = state.view;
+  const body = v === 'groups' ? renderGroupsTab(data)
+    : v === 'access' ? renderAccessTab(data)
+      : v === 'sessions' ? renderSessionsTab(data)
+        : v === 'adminlog' ? renderAudit((data.audit || []).filter(e => ADMIN_ACTIONS.has(e.action)))
           : renderUsersTab(data);
-  return [data.where ? null : h('div', { class: 'banner' }, t('mailNotKept')), tabs, body];
+  return [data.where ? null : h('div', { class: 'banner' }, t('mailNotKept')), body];
 }
 
 // ------------------------------------------------ users
@@ -4381,9 +4462,12 @@ function scopePicker(value, allLabel, onchange) {
 }
 
 function grantsEditor(grants) {
+  // Clusters' and namespaces' grants, and the image registry's projects'.
   const rows = h('div', { class: 'grant-rows' });
+  const regRows = h('div', { class: 'grant-rows' });
   const empty = h('div', { class: 'empty-note' }, t('admin.noGrants'));
-  const sync = () => { empty.hidden = rows.children.length > 0; };
+  const regEmpty = h('div', { class: 'empty-note' }, t('admin.noRegistryGrants'));
+  const sync = () => { empty.hidden = rows.children.length > 0; regEmpty.hidden = regRows.children.length > 0; };
   function addRow(role = 'viewer', cluster = '*', ns = '*') {
     const roleSel = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === role }, t('role.' + r))));
     // The namespaces offered are those of the cluster picked; the last
@@ -4408,13 +4492,13 @@ function grantsEditor(grants) {
   // A project of the image registry: viewers pull, operators push and
   // delete, admins run the project.
   function addRegistryRow(role = 'viewer', project = '*') {
-    const roleSel = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === role }, t('role.' + r))));
+    const roleSel = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === role }, t('admin.regRole.' + r))));
     const pick = scopePicker(project, t('admin.allProjects'));
     registryProjects().then(names => pick.setNames(names));
-    const row = h('div', { class: 'grant-row' }, roleSel, h('span', { class: 'muted' }, t('admin.registryScope') + ':'), pick,
+    const row = h('div', { class: 'grant-row reg-grant' }, roleSel, h('span', { class: 'muted' }, t('regproject') + ':'), pick,
       h('button', { type: 'button', class: 'btn', title: t('dsRemove'), onclick: () => { row.remove(); sync(); } }, '✕'));
     row.read = () => ({ role: roleSel.value, project: pick.read() });
-    rows.append(row);
+    regRows.append(row);
     sync();
     return row;
   }
@@ -4427,14 +4511,21 @@ function grantsEditor(grants) {
     }
   }
   sync();
-  const box = h('div', { class: 'grants-editor' }, rows, empty,
-    h('div', { class: 'grant-add' },
-      button('+ ' + t('admin.addGrant'), () => addRow().querySelector('.scope-pick select').focus()),
-      state.me && state.me.registry ? button('+ ' + t('admin.addRegistry'), () => addRegistryRow().querySelector('.scope-pick select').focus()) : null,
-      button(t('admin.addEverywhere'), () => addRow('viewer', '*', '*'))));
+  // The registry's part is there with a registry, or with grants of it.
+  const registry = (state.me && state.me.registry) || regRows.children.length > 0;
+  const box = h('div', { class: 'grants-editor' },
+    h('div', { class: 'grant-section' }, h('div', { class: 'grant-section-head' }, t('admin.clusterGrants')), rows, empty,
+      h('div', { class: 'grant-add' },
+        button('+ ' + t('admin.addGrant'), () => addRow().querySelector('.scope-pick select').focus()),
+        button(t('admin.addEverywhere'), () => addRow('viewer', '*', '*'))),
+      registry ? h('div', { class: 'muted small-text' }, t('admin.everywhereNote')) : null),
+    registry ? h('div', { class: 'grant-section' }, h('div', { class: 'grant-section-head' }, t('admin.registryGrants')),
+      h('div', { class: 'muted small-text' }, t('admin.registryGrantsHelp')), regRows, regEmpty,
+      h('div', { class: 'grant-add' },
+        button('+ ' + t('admin.addRegistry'), () => addRegistryRow().querySelector('.scope-pick select').focus()))) : null);
   const pattern = /^(\*|[A-Za-z0-9][A-Za-z0-9._-]*\*?)$/;
   // value returns the grants as the server reads them, or throws a reason.
-  box.value = () => [...rows.children].map(r => {
+  box.value = () => [...rows.children, ...regRows.children].map(r => {
     const { role, cluster, ns, project } = r.read();
     if (project !== undefined) {
       if (!pattern.test(project)) throw new Error(t('admin.badProject', project));
@@ -4719,7 +4810,14 @@ function principals(data) {
 
 let accessCluster = '';
 let accessNs = '';
+let accessKind = 'cluster';
+let accessProject = '';
 function renderAccessTab(data) {
+  const registry = !!(state.me && state.me.registry);
+  const kinds = registry ? h('label', { class: 'field' }, h('span', null, t('admin.accessWhat')),
+    h('select', { onchange: e => { accessKind = e.target.value; renderContent(); } },
+      ['cluster', 'registry'].map(k => h('option', { value: k, selected: accessKind === k }, t(k === 'cluster' ? 'admin.accessClusterOpt' : 'admin.accessProjectOpt'))))) : null;
+  if (registry && accessKind === 'registry') return renderProjectAccess(kinds);
   const clusters = (state.clusters || []).map(c => c.name);
   if (!accessCluster || !clusters.includes(accessCluster)) accessCluster = state.cluster || clusters[0] || '';
   const results = h('div');
@@ -4750,11 +4848,39 @@ function renderAccessTab(data) {
   fillNs();
   return h('section', { class: 'panel' },
     h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('admin.accessHint'))),
-    h('div', { class: 'access-pick' },
+    h('div', { class: 'access-pick' }, kinds,
       h('label', { class: 'field' }, h('span', null, t('cluster')), clusterSel),
       h('label', { class: 'field' }, h('span', null, t('namespace')), nsInput, nsList)),
     results,
     h('div', { class: 'muted small-text panel-foot' }, t('admin.accessNote')));
+}
+
+// renderProjectAccess shows who may do what in a project of the image
+// registry, and why, as the project's members page does.
+function renderProjectAccess(kinds) {
+  const results = h('div', null, h('div', { class: 'empty-note' }, t('loading')));
+  const sel = h('select', { onchange: () => { accessProject = sel.value; load(); } });
+  async function load() {
+    if (!accessProject) {
+      fill(results, h('div', { class: 'empty-note' }, t('reg.members.noProjects')));
+      return;
+    }
+    try {
+      const a = await api('registry/projects/' + enc(accessProject) + '/members');
+      fill(results, membersTable(regUI, a.members));
+    } catch (e) {
+      if (e.status !== 401) fill(results, h('div', { class: 'empty-note status-bad' }, e.message));
+    }
+  }
+  registryProjects().then(names => {
+    if (!names.includes(accessProject)) accessProject = names[0] || '';
+    fill(sel, names.map(n => h('option', { value: n, selected: n === accessProject }, n)));
+    load();
+  });
+  return h('section', { class: 'panel' },
+    h('div', { class: 'db-list-head' }, h('span', { class: 'muted small-text' }, t('admin.accessProjectHint'))),
+    h('div', { class: 'access-pick' }, kinds, h('label', { class: 'field' }, h('span', null, t('regproject')), sel)),
+    results);
 }
 
 // accessDialog shows where someone or a group may do what, and why.

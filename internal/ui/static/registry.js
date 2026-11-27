@@ -15,6 +15,14 @@ export async function loadRegistry(view, rest, api, signal) {
       return { info, projects: await api('registry/projects', { signal }) };
     case 'regproject': {
       const name = rest[0] || '';
+      // Its members: who has a role in it, and why.
+      if (rest[1] === 'members') {
+        const [project, members] = await Promise.all([
+          api('registry/projects/' + enc(name), { signal }),
+          api('registry/projects/' + enc(name) + '/members', { signal }).catch(e => ({ error: e.message, members: [] })),
+        ]);
+        return { info, project, tab: 'members', members };
+      }
       const [project, repos] = await Promise.all([
         api('registry/projects/' + enc(name), { signal }),
         api('registry/projects/' + enc(name) + '/repositories', { signal }),
@@ -329,13 +337,120 @@ function projectPage(data, ui) {
       command(ui, 'docker login ' + reg),
       command(ui, 'docker push ' + reg + '/' + p.name + '/<repository>:<tag>')),
   ]);
+  // Its members are for its people, and for the admins of everything.
+  const me = ui.me();
+  const tabs = mine >= RANK.viewer || (me && me.everywhere === 'admin') ? h('nav', { class: 'detail-tabs reg-tabs', role: 'tablist' },
+    [['', t('reg.tab.repos')], ['members', t('reg.tab.members')]].map(([id, label]) => h('a', {
+      role: 'tab', class: (data.tab || '') === id ? 'dtab active' : 'dtab', 'aria-selected': String((data.tab || '') === id),
+      href: routeHash({ view: 'regproject', rest: id ? [p.name, id] : [p.name], ns: '' }),
+    }, label))) : null;
+  if (data.tab === 'members') return [problem(ui, data.info), head, tabs, membersTab(ui, data)];
   const table = repos.length ? h('table', null,
     h('thead', null, h('tr', null, ['repository', 'artifacts', 'tags', 'size', 'updated', 'pulls'].map(k => h('th', null, t('reg.col.' + k))))),
     h('tbody', null, repos.map(r => h('tr', null,
       h('td', null, h('a', { href: routeHash({ view: 'regrepo', rest: [r.name], ns: '' }) }, h('strong', null, r.name.slice(p.name.length + 1)))),
       h('td', null, r.artifacts), h('td', null, r.tags), h('td', null, bytes(r.size)), h('td', null, age(r.updated)), h('td', null, r.pulls)))))
     : emptyState(t(data.repos && data.repos.length ? 'noMatch' : 'reg.noRepositories'));
-  return [problem(ui, data.info), head, table, retentionPanel(ui, data), data.events ? eventsPanel(ui, data.events) : null];
+  return [problem(ui, data.info), head, tabs, table, retentionPanel(ui, data), data.events ? eventsPanel(ui, data.events) : null];
+}
+
+// ---------------------------------------------------------------- a project's members
+
+// membersTable lists a project's members as the server tells them: who,
+// what they are, their role there, and the grants that give it (a
+// grant's registry scope only, never its clusters). edit, when given,
+// draws a member's actions.
+export function membersTable(ui, members, edit) {
+  const { h, t, mono } = ui;
+  if (!members || !members.length) return ui.emptyState(t('reg.members.none'));
+  const from = s => {
+    const where = s.kind === 'own' ? t('admin.fromOwn') : s.kind === 'group' ? t('admin.fromGroup', s.name)
+      : s.kind === 'start' ? t('admin.fromStart') : s.kind === 'robot' ? t('admin.fromRobot') : t('admin.fromRule', s.name);
+    return h('div', { class: 'small-text' }, h('span', { class: 'muted' }, where + ': '), t('admin.regRole.' + s.role), ' · ',
+      s.scope ? mono(s.scope) : h('span', { class: 'muted' }, t('admin.everywhere')));
+  };
+  return h('table', null,
+    h('thead', null, h('tr', null, ['who', 'kind', 'role', 'because'].map(k => h('th', null, t('reg.members.col.' + k))), edit ? h('th') : null)),
+    h('tbody', null, members.map(m => h('tr', { class: m.disabled ? 'muted-row' : null },
+      h('td', null, h('strong', null, m.name), m.fullName ? h('div', { class: 'muted small-text' }, m.fullName) : null,
+        m.disabled ? h('div', { class: 'muted small-text' }, t('admin.disabled')) : null),
+      h('td', null, h('span', { class: 'label-chip' }, t('admin.kind.' + m.kind))),
+      h('td', null, h('span', { class: 'role-badge role-' + m.role }, t('admin.regRole.' + m.role))),
+      h('td', null, m.from.map(from)),
+      edit ? h('td', { class: 'actions-cell' }, edit(m)) : null))));
+}
+
+function membersTab(ui, data) {
+  const { h, t, button, api, ask } = ui;
+  const p = data.project;
+  const m = data.members || { members: [] };
+  if (m.error) return ui.panel(null, h('p', { class: 'status-bad' }, m.error));
+  const me = ui.me();
+  const remove = async mem => {
+    const self = mem.kind === 'user' && me && mem.name.toLowerCase() === me.name.toLowerCase();
+    const message = t('reg.members.removeConfirm', mem.name, p.name) + (self ? ' ' + t('reg.members.removeOwn') : '');
+    if (!(await ask({ title: t('reg.members.remove'), message, confirm: t('reg.members.remove'), danger: true }))) return;
+    try {
+      await api('registry/projects/' + enc(p.name) + '/members/' + enc(mem.kind) + '/' + enc(mem.name), { method: 'DELETE' });
+      ui.toast(t('reg.members.removed'));
+      ui.refresh();
+    } catch (e) {
+      ui.toast(e.message, true);
+    }
+  };
+  // The UI's users and groups change here; the rest where it is set.
+  const edit = m.mayEdit ? mem => (mem.editable ? h('div', { class: 'actions' },
+    button(t(mem.own ? 'reg.members.setRole' : 'reg.members.giveRole'), () => memberDialog(ui, p, m, mem)),
+    mem.own ? button(t('reg.members.remove'), () => remove(mem), 'danger') : null)
+    : h('span', { class: 'muted small-text' }, t('reg.members.elsewhere.' + mem.kind))) : null;
+  const head = ui.panel(null, h('div', { class: 'issue' },
+    h('div', { class: 'what' }, h('div', { class: 'detail' }, t('reg.members.hint')),
+      p.public ? h('div', { class: 'detail status-warn' }, t('reg.members.publicNote')) : null),
+    m.mayEdit ? h('div', { class: 'actions' }, button('+ ' + t('reg.members.add'), () => memberDialog(ui, p, m, null), 'primary')) : null));
+  return [head, membersTable(ui, m.members, edit)];
+}
+
+// memberDialog gives a user or a group of the UI a role in the project, or
+// changes the one it has (mem).
+function memberDialog(ui, p, m, mem) {
+  const { h, t, button, modal, dialogField, formNote, api } = ui;
+  const cand = m.candidates || { users: [], groups: [] };
+  const kind = h('select', null, ['user', 'group'].map(k => h('option', { value: k }, t('admin.kind.' + k))));
+  const who = h('select');
+  const fillWho = () => {
+    const list = kind.value === 'group' ? cand.groups : cand.users;
+    who.replaceChildren(...(list.length ? list.map(c => h('option', { value: c.name }, c.fullName ? c.name + ' — ' + c.fullName : c.name))
+      : [h('option', { value: '' }, t('reg.members.noCandidates'))]));
+  };
+  kind.addEventListener('change', fillWho);
+  fillWho();
+  const current = mem ? mem.own || mem.role : 'viewer';
+  const role = h('select', null, ['viewer', 'operator', 'admin'].map(r => h('option', { value: r, selected: r === current }, t('admin.regRole.' + r))));
+  const note = formNote();
+  const form = h('form', {
+    class: 'dialog',
+    onsubmit: async e => {
+      e.preventDefault();
+      const name = mem ? mem.name : who.value;
+      if (!name) return;
+      try {
+        await api('registry/projects/' + enc(p.name) + '/members', { method: 'PUT', body: { kind: mem ? mem.kind : kind.value, name, role: role.value } });
+        close();
+        ui.toast(t('reg.members.saved', name));
+        ui.refresh();
+      } catch (err) {
+        note.say(err.message, 'bad');
+      }
+    },
+  }, h('h2', null, mem ? t('reg.members.setRoleOf', mem.name) : t('reg.members.add')),
+  h('p', { class: 'muted' }, t('reg.members.dialogHint', p.name)),
+  mem ? null : dialogField(t('reg.members.col.kind'), kind),
+  mem ? null : dialogField(t('reg.members.pick'), who),
+  dialogField(t('reg.members.col.role'), role),
+  note,
+  h('div', { class: 'dialog-actions' }, button(t('cancel'), () => close()), h('button', { type: 'submit', class: 'btn primary' }, t('save'))));
+  const close = modal(form);
+  (mem ? role : who).focus();
 }
 
 function eventsPanel(ui, events) {
